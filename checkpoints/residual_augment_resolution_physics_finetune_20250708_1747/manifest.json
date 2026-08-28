@@ -15,7 +15,7 @@
     "sha256": "3fc1840ccdfc74e167d3b5aea944c79775a8fc4c0b1ec9d76fe9a4e5fcddd360"
   },
   "weights": {
-    "bytes": 269922576,
+    "bytes": 269922536,
     "file": "secs-v3.safetensors",
     "inventory": {
       "components": {
@@ -40,6 +40,6 @@
       "tensors": 1261
     },
     "precision": "bfloat16",
-    "sha256": "4d26afccfac27efb9a965bd2e90aba40f3e4154d9829ab3ad973f100d606eade"
+    "sha256": "745d2c0ff7d289a27aa65f90a4ee79b053c73e2c16ea52bf8eebb59202dcb795"
   }
 }
