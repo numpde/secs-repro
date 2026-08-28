@@ -11,17 +11,15 @@ from torch.nn import functional as F
 
 
 FloatArray = NDArray[np.float32]
-SPECTRUM_POINTS = 10_000
-SMILES_CONTEXT_LENGTH = 128
 
 
 class SecsInference:
     """Inference boundary for one converted SECS checkpoint.
 
-    Spectrum inputs are 10,000 intensities on the public application's
-    ascending-ppm grid; this boundary max-normalizes and reverses them into the
-    model's training order. The container must admit the MolFormer cache and
-    configure Hugging Face before loading.
+    Spectrum inputs use the public application's ascending-ppm grid; this
+    boundary max-normalizes and reverses them into the model's training order.
+    The checkpoint owns the expected spectrum and token lengths. The container
+    must admit the MolFormer cache and configure Hugging Face before loading.
     """
 
     def __init__(
@@ -30,12 +28,16 @@ class SecsInference:
         tokenizer,
         device: torch.device,
         dtype: torch.dtype,
+        spectrum_points: int,
+        smiles_context_length: int,
         smiles_batch_size: int,
     ) -> None:
         self._model = model
         self._tokenizer = tokenizer
         self._device = device
         self._dtype = dtype
+        self._spectrum_points = spectrum_points
+        self._smiles_context_length = smiles_context_length
         self._smiles_batch_size = smiles_batch_size
 
     @classmethod
@@ -55,6 +57,8 @@ class SecsInference:
         checkpoint_directory = Path(checkpoint_directory)
         with (checkpoint_directory / "checkpoint.toml").open("rb") as source:
             specification = tomllib.load(source)
+        spectrum_points = specification["model"]["encoders"]["h_nmr"]["input_length"]
+        smiles_context_length = specification["inputs"]["smiles"]["context_length"]
         with Path(molformer_lock).open("rb") as source:
             locked_snapshot = tomllib.load(source)["snapshot"]
 
@@ -79,14 +83,16 @@ class SecsInference:
             SMILES_TOKENIZER,
             compute_device,
             dtype,
+            spectrum_points,
+            smiles_context_length,
             smiles_batch_size,
         )
 
     @torch.inference_mode()
     def embed_spectrum(self, spectrum: Sequence[float] | FloatArray) -> FloatArray:
         values = np.asarray(spectrum, dtype=np.float32)
-        if values.shape != (SPECTRUM_POINTS,):
-            raise ValueError(f"Expected {SPECTRUM_POINTS} spectrum intensities, got shape {values.shape}.")
+        if values.shape != (self._spectrum_points,):
+            raise ValueError(f"Expected {self._spectrum_points} spectrum intensities, got shape {values.shape}.")
         maximum = values.max()
         if not np.isfinite(values).all() or maximum <= 0:
             raise ValueError("Spectrum intensities must be finite and contain a positive signal.")
@@ -107,7 +113,7 @@ class SecsInference:
                 padding="max_length",
                 truncation=True,
                 return_tensors="pt",
-                max_length=SMILES_CONTEXT_LENGTH,
+                max_length=self._smiles_context_length,
             )
             inputs = tokens["input_ids"].to(self._device), tokens["attention_mask"].to(self._device)
             embeddings.append(self._model.encode_modality(inputs, modality="smiles").float().cpu())

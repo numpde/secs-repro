@@ -7,6 +7,9 @@ member = "MoleculeBindZenodo/app-cpu/checkpoints/residual_augment_resolution_phy
 [conversion]
 precision = "bfloat16"
 
+[inputs.smiles]
+context_length = 128
+
 [data]
 central_modality = "smiles"
 modalities = ["h_nmr"]
@@ -21,6 +24,7 @@ name = "cnn"
 freeze_encoder = false
 scale = "xlarge"
 use_initial_residual = true
+input_length = 10000
 
 [model.projection_heads]
 smiles_is_on = true
