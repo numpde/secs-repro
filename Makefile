@@ -118,4 +118,4 @@ checkpoint:
 		--source-archive-md5 "$(ARCHIVE_MD5)" \
 		--source-member "$(ARCHIVE_MEMBER_SUFFIX)"
 
-include packages.mk
+include make/packages.mk
