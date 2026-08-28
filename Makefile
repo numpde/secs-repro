@@ -8,13 +8,12 @@ HOST_UID := $(shell id -u)
 HOST_GID := $(shell id -g)
 CHECKPOINT_IMAGE := secs-repro/checkpoint-extractor:local
 CHECKPOINT_CONVERTER_IMAGE := secs-repro/packages-cpu:local
-CHECKPOINT_ID := residual_augment_resolution_physics_finetune_20250708_1747
-CHECKPOINT_DIRECTORY := checkpoints/$(CHECKPOINT_ID)
+ARCHIVE_MEMBER_SUFFIX := checkpoints/residual_augment_resolution_physics_finetune_20250708_1747/best_model.ckpt
+CHECKPOINT_DIRECTORY := $(patsubst %/,%,$(dir $(ARCHIVE_MEMBER_SUFFIX)))
 CHECKPOINT_WEIGHTS := $(CHECKPOINT_DIRECTORY)/secs-v3.safetensors
 CHECKPOINT_MODEL := $(CHECKPOINT_DIRECTORY)/model.yaml
 CHECKPOINT_MANIFEST := $(CHECKPOINT_DIRECTORY)/manifest.json
 CHECKPOINT_PRECISION ?= float32
-ARCHIVE_MEMBER_SUFFIX := residual_augment_resolution_physics_finetune_20250708_1747/best_model.ckpt
 ARCHIVE_URL ?= https://zenodo.org/records/14638782/files/zenodo_secs_v3.tar.gz?download=1
 ARCHIVE_MD5 := 5ca6bed3fb7e70630020f55796fd26ab
 MAX_CHECKPOINT_BYTES := 4294967296
