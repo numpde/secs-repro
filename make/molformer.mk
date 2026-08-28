@@ -1,4 +1,4 @@
-MOLFORMER_CACHE := cache/molformer
+override MOLFORMER_CACHE := $(REPOSITORY_ROOT)/cache/molformer
 
 .PHONY: molformer/cache
 
@@ -8,8 +8,8 @@ molformer/cache:
 		exit 2
 	fi
 	$(MAKE) --no-print-directory packages/cpu/image
-	cache_path="$(REPOSITORY_ROOT)/$(MOLFORMER_CACHE)"
-	cache_parent="$(REPOSITORY_ROOT)/$(dir $(MOLFORMER_CACHE))"
+	cache_path="$(MOLFORMER_CACHE)"
+	cache_parent="$(dir $(MOLFORMER_CACHE))"
 	mkdir -p "$$cache_parent"
 	# Stage beside the destination so publication is a same-filesystem rename.
 	stage=$$(mktemp -d --tmpdir="$$cache_parent" .molformer.XXXXXXXX)

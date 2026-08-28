@@ -1,12 +1,26 @@
+import tomllib
 import unittest
+from pathlib import Path
 
 
 class MolFormerCacheTest(unittest.TestCase):
-    def test_cached_model_definition_and_tokenizer_support_forward_pass(self):
+    def test_locked_snapshot_matches_secs_and_supports_forward_pass(self):
+        with Path("/input/molformer.lock.toml").open("rb") as source:
+            snapshot = tomllib.load(source)["snapshot"]
+
+        from secs.models.encoders.smiles.molformer import (
+            MOLFORMER_CHECKPOINT,
+            MOLFORMER_REVISION,
+            MolformerEncoder,
+        )
+
+        locked_snapshot = (snapshot["repository"], snapshot["revision"])
+        secs_snapshot = (MOLFORMER_CHECKPOINT, MOLFORMER_REVISION)
+        self.assertEqual(secs_snapshot, locked_snapshot)
+
         import torch
 
         from secs.data.components.secs_tokenizers import SMILES_TOKENIZER
-        from secs.models.encoders.smiles.molformer import MolformerEncoder
 
         tokens = SMILES_TOKENIZER("CCO", return_tensors="pt")
         encoder = MolformerEncoder(pretrained=False).eval()

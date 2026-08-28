@@ -3,7 +3,7 @@ SHELL := /bin/bash
 .ONESHELL:
 .DEFAULT_GOAL := help
 
-REPOSITORY_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+override REPOSITORY_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 HOST_UID := $(shell id -u)
 HOST_GID := $(shell id -g)
 CHECKPOINT_IMAGE := secs-repro/checkpoint-extractor:local

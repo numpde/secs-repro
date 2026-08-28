@@ -1,5 +1,5 @@
 [snapshot]
-# SECS names this revision independently; the offline integration test rejects drift.
+# SECS names this snapshot independently; integration rejects drift before loading cached code.
 repository = "ibm-research/MoLFormer-XL-both-10pct"
 revision = "7b12d946c181a37f6012b9dc3b002275de070314"
 
