@@ -147,6 +147,7 @@ checkpoint:
 		--spec /input/checkpoint.toml \
 		--reference-repository "$(SECS_REPOSITORY)" \
 		--reference-revision "$(SECS_REVISION)"
+	chmod 0644 "$$weights_stage/secs-v3.safetensors"
 	# Publish weights last; their presence marks a complete checkpoint.
 	mv -f "$$manifest_stage/manifest.json" "$(CHECKPOINT_MANIFEST)"
 	ln "$$weights_stage/secs-v3.safetensors" "$(CHECKPOINT_WEIGHTS)"
