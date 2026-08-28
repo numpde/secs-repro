@@ -107,6 +107,7 @@ packages/image:
 		--build-arg PACKAGES_INPUT_ID="$$id" \
 		--build-arg PACKAGES_VARIANT="$(VARIANT)" \
 		--file containers/packages/Dockerfile \
-		--tag "secs-repro/packages-$(VARIANT):inputs-$$id" .
+		--tag "secs-repro/packages-$(VARIANT):inputs-$$id" \
+		--tag "secs-repro/packages-$(VARIANT):local" .
 
 packages/images: packages/cpu/image packages/gpu/image

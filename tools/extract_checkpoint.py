@@ -2,15 +2,14 @@
 """Admit one SECS checkpoint from a compressed tar stream.
 
 The archive is never materialized. The selected member remains temporary until
-the complete compressed stream matches the expected digest, then a no-replace
-filesystem operation publishes it.
+the complete compressed stream matches the expected digest, then its bytes are
+emitted to the networkless conversion container.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 from pathlib import Path
 import sys
 import tarfile
@@ -21,9 +20,6 @@ import urllib.request
 
 READ_BYTES = 1024 * 1024
 PROGRESS_BYTES = 512 * 1024 * 1024
-OUTPUT_ROOT = Path("/output")
-
-
 class ExtractionRejected(RuntimeError):
     """The input cannot produce the one expected checkpoint artifact."""
 
@@ -68,7 +64,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--expected-archive-md5", required=True)
     parser.add_argument("--member-suffix", required=True)
     parser.add_argument("--max-member-bytes", type=int, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--scratch-directory", type=Path, required=True)
     return parser.parse_args()
 
 
@@ -102,29 +98,6 @@ def copy_member(archive: tarfile.TarFile, member: tarfile.TarInfo, destination) 
             destination.write(chunk)
 
 
-def validate_output(output: Path) -> None:
-    """Require one new file directly inside the mounted output directory."""
-
-    root = OUTPUT_ROOT.resolve(strict=True)
-    parent = output.parent.resolve(strict=True)
-    if parent != root:
-        raise ExtractionRejected(f"output must be directly inside {root}")
-    if output.exists() or output.is_symlink():
-        raise ExtractionRejected(f"output already exists: {output}")
-
-
-def publish(temp_path: Path, output: Path) -> None:
-    """Publish the staged inode without replacing a concurrently created file."""
-
-    os.link(temp_path, output, follow_symlinks=False)
-    directory = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
-    temp_path.unlink()
-
-
 def open_archive_source(args: argparse.Namespace):
     """Select the read-only local source or the network source."""
 
@@ -155,13 +128,14 @@ def stage_checkpoint(
                     f"checkpoint member is {member.size} bytes; limit is {args.max_member_bytes}"
                 )
             with tempfile.NamedTemporaryFile(
-                mode="w+b", prefix=".best_model.ckpt.", dir=args.output.parent, delete=False
+                mode="w+b",
+                prefix="best_model.ckpt.",
+                dir=args.scratch_directory,
+                delete=False,
             ) as destination:
                 temp_path = Path(destination.name)
                 copy_member(archive, member, destination)
                 destination.flush()
-                os.fsync(destination.fileno())
-                os.fchmod(destination.fileno(), 0o444)
         if temp_path is None:
             raise ExtractionRejected(
                 f"archive has no member ending in {args.member_suffix!r}"
@@ -188,9 +162,8 @@ def verify_archive(reader: MeasuredReader, expected_md5: str) -> None:
 
 
 def extract(args: argparse.Namespace) -> None:
-    """Stage, verify, and atomically publish the requested checkpoint."""
+    """Stage and verify the requested checkpoint before emitting any bytes."""
 
-    validate_output(args.output)
     temp_path: Path | None = None
     try:
         with open_archive_source(args) as raw_source:
@@ -201,9 +174,10 @@ def extract(args: argparse.Namespace) -> None:
                 temp_path = stage_checkpoint(archive, args)
             verify_archive(measured, args.expected_archive_md5)
 
-        publish(temp_path, args.output)
-        temp_path = None
-        print(f"published {args.output}")
+        with temp_path.open("rb") as checkpoint:
+            while chunk := checkpoint.read(READ_BYTES):
+                sys.stdout.buffer.write(chunk)
+        sys.stdout.buffer.flush()
     finally:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
