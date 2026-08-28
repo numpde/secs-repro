@@ -7,7 +7,7 @@ test/integration:
 	fi
 	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")
 	tests_dir=$$(realpath -e tests/integration)
-	$(MAKE) --no-print-directory packages/cpu/image
+	packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
 	# Hash verification gates cached Python imports.
 	# Docker owns network denial; Transformers offline mode only makes cache misses fail promptly.
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
@@ -24,5 +24,5 @@ test/integration:
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
 		--mount type=bind,src="$$cache_dir",dst=/cache,readonly \
 		--mount type=bind,src="$$tests_dir",dst=/tests,readonly \
-		--entrypoint /bin/sh secs-repro/packages-cpu:local \
+		--entrypoint /bin/sh "$$packages_image" \
 		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && python -m unittest discover -v -s /tests -p "test_*.py"'

@@ -1,0 +1,9 @@
+**
+!containers/
+containers/**
+!containers/packages/
+containers/packages/**
+!containers/packages/Dockerfile.lock
+!tools/
+tools/**
+!tools/normalize_lock.py

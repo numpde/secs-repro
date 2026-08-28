@@ -4,10 +4,9 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 override REPOSITORY_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
-HOST_UID := $(shell id -u)
-HOST_GID := $(shell id -g)
+override HOST_UID := $(shell id -u)
+override HOST_GID := $(shell id -g)
 CHECKPOINT_IMAGE := secs-repro/checkpoint-extractor:local
-CHECKPOINT_CONVERTER_IMAGE := secs-repro/packages-cpu:local
 CHECKPOINT_SPECS := $(wildcard checkpoints/*/checkpoint.toml)
 CHECKPOINT_SPEC ?= $(CHECKPOINT_SPECS)
 CHECKPOINT_DIRECTORY = $(patsubst %/,%,$(dir $(CHECKPOINT_SPEC)))
@@ -51,7 +50,7 @@ help:
 		'The archive and Lightning checkpoint are not retained.'
 
 checkpoint/image:
-	@$(DOCKER) build --network none --pull=false \
+	@$(DOCKER) build --quiet --network none --pull=false \
 		--file containers/checkpoint/Dockerfile \
 		--tag "$(CHECKPOINT_IMAGE)" \
 		"$(REPOSITORY_ROOT)"
@@ -89,8 +88,8 @@ checkpoint:
 	trap 'rm -rf "$$weights_stage" "$$manifest_stage"' EXIT
 	weights_stage_dir=$$(realpath -e -- "$$weights_stage")
 	manifest_stage_dir=$$(realpath -e -- "$$manifest_stage")
-	$(MAKE) --no-print-directory packages/cpu/image
-	$(MAKE) --no-print-directory checkpoint/image
+	converter_image=$$($(MAKE) --no-print-directory packages/cpu/image)
+	extractor_image=$$($(MAKE) --no-print-directory checkpoint/image)
 	extractor_args=(--rm --init --pull never --read-only
 		"--cap-drop" ALL --security-opt no-new-privileges:true
 		"--pids-limit" 32 --cpus 1 --memory 2304m --memory-swap 2304m
@@ -120,11 +119,11 @@ checkpoint:
 		"--mount" "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly"
 		"--entrypoint" python
 	)
-	$(DOCKER) run "$${extractor_args[@]}" "$(CHECKPOINT_IMAGE)" \
+	$(DOCKER) run "$${extractor_args[@]}" "$$extractor_image" \
 		"$${source_args[@]}" \
 		--spec /input/checkpoint.toml \
 		--scratch-directory /scratch \
-	| $(DOCKER) run -i "$${converter_args[@]}" "$(CHECKPOINT_CONVERTER_IMAGE)" \
+	| $(DOCKER) run -i "$${converter_args[@]}" "$$converter_image" \
 		-P /opt/checkpoint/convert.py \
 		--scratch-directory /scratch \
 		--weights-output /output/secs-v3.safetensors \
@@ -139,7 +138,7 @@ checkpoint:
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly" \
 		--mount "type=bind,src=$$weights_stage_dir/secs-v3.safetensors,dst=/input/secs-v3.safetensors,readonly" \
 		--mount "type=bind,src=$$manifest_stage_dir,dst=/output" \
-		--entrypoint python "$(CHECKPOINT_IMAGE)" \
+		--entrypoint python "$$extractor_image" \
 		-P /opt/checkpoint/write_manifest.py \
 		--weights /input/secs-v3.safetensors \
 		--manifest-output /output/manifest.json \
@@ -165,7 +164,7 @@ checkpoint/manifest:
 	stage=$$(mktemp -d --tmpdir="$$output_dir" .manifest.XXXXXXXX)
 	trap 'rm -rf "$$stage"' EXIT
 	stage_dir=$$(realpath -e -- "$$stage")
-	$(MAKE) --no-print-directory checkpoint/image
+	extractor_image=$$($(MAKE) --no-print-directory checkpoint/image)
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		--cap-drop ALL --security-opt no-new-privileges:true \
@@ -175,7 +174,7 @@ checkpoint/manifest:
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_WEIGHTS),dst=/input/secs-v3.safetensors,readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_MANIFEST),dst=/input/manifest.json,readonly" \
 		--mount "type=bind,src=$$stage_dir,dst=/output" \
-		--entrypoint python "$(CHECKPOINT_IMAGE)" \
+		--entrypoint python "$$extractor_image" \
 		-P /opt/checkpoint/write_manifest.py \
 		--weights /input/secs-v3.safetensors \
 		--existing-manifest /input/manifest.json \

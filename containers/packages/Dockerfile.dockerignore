@@ -1,0 +1,15 @@
+**
+!containers/
+containers/**
+!containers/packages/
+containers/packages/**
+!containers/packages/Dockerfile
+!requirements/
+requirements/**
+!requirements/*.lock
+!secs/
+secs/**
+!secs/pyproject.toml
+!secs/README.md
+!secs/src/
+!secs/src/**

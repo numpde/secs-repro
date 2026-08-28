@@ -8,7 +8,7 @@ LABEL io.secs-repro.packages.input-id="${PACKAGES_INPUT_ID}" \
       io.secs-repro.packages.variant="${PACKAGES_VARIANT}"
 
 COPY requirements/packages-${PACKAGES_VARIANT}.lock /opt/packages/requirements.lock
-COPY wheelhouse/packages-${PACKAGES_VARIANT}/ /opt/packages/wheelhouse/
+COPY --from=wheelhouse . /opt/packages/wheelhouse/
 
 RUN cd /opt/packages/wheelhouse \
     && sha256sum --check .complete \

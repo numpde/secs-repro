@@ -7,7 +7,7 @@ molformer/cache:
 		printf '%s\n' 'Cannot materialize the MolFormer cache as host UID 0.' >&2
 		exit 2
 	fi
-	$(MAKE) --no-print-directory packages/cpu/image
+	packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
 	cache_path="$(MOLFORMER_CACHE)"
 	cache_parent="$(dir $(MOLFORMER_CACHE))"
 	mkdir -p "$$cache_parent"
@@ -23,7 +23,7 @@ molformer/cache:
 		--mount type=bind,src="$(REPOSITORY_ROOT)/molformer.lock.toml",dst=/input/molformer.lock.toml,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
 		--mount type=bind,src="$$stage",dst=/output \
-		--entrypoint python secs-repro/packages-cpu:local -P /opt/materialize.py \
+		--entrypoint python "$$packages_image" -P /opt/materialize.py \
 		--lock /input/molformer.lock.toml --output /output
 	rm -rf "$$cache_path"
 	mv -T "$$stage" "$$cache_path"

@@ -1,0 +1,9 @@
+**
+!containers/
+containers/**
+!containers/checkpoint/
+containers/checkpoint/**
+!containers/checkpoint/Dockerfile
+!tools/
+tools/**
+!tools/extract_checkpoint.py
