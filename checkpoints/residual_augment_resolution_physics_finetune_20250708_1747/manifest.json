@@ -1,0 +1,16 @@
+{
+  "model": {
+    "file": "model.yaml",
+    "sha256": "3acda668a520c362f09e69ee2d414764e362f17174c9f50ea3daa7f06b4b4557"
+  },
+  "source": {
+    "archive_md5": "5ca6bed3fb7e70630020f55796fd26ab",
+    "member": "residual_augment_resolution_physics_finetune_20250708_1747/best_model.ckpt"
+  },
+  "weights": {
+    "bytes": 269922576,
+    "file": "secs-v3.safetensors",
+    "precision": "bfloat16",
+    "sha256": "4d26afccfac27efb9a965bd2e90aba40f3e4154d9829ab3ad973f100d606eade"
+  }
+}

@@ -1,0 +1,20 @@
+model:
+  embedding_size: 1024
+  modalities:
+    - smiles
+    - h_nmr
+  encoders:
+    smiles:
+      name: molformer
+    h_nmr:
+      name: cnn
+      use_initial_residual: true
+  projection_heads:
+    smiles:
+      dims: [768, 1024]
+      activation: LeakyReLU
+    h_nmr:
+      dims: [1024, 1024]
+      activation: LeakyReLU
+weights:
+  tensor_names: model state_dict names with the leading model. removed

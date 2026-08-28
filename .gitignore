@@ -1,2 +1,4 @@
-/checkpoints/
+/checkpoints/**/*.ckpt
+/checkpoints/**/*.safetensors
+/checkpoints/**/*.zst
 /wheelhouse/
