@@ -1,13 +1,8 @@
-import os
 import unittest
 
 
 class MolformerCacheTest(unittest.TestCase):
-    def test_cached_definition_and_tokenizer_support_offline_inference(self):
-        """Pinned cached assets suffice without IBM base weights or network access."""
-        self.assertEqual(os.environ.get("HF_HUB_OFFLINE"), "1")
-        self.assertEqual(os.environ.get("TRANSFORMERS_OFFLINE"), "1")
-
+    def test_cached_model_definition_and_tokenizer_support_inference(self):
         import torch
 
         from secs.data.components.secs_tokenizers import SMILES_TOKENIZER

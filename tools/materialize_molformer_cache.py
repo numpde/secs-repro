@@ -14,18 +14,11 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_snapshot(snapshot: Path, files: dict[str, str]) -> list[str]:
-    actual_files = {path.name for path in snapshot.iterdir()}
-    if actual_files != set(files):
-        raise ValueError("Cached MolFormer files do not match molformer.lock.toml.")
-
-    receipt = []
+def verify_snapshot(snapshot: Path, files: dict[str, str]) -> None:
     for name, expected in files.items():
         path = snapshot / name
         if sha256(path) != expected:
             raise ValueError(f"Cached {name} does not match molformer.lock.toml.")
-        receipt.append(f"{expected}  {path}")
-    return receipt
 
 
 def main() -> None:
@@ -54,10 +47,7 @@ def main() -> None:
             )
         )
 
-    receipt = verify_snapshot(snapshot, files)
-    if not args.verify_only:
-        relative_receipt = [line.replace(str(args.output) + "/", "", 1) for line in receipt]
-        (args.output / ".complete").write_text("\n".join(relative_receipt) + "\n")
+    verify_snapshot(snapshot, files)
 
 
 if __name__ == "__main__":

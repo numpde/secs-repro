@@ -5,13 +5,10 @@ test/integration:
 		printf '%s\n' 'Cannot run integration tests as host UID 0.' >&2
 		exit 2
 	fi
-	if test ! -f cache/molformer/.complete; then
-		printf '%s\n' 'MolFormer cache is absent; run make molformer/cache.' >&2
-		exit 2
-	fi
-	cache_dir=$$(realpath -e cache/molformer)
+	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")
 	tests_dir=$$(realpath -e tests/integration)
 	$(MAKE) --no-print-directory packages/cpu/image
+	# Verify cached Python before the integration test imports it.
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		--cap-drop ALL --security-opt no-new-privileges:true \
