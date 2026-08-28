@@ -46,7 +46,7 @@ help:
 		'SECS tests' \
 		'' \
 		'  make test/integration' \
-		'      Run real-artifact integration tests offline in the CPU package image.' \
+		'      Verify the pinned MolFormer cache with an offline CPU forward pass.' \
 		'' \
 		'The archive and Lightning checkpoint are not retained.'
 

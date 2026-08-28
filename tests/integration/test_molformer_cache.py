@@ -1,8 +1,8 @@
 import unittest
 
 
-class MolformerCacheTest(unittest.TestCase):
-    def test_cached_model_definition_and_tokenizer_support_inference(self):
+class MolFormerCacheTest(unittest.TestCase):
+    def test_cached_model_definition_and_tokenizer_support_forward_pass(self):
         import torch
 
         from secs.data.components.secs_tokenizers import SMILES_TOKENIZER
@@ -14,7 +14,7 @@ class MolformerCacheTest(unittest.TestCase):
         with torch.inference_mode():
             embedding = encoder((tokens["input_ids"], tokens["attention_mask"]))
 
-        self.assertEqual(tuple(embedding.shape), (1, 768))
+        self.assertEqual(tuple(embedding.shape), (1, encoder.output_dim))
         self.assertTrue(torch.isfinite(embedding).all().item())
 
 

@@ -22,7 +22,7 @@ def verify_snapshot(snapshot: Path, files: dict[str, str]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Materialize the pinned non-weight MolFormer cache.")
+    parser = argparse.ArgumentParser(description="Download or verify the pinned MolFormer runtime files.")
     parser.add_argument("--lock", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--verify-only", action="store_true")
@@ -34,18 +34,15 @@ def main() -> None:
     files = lock["files"]
     repository = lock["snapshot"]["repository"]
     revision = lock["snapshot"]["revision"]
-    if args.verify_only:
-        repository_directory = f"models--{repository.replace('/', '--')}"
-        snapshot = args.output / "hub" / repository_directory / "snapshots" / revision
-    else:
-        snapshot = Path(
-            snapshot_download(
-                repo_id=repository,
-                revision=revision,
-                allow_patterns=list(files),
-                cache_dir=args.output / "hub",
-            )
+    snapshot = Path(
+        snapshot_download(
+            repo_id=repository,
+            revision=revision,
+            allow_patterns=list(files),
+            cache_dir=args.output / "hub",
+            local_files_only=args.verify_only,
         )
+    )
 
     verify_snapshot(snapshot, files)
 
