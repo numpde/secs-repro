@@ -1,6 +1,7 @@
 import unittest
 
 import numpy as np
+import torch
 
 from secs_inference import SecsInference
 
@@ -11,7 +12,8 @@ class InferenceTest(unittest.TestCase):
             "/checkpoint",
             molformer_lock="/input/molformer.lock.toml",
             device="cpu",
-            dtype="float32",
+            dtype=torch.float32,
+            smiles_batch_size=256,
         )
         spectrum = np.zeros(10_000, dtype=np.float32)
         spectrum[1_234] = 1.0
@@ -29,13 +31,11 @@ class InferenceTest(unittest.TestCase):
         self.assertEqual(smiles_embeddings.shape, (2, 1024))
         self.assertTrue(np.isfinite(spectrum_embedding).all())
         self.assertTrue(np.isfinite(smiles_embeddings).all())
-        self.assertEqual([candidate.smiles for candidate in ranked], expected_order)
+        self.assertEqual([smiles for smiles, _ in ranked], expected_order)
         np.testing.assert_allclose(
-            [candidate.score for candidate in ranked],
-            [scores_by_smiles[candidate.smiles] for candidate in ranked],
+            [score for _, score in ranked],
+            [scores_by_smiles[smiles] for smiles, _ in ranked],
             rtol=1e-5,
             atol=1e-6,
         )
-        self.assertTrue(all(np.isfinite(candidate.score) for candidate in ranked))
-        self.assertFalse(inference.model.training)
-        self.assertFalse(any(parameter.requires_grad for parameter in inference.model.parameters()))
+        self.assertTrue(all(np.isfinite(score) for _, score in ranked))

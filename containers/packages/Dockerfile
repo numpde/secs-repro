@@ -17,16 +17,13 @@ RUN cd /opt/packages/wheelhouse \
         --no-cache-dir -r /opt/packages/requirements.lock \
     && rm -rf /opt/packages/wheelhouse
 
-COPY secs/ /opt/secs/
+COPY secs/ /opt/source/secs/
+COPY pyproject.toml /opt/source/secs-inference/pyproject.toml
+COPY src/ /opt/source/secs-inference/src/
 
-RUN python -m pip install --no-index --no-deps --no-build-isolation /opt/secs \
-    && rm -rf /opt/secs
-
-COPY pyproject.toml /opt/secs-inference/pyproject.toml
-COPY src/ /opt/secs-inference/src/
-
-RUN python -m pip install --no-index --no-deps --no-build-isolation /opt/secs-inference \
-    && rm -rf /opt/secs-inference \
+RUN python -m pip install --no-index --no-deps --no-build-isolation \
+        /opt/source/secs /opt/source/secs-inference \
+    && rm -rf /opt/source \
     && python -m pip check
 
 RUN useradd --no-create-home --uid 65532 secs

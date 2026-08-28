@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 import tomllib
@@ -12,48 +11,31 @@ from torch.nn import functional as F
 
 
 FloatArray = NDArray[np.float32]
-DTYPES = {
-    "float32": torch.float32,
-    "float16": torch.float16,
-    "bfloat16": torch.bfloat16,
-}
 SPECTRUM_POINTS = 10_000
-SMILES_CONTEXT_LENGTH = 128
-
-
-@dataclass(frozen=True, slots=True)
-class RankedCandidate:
-    smiles: str
-    score: float
 
 
 class SecsInference:
     """Inference boundary for one converted SECS checkpoint.
 
-    Spectrum inputs are 10,000 intensities on the ascending-ppm grid used by
-    the public SECS application. This boundary max-normalizes and reverses them
-    into the order used to train the H-NMR encoder.
-
-    The caller must admit the MolFormer cache and configure Hugging Face before
-    loading. In the maintained container lane, hash verification precedes this
-    call and Docker owns network denial.
+    Spectrum inputs are 10,000 intensities on the public application's
+    ascending-ppm grid; this boundary max-normalizes and reverses them into the
+    model's training order. The container must admit the MolFormer cache and
+    configure Hugging Face before loading.
     """
 
     def __init__(
         self,
         model,
         tokenizer,
-        embedding_size: int,
         device: torch.device,
         dtype: torch.dtype,
         smiles_batch_size: int,
     ) -> None:
-        self.model = model
-        self.tokenizer = tokenizer
-        self.embedding_size = embedding_size
-        self.device = device
-        self.dtype = dtype
-        self.smiles_batch_size = smiles_batch_size
+        self._model = model
+        self._tokenizer = tokenizer
+        self._device = device
+        self._dtype = dtype
+        self._smiles_batch_size = smiles_batch_size
 
     @classmethod
     def load(
@@ -62,14 +44,11 @@ class SecsInference:
         *,
         molformer_lock: str | Path,
         device: str,
-        dtype: str,
-        smiles_batch_size: int = 256,
+        dtype: torch.dtype,
+        smiles_batch_size: int,
     ) -> SecsInference:
-        if dtype not in DTYPES:
-            raise ValueError(f"dtype must be one of {', '.join(DTYPES)}, got {dtype!r}.")
         if smiles_batch_size <= 0:
             raise ValueError("smiles_batch_size must be positive.")
-        compute_dtype = DTYPES[dtype]
         compute_device = torch.device(device)
 
         checkpoint_directory = Path(checkpoint_directory)
@@ -90,17 +69,15 @@ class SecsInference:
         from secs.data.components.secs_tokenizers import SMILES_TOKENIZER
         from secs.models import MolBind
 
-        model = MolBind(OmegaConf.create(specification)).to(device=compute_device, dtype=compute_dtype)
+        model = MolBind(OmegaConf.create(specification)).to(device=compute_device, dtype=dtype)
         state = load_file(checkpoint_directory / "secs-v3.safetensors", device="cpu")
         model.load_state_dict(state, strict=True)
         model.eval().requires_grad_(False)
-        embedding_size = specification["model"]["projection_heads"]["smiles"]["dims"][-1]
         return cls(
             model,
             SMILES_TOKENIZER,
-            embedding_size,
             compute_device,
-            compute_dtype,
+            dtype,
             smiles_batch_size,
         )
 
@@ -114,33 +91,30 @@ class SecsInference:
 
         values = (values / maximum)[::-1].copy()
 
-        tensor = torch.from_numpy(values).to(device=self.device, dtype=self.dtype).reshape(1, 1, -1)
+        tensor = torch.from_numpy(values).to(device=self._device, dtype=self._dtype).reshape(1, 1, -1)
         with torch.inference_mode():
-            embedding = self.model.encode_modality(tensor, modality="h_nmr")
+            embedding = self._model.encode_modality(tensor, modality="h_nmr")
         return embedding.squeeze(0).float().cpu().numpy()
 
     def embed_smiles(self, smiles: list[str]) -> FloatArray:
-        if not smiles:
-            return np.empty((0, self.embedding_size), dtype=np.float32)
         embeddings = []
         with torch.inference_mode():
-            for start in range(0, len(smiles), self.smiles_batch_size):
-                tokens = self.tokenizer(
-                    smiles[start : start + self.smiles_batch_size],
+            for start in range(0, len(smiles), self._smiles_batch_size):
+                tokens = self._tokenizer(
+                    smiles[start : start + self._smiles_batch_size],
                     padding="max_length",
                     truncation=True,
                     return_tensors="pt",
-                    max_length=SMILES_CONTEXT_LENGTH,
+                    max_length=128,
                 )
-                inputs = tokens["input_ids"].to(self.device), tokens["attention_mask"].to(self.device)
-                embeddings.append(self.model.encode_modality(inputs, modality="smiles").float().cpu())
+                inputs = tokens["input_ids"].to(self._device), tokens["attention_mask"].to(self._device)
+                embeddings.append(self._model.encode_modality(inputs, modality="smiles").float().cpu())
         return torch.cat(embeddings).numpy()
 
-    def rank(self, spectrum: Sequence[float] | FloatArray, candidates: list[str]) -> list[RankedCandidate]:
+    def rank(self, spectrum: Sequence[float] | FloatArray, candidates: list[str]) -> list[tuple[str, float]]:
         if not candidates:
             return []
         spectrum_embedding = torch.from_numpy(self.embed_spectrum(spectrum)).unsqueeze(0)
         candidate_embeddings = torch.from_numpy(self.embed_smiles(candidates))
         scores = F.cosine_similarity(spectrum_embedding, candidate_embeddings, dim=1).tolist()
-        ranked = sorted(zip(candidates, scores, strict=True), key=lambda candidate: candidate[1], reverse=True)
-        return [RankedCandidate(smiles, score) for smiles, score in ranked]
+        return sorted(zip(candidates, scores, strict=True), key=lambda candidate: candidate[1], reverse=True)

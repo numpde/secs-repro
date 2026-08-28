@@ -1,3 +1,3 @@
-from secs_inference.model import RankedCandidate, SecsInference
+from secs_inference.model import SecsInference
 
-__all__ = ["RankedCandidate", "SecsInference"]
+__all__ = ["SecsInference"]
