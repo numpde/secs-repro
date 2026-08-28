@@ -25,6 +25,7 @@ molformer/cache:
 		--mount type=bind,src="$$stage",dst=/output \
 		--entrypoint python "$$packages_image" -P /opt/materialize.py \
 		--lock /input/molformer.lock.toml --output /output
+	chmod 0755 "$$stage"
 	rm -rf "$$cache_path"
 	mv -T "$$stage" "$$cache_path"
 	trap - EXIT

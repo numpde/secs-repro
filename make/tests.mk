@@ -11,11 +11,10 @@ test/integration:
 	# Hash verification gates cached Python imports.
 	# Docker owns network denial; Transformers offline mode only makes cache misses fail promptly.
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
-		--user "$(HOST_UID):$(HOST_GID)" \
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 64 --cpus 2 --memory 1g --memory-swap 1g \
-		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m,uid=$(HOST_UID),gid=$(HOST_GID) \
-		--tmpfs /modules:rw,nosuid,nodev,noexec,size=16m,uid=$(HOST_UID),gid=$(HOST_GID) \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777 \
+		--tmpfs /modules:rw,nosuid,nodev,noexec,size=16m,mode=1777 \
 		--env HF_HUB_CACHE=/cache/hub \
 		--env TRANSFORMERS_OFFLINE=1 \
 		--env HF_MODULES_CACHE=/modules \
