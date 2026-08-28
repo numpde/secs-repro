@@ -12,6 +12,7 @@ from torch.nn import functional as F
 
 FloatArray = NDArray[np.float32]
 SPECTRUM_POINTS = 10_000
+SMILES_CONTEXT_LENGTH = 128
 
 
 class SecsInference:
@@ -72,7 +73,7 @@ class SecsInference:
         model = MolBind(OmegaConf.create(specification)).to(device=compute_device, dtype=dtype)
         state = load_file(checkpoint_directory / "secs-v3.safetensors", device="cpu")
         model.load_state_dict(state, strict=True)
-        model.eval().requires_grad_(False)
+        model.eval()
         return cls(
             model,
             SMILES_TOKENIZER,
@@ -81,6 +82,7 @@ class SecsInference:
             smiles_batch_size,
         )
 
+    @torch.inference_mode()
     def embed_spectrum(self, spectrum: Sequence[float] | FloatArray) -> FloatArray:
         values = np.asarray(spectrum, dtype=np.float32)
         if values.shape != (SPECTRUM_POINTS,):
@@ -89,26 +91,26 @@ class SecsInference:
         if not np.isfinite(values).all() or maximum <= 0:
             raise ValueError("Spectrum intensities must be finite and contain a positive signal.")
 
-        values = (values / maximum)[::-1].copy()
+        normalized = values / maximum
+        model_order = normalized[::-1].copy()
 
-        tensor = torch.from_numpy(values).to(device=self._device, dtype=self._dtype).reshape(1, 1, -1)
-        with torch.inference_mode():
-            embedding = self._model.encode_modality(tensor, modality="h_nmr")
+        tensor = torch.from_numpy(model_order).to(device=self._device, dtype=self._dtype).reshape(1, 1, -1)
+        embedding = self._model.encode_modality(tensor, modality="h_nmr")
         return embedding.squeeze(0).float().cpu().numpy()
 
+    @torch.inference_mode()
     def embed_smiles(self, smiles: list[str]) -> FloatArray:
         embeddings = []
-        with torch.inference_mode():
-            for start in range(0, len(smiles), self._smiles_batch_size):
-                tokens = self._tokenizer(
-                    smiles[start : start + self._smiles_batch_size],
-                    padding="max_length",
-                    truncation=True,
-                    return_tensors="pt",
-                    max_length=128,
-                )
-                inputs = tokens["input_ids"].to(self._device), tokens["attention_mask"].to(self._device)
-                embeddings.append(self._model.encode_modality(inputs, modality="smiles").float().cpu())
+        for start in range(0, len(smiles), self._smiles_batch_size):
+            tokens = self._tokenizer(
+                smiles[start : start + self._smiles_batch_size],
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+                max_length=SMILES_CONTEXT_LENGTH,
+            )
+            inputs = tokens["input_ids"].to(self._device), tokens["attention_mask"].to(self._device)
+            embeddings.append(self._model.encode_modality(inputs, modality="smiles").float().cpu())
         return torch.cat(embeddings).numpy()
 
     def rank(self, spectrum: Sequence[float] | FloatArray, candidates: list[str]) -> list[tuple[str, float]]:
