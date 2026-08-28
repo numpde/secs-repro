@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -56,13 +57,53 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def safetensors_precision(path: Path) -> str:
+def safetensors_header(path: Path) -> dict:
     with path.open("rb") as source:
         header_bytes = int.from_bytes(source.read(8), "little")
         if header_bytes > MAX_SAFETENSORS_HEADER_BYTES:
             raise ValueError("safetensors header exceeds the supported size")
-        header = json.loads(source.read(header_bytes))
-    return header["__metadata__"]["precision"]
+        return json.loads(source.read(header_bytes))
+
+
+def component_inventory(header: dict, spec: dict) -> dict:
+    tensor_names = {name for name in header if name != "__metadata__"}
+
+    def inventory(prefix: str) -> dict:
+        names = [name for name in tensor_names if name.startswith(prefix)]
+        if not names:
+            raise ValueError(f"safetensors has no tensors under {prefix}")
+        return {
+            "tensors": len(names),
+            "scalar_values": sum(math.prod(header[name]["shape"]) for name in names),
+        }
+
+    model = spec["model"]
+    encoders = {
+        modality: inventory(f"dict_encoders.{modality}.")
+        for modality in model["modalities"]
+    }
+    projection_heads = {
+        modality: inventory(f"dict_projection_heads.{modality}.")
+        for modality in model["projection_heads"]
+    }
+    batch_norm_buffers = {
+        suffix: sum(name.endswith("." + suffix) for name in tensor_names)
+        for suffix in ("running_mean", "running_var", "num_batches_tracked")
+    }
+    missing_buffers = [
+        name for name, count in batch_norm_buffers.items() if count == 0
+    ]
+    if missing_buffers:
+        raise ValueError(
+            "safetensors is missing BatchNorm buffers: " + ", ".join(missing_buffers)
+        )
+
+    return {
+        "tensors": len(tensor_names),
+        "encoders": encoders,
+        "projection_heads": projection_heads,
+        "batch_norm_buffers": batch_norm_buffers,
+    }
 
 
 def manifest_data(
@@ -73,6 +114,7 @@ def manifest_data(
     revision: str,
 ) -> dict:
     archive = spec["archive"]
+    header = safetensors_header(weights)
     return {
         "spec": {"file": spec_path.name, "sha256": sha256(spec_path)},
         "source": {
@@ -87,7 +129,8 @@ def manifest_data(
             "file": weights.name,
             "bytes": weights.stat().st_size,
             "sha256": sha256(weights),
-            "precision": safetensors_precision(weights),
+            "precision": header["__metadata__"]["precision"],
+            "inventory": component_inventory(header, spec),
         },
     }
 

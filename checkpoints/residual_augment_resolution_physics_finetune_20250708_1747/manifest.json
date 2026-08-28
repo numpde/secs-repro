@@ -17,6 +17,34 @@
   "weights": {
     "bytes": 269922576,
     "file": "secs-v3.safetensors",
+    "inventory": {
+      "batch_norm_buffers": {
+        "num_batches_tracked": 142,
+        "running_mean": 142,
+        "running_var": 142
+      },
+      "encoders": {
+        "h_nmr": {
+          "scalar_values": 88637806,
+          "tensors": 1046
+        },
+        "smiles": {
+          "scalar_values": 44399616,
+          "tensors": 207
+        }
+      },
+      "projection_heads": {
+        "h_nmr": {
+          "scalar_values": 1051648,
+          "tensors": 4
+        },
+        "smiles": {
+          "scalar_values": 788992,
+          "tensors": 4
+        }
+      },
+      "tensors": 1261
+    },
     "precision": "bfloat16",
     "sha256": "4d26afccfac27efb9a965bd2e90aba40f3e4154d9829ab3ad973f100d606eade"
   }
