@@ -20,7 +20,7 @@ test/integration:
 		--env TRANSFORMERS_OFFLINE=1 \
 		--env HF_MODULES_CACHE=/modules \
 		--env PYTHONDONTWRITEBYTECODE=1 \
-		--mount type=bind,src="$(REPOSITORY_ROOT)/molformer.lock.toml",dst=/input/molformer.lock.toml,readonly \
+		--mount type=bind,src="$(MOLFORMER_LOCK)",dst=/input/molformer.lock.toml,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
 		--mount type=bind,src="$$cache_dir",dst=/cache,readonly \
 		--mount type=bind,src="$$checkpoint_dir",dst=/checkpoint,readonly \

@@ -1,4 +1,5 @@
 override MOLFORMER_CACHE := $(REPOSITORY_ROOT)/cache/molformer
+override MOLFORMER_LOCK := $(REPOSITORY_ROOT)/molformer.lock.toml
 
 .PHONY: molformer/cache
 
@@ -20,7 +21,7 @@ molformer/cache:
 		--pids-limit 32 --cpus 1 --memory 256m --memory-swap 256m \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
 		--env HF_HUB_DISABLE_TELEMETRY=1 \
-		--mount type=bind,src="$(REPOSITORY_ROOT)/molformer.lock.toml",dst=/input/molformer.lock.toml,readonly \
+		--mount type=bind,src="$(MOLFORMER_LOCK)",dst=/input/molformer.lock.toml,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
 		--mount type=bind,src="$$stage",dst=/output \
 		--entrypoint python "$$packages_image" -P /opt/materialize.py \

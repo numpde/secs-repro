@@ -1,4 +1,5 @@
-override PYTHON_BASE := docker.io/library/python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+override PACKAGES_PYTHON_VERSION := 3.12.12
+override PYTHON_BASE := docker.io/library/python:$(PACKAGES_PYTHON_VERSION)-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
 override UV_IMAGE := ghcr.io/astral-sh/uv@sha256:440fd6477af86a2f1b38080c539f1672cd22acb1b1a47e321dba5158ab08864d
 PACKAGES_CPU_TORCH_WHEELS := https://download.pytorch.org/whl/cpu/torch/
 PACKAGES_GPU_TORCH_WHEELS := https://download.pytorch.org/whl/cu130/torch/
@@ -45,7 +46,7 @@ packages/locks/write:
 			"$$lock_image" pyproject.toml \
 			--group secs/pyproject.toml:packages-build \
 			--group "secs/pyproject.toml:$$group" --no-emit-package secs \
-			--python-version 3.12.12 --python-platform x86_64-manylinux_2_28 \
+			--python-version "$(PACKAGES_PYTHON_VERSION)" --python-platform x86_64-manylinux_2_28 \
 			--generate-hashes --index-url https://pypi.org/simple \
 			--output-file "/output/packages-$$variant.raw"
 		$(DOCKER) run --rm --network none --read-only --cap-drop ALL \

@@ -13,6 +13,7 @@ override CHECKPOINT_DIRECTORY = $(patsubst %/,%,$(dir $(CHECKPOINT_SPEC)))
 override CHECKPOINT_WEIGHTS := $(CHECKPOINT_DIRECTORY)/secs-v3.safetensors
 override CHECKPOINT_WEIGHTS_FILENAME := $(notdir $(CHECKPOINT_WEIGHTS))
 override CHECKPOINT_MANIFEST := $(CHECKPOINT_DIRECTORY)/manifest.json
+override CHECKPOINT_MANIFEST_FILENAME := $(notdir $(CHECKPOINT_MANIFEST))
 override SECS_REPOSITORY := $(shell git config -f .gitmodules --get submodule.secs.url)
 override SECS_REVISION := $(shell git ls-files --stage secs | awk '{print $$2}')
 DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT docker --context default
@@ -96,7 +97,7 @@ checkpoint:
 	extractor_args=(--rm --init --pull never --read-only
 		"--cap-drop" ALL --security-opt no-new-privileges:true
 		"--pids-limit" 32 --cpus 1 --memory 2304m --memory-swap 2304m
-		"--tmpfs" /scratch:size=2g,mode=0700,uid=65532,gid=65532,noexec,nosuid,nodev
+		"--tmpfs" /scratch:size=2g,mode=1777,noexec,nosuid,nodev
 		"--mount" "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly"
 	)
 	source_args=()
@@ -139,18 +140,18 @@ checkpoint:
 		--pids-limit 32 --cpus 1 --memory 128m --memory-swap 128m \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/write_checkpoint_manifest.py,dst=/opt/checkpoint/write_manifest.py,readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly" \
-		--mount "type=bind,src=$$weights_stage_dir/$(CHECKPOINT_WEIGHTS_FILENAME),dst=/input/weights,readonly" \
+		--mount "type=bind,src=$$weights_stage_dir/$(CHECKPOINT_WEIGHTS_FILENAME),dst=/input/$(CHECKPOINT_WEIGHTS_FILENAME),readonly" \
 		--mount "type=bind,src=$$manifest_stage_dir,dst=/output" \
 		--entrypoint python "$$extractor_image" \
 		-P /opt/checkpoint/write_manifest.py \
-		--weights /input/weights \
-		--manifest-output /output/manifest.json \
+		--weights /input/$(CHECKPOINT_WEIGHTS_FILENAME) \
+		--manifest-output /output/$(CHECKPOINT_MANIFEST_FILENAME) \
 		--spec /input/checkpoint.toml \
 		--reference-repository "$(SECS_REPOSITORY)" \
 		--reference-revision "$(SECS_REVISION)"
 	chmod 0644 "$$weights_stage/$(CHECKPOINT_WEIGHTS_FILENAME)"
 	# Publish weights last; their presence marks a complete checkpoint.
-	mv -f "$$manifest_stage/manifest.json" "$(CHECKPOINT_MANIFEST)"
+	mv -f "$$manifest_stage/$(CHECKPOINT_MANIFEST_FILENAME)" "$(CHECKPOINT_MANIFEST)"
 	ln "$$weights_stage/$(CHECKPOINT_WEIGHTS_FILENAME)" "$(CHECKPOINT_WEIGHTS)"
 
 checkpoint/manifest:
@@ -178,18 +179,18 @@ checkpoint/manifest:
 		--pids-limit 32 --cpus 1 --memory 128m --memory-swap 128m \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/write_checkpoint_manifest.py,dst=/opt/checkpoint/write_manifest.py,readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly" \
-		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_WEIGHTS),dst=/input/weights,readonly" \
-		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_MANIFEST),dst=/input/manifest.json,readonly" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_WEIGHTS),dst=/input/$(CHECKPOINT_WEIGHTS_FILENAME),readonly" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_MANIFEST),dst=/input/$(CHECKPOINT_MANIFEST_FILENAME),readonly" \
 		--mount "type=bind,src=$$stage_dir,dst=/output" \
 		--entrypoint python "$$extractor_image" \
 		-P /opt/checkpoint/write_manifest.py \
-		--weights /input/weights \
-		--existing-manifest /input/manifest.json \
-		--manifest-output /output/manifest.json \
+		--weights /input/$(CHECKPOINT_WEIGHTS_FILENAME) \
+		--existing-manifest /input/$(CHECKPOINT_MANIFEST_FILENAME) \
+		--manifest-output /output/$(CHECKPOINT_MANIFEST_FILENAME) \
 		--spec /input/checkpoint.toml \
 		--reference-repository "$(SECS_REPOSITORY)" \
 		--reference-revision "$(SECS_REVISION)"
-	mv -f "$$stage/manifest.json" "$(CHECKPOINT_MANIFEST)"
+	mv -f "$$stage/$(CHECKPOINT_MANIFEST_FILENAME)" "$(CHECKPOINT_MANIFEST)"
 
 include make/packages.mk
 include make/molformer.mk

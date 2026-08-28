@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Sequence
 import tomllib
@@ -43,7 +44,7 @@ class SecsInference:
     @classmethod
     def load(
         cls,
-        checkpoint_directory: str | Path,
+        checkpoint_manifest: str | Path,
         *,
         molformer_lock: str | Path,
         device: str,
@@ -54,8 +55,10 @@ class SecsInference:
             raise ValueError("smiles_batch_size must be positive.")
         compute_device = torch.device(device)
 
-        checkpoint_directory = Path(checkpoint_directory)
-        with (checkpoint_directory / "checkpoint.toml").open("rb") as source:
+        manifest_path = Path(checkpoint_manifest)
+        manifest = json.loads(manifest_path.read_text())
+        checkpoint_directory = manifest_path.parent
+        with (checkpoint_directory / manifest["spec"]["file"]).open("rb") as source:
             specification = tomllib.load(source)
         spectrum_points = specification["model"]["encoders"]["h_nmr"]["input_length"]
         smiles_context_length = specification["inputs"]["smiles"]["context_length"]
@@ -75,7 +78,7 @@ class SecsInference:
         from secs.models import MolBind
 
         model = MolBind(OmegaConf.create(specification)).to(device=compute_device, dtype=dtype)
-        state = load_file(checkpoint_directory / "secs-v3.safetensors", device="cpu")
+        state = load_file(checkpoint_directory / manifest["weights"]["file"], device="cpu")
         model.load_state_dict(state, strict=True)
         model.eval()
         return cls(

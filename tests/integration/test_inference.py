@@ -9,7 +9,7 @@ from secs_inference import SecsInference
 class InferenceTest(unittest.TestCase):
     def test_real_checkpoint_ranks_smiles_offline(self):
         inference = SecsInference.load(
-            "/checkpoint",
+            "/checkpoint/manifest.json",
             molformer_lock="/input/molformer.lock.toml",
             device="cpu",
             dtype=torch.float32,

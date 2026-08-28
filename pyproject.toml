@@ -10,7 +10,7 @@ dependencies = [
   "numpy",
   "omegaconf",
   "safetensors",
-  "secs==0.3.0",
+  "secs",
   "torch",
 ]
 
