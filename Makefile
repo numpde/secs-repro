@@ -77,8 +77,7 @@ checkpoint:
 	done
 	$(MAKE) --no-print-directory packages/cpu/image
 	$(MAKE) --no-print-directory checkpoint/image
-	extractor_args=(
-		--rm --init --pull never --read-only
+	extractor_args=(--rm --init --pull never --read-only
 		--cap-drop ALL --security-opt no-new-privileges:true
 		--pids-limit 32 --cpus 1 --memory 2304m --memory-swap 2304m
 		--tmpfs /scratch:size=2g,mode=0700,uid=65532,gid=65532,noexec,nosuid,nodev
@@ -91,8 +90,7 @@ checkpoint:
 		extractor_args+=(--network bridge)
 		source_args=(--url "$${ARCHIVE_URL_INPUT}")
 	fi
-	converter_args=(
-		--rm --init --pull never --network none --read-only --user "$(HOST_UID):$(HOST_GID)"
+	converter_args=(--rm --init --pull never --network none --read-only --user "$(HOST_UID):$(HOST_GID)"
 		--cap-drop ALL --security-opt no-new-privileges:true
 		--pids-limit 64 --cpus 2 --memory 6g --memory-swap 6g
 		--tmpfs /scratch:size=2g,mode=0700,uid=$(HOST_UID),gid=$(HOST_GID),noexec,nosuid,nodev
