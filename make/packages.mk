@@ -39,10 +39,12 @@ packages/locks/write:
 			--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
 			--env UV_CACHE_DIR=/output/.uv-cache \
 			--workdir /input \
-			--mount type=bind,src="$(REPOSITORY_ROOT)/secs/pyproject.toml",dst=/input/pyproject.toml,readonly \
+			--mount type=bind,src="$(REPOSITORY_ROOT)/pyproject.toml",dst=/input/pyproject.toml,readonly \
+			--mount type=bind,src="$(REPOSITORY_ROOT)/secs",dst=/input/secs,readonly \
 			--mount type=bind,src="$$stage",dst=/output \
 			"$$lock_image" pyproject.toml \
-			--group packages-build --group "$$group" --extra elucidation \
+			--group secs/pyproject.toml:packages-build \
+			--group "secs/pyproject.toml:$$group" --no-emit-package secs \
 			--python-version 3.12.12 --python-platform x86_64-manylinux_2_28 \
 			--generate-hashes --index-url https://pypi.org/simple \
 			--output-file "/output/packages-$$variant.raw"
@@ -118,7 +120,8 @@ packages/image:
 		printf '%s\n' "$(PYTHON_BASE)" "$(VARIANT)"
 		cat containers/packages/Dockerfile.dockerignore \
 			requirements/packages-$(VARIANT).lock containers/packages/Dockerfile \
-			secs/pyproject.toml secs/README.md wheelhouse/packages-$(VARIANT)/.complete
+			pyproject.toml secs/pyproject.toml secs/README.md wheelhouse/packages-$(VARIANT)/.complete
+		find src -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
 		find secs/src -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
 	} | sha256sum | cut -d' ' -f1 )
 	$(DOCKER) build --quiet --network none --pull=false \

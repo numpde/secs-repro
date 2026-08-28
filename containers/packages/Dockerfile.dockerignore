@@ -13,3 +13,6 @@ secs/**
 !secs/README.md
 !secs/src/
 !secs/src/**
+!pyproject.toml
+!src/
+!src/**

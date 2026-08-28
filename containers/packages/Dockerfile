@@ -20,7 +20,13 @@ RUN cd /opt/packages/wheelhouse \
 COPY secs/ /opt/secs/
 
 RUN python -m pip install --no-index --no-deps --no-build-isolation /opt/secs \
-    && rm -rf /opt/secs \
+    && rm -rf /opt/secs
+
+COPY pyproject.toml /opt/secs-inference/pyproject.toml
+COPY src/ /opt/secs-inference/src/
+
+RUN python -m pip install --no-index --no-deps --no-build-isolation /opt/secs-inference \
+    && rm -rf /opt/secs-inference \
     && python -m pip check
 
 RUN useradd --no-create-home --uid 65532 secs

@@ -45,7 +45,7 @@ help:
 		'SECS tests' \
 		'' \
 		'  make test/integration' \
-		'      Verify the pinned MolFormer cache with an offline CPU forward pass.' \
+		'      Load the real checkpoint and rank SMILES in the offline CPU image.' \
 		'' \
 		'The archive and Lightning checkpoint are not retained.'
 
