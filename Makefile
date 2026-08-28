@@ -11,6 +11,7 @@ override CHECKPOINT_SPECS := $(wildcard checkpoints/*/checkpoint.toml)
 CHECKPOINT_SPEC ?= $(CHECKPOINT_SPECS)
 override CHECKPOINT_DIRECTORY = $(patsubst %/,%,$(dir $(CHECKPOINT_SPEC)))
 override CHECKPOINT_WEIGHTS := $(CHECKPOINT_DIRECTORY)/secs-v3.safetensors
+override CHECKPOINT_WEIGHTS_FILENAME := $(notdir $(CHECKPOINT_WEIGHTS))
 override CHECKPOINT_MANIFEST := $(CHECKPOINT_DIRECTORY)/manifest.json
 override SECS_REPOSITORY := $(shell git config -f .gitmodules --get submodule.secs.url)
 override SECS_REVISION := $(shell git ls-files --stage secs | awk '{print $$2}')
@@ -128,7 +129,7 @@ checkpoint:
 	| $(DOCKER) run -i "$${converter_args[@]}" "$$converter_image" \
 		-P /opt/checkpoint/convert.py \
 		--scratch-directory /scratch \
-		--weights-output /output/secs-v3.safetensors \
+		--weights-output "/output/$(CHECKPOINT_WEIGHTS_FILENAME)" \
 		--spec /input/checkpoint.toml \
 		--run-name "$(notdir $(CHECKPOINT_DIRECTORY))" \
 		"$${precision_args[@]}"
@@ -138,19 +139,19 @@ checkpoint:
 		--pids-limit 32 --cpus 1 --memory 128m --memory-swap 128m \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/write_checkpoint_manifest.py,dst=/opt/checkpoint/write_manifest.py,readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly" \
-		--mount "type=bind,src=$$weights_stage_dir/secs-v3.safetensors,dst=/input/secs-v3.safetensors,readonly" \
+		--mount "type=bind,src=$$weights_stage_dir/$(CHECKPOINT_WEIGHTS_FILENAME),dst=/input/weights,readonly" \
 		--mount "type=bind,src=$$manifest_stage_dir,dst=/output" \
 		--entrypoint python "$$extractor_image" \
 		-P /opt/checkpoint/write_manifest.py \
-		--weights /input/secs-v3.safetensors \
+		--weights /input/weights \
 		--manifest-output /output/manifest.json \
 		--spec /input/checkpoint.toml \
 		--reference-repository "$(SECS_REPOSITORY)" \
 		--reference-revision "$(SECS_REVISION)"
-	chmod 0644 "$$weights_stage/secs-v3.safetensors"
+	chmod 0644 "$$weights_stage/$(CHECKPOINT_WEIGHTS_FILENAME)"
 	# Publish weights last; their presence marks a complete checkpoint.
 	mv -f "$$manifest_stage/manifest.json" "$(CHECKPOINT_MANIFEST)"
-	ln "$$weights_stage/secs-v3.safetensors" "$(CHECKPOINT_WEIGHTS)"
+	ln "$$weights_stage/$(CHECKPOINT_WEIGHTS_FILENAME)" "$(CHECKPOINT_WEIGHTS)"
 
 checkpoint/manifest:
 	@if test "$(HOST_UID)" -eq 0; then
@@ -177,12 +178,12 @@ checkpoint/manifest:
 		--pids-limit 32 --cpus 1 --memory 128m --memory-swap 128m \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/write_checkpoint_manifest.py,dst=/opt/checkpoint/write_manifest.py,readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly" \
-		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_WEIGHTS),dst=/input/secs-v3.safetensors,readonly" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_WEIGHTS),dst=/input/weights,readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_MANIFEST),dst=/input/manifest.json,readonly" \
 		--mount "type=bind,src=$$stage_dir,dst=/output" \
 		--entrypoint python "$$extractor_image" \
 		-P /opt/checkpoint/write_manifest.py \
-		--weights /input/secs-v3.safetensors \
+		--weights /input/weights \
 		--existing-manifest /input/manifest.json \
 		--manifest-output /output/manifest.json \
 		--spec /input/checkpoint.toml \
