@@ -2,3 +2,4 @@
 /checkpoints/**/*.safetensors
 /checkpoints/**/*.zst
 /wheelhouse/
+/cache/

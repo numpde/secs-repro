@@ -1,0 +1,14 @@
+[snapshot]
+repository = "ibm-research/MoLFormer-XL-both-10pct"
+revision = "7b12d946c181a37f6012b9dc3b002275de070314"
+
+[files]
+"config.json" = "3ef9eaac8c7ca6282fd6256ed038d151bd4ff42a4ff855367e0d7197bbc1c284"
+"configuration_molformer.py" = "d48f6c133b27c3d6d9922acc554c2203aedf1a56d2061bd7aae72c11b7ec7aa5"
+"modeling_molformer.py" = "a3f6273bb44709e566ee02987c50372db727de21799c3d297f64b2437f9e32a8"
+"special_tokens_map.json" = "f0bb97cedb7e5d9eb744a3b2e499a9c464659e1a363853bfd6056ba126f5c16c"
+"tokenization_molformer.py" = "a816f7b6e540f27544e7aa924104d6fc0d5cedcc62117ec9d31d35d0cefbd2e2"
+"tokenization_molformer_fast.py" = "1921cf245ceb613a19e9a30ba4aa33e02b328ac6fdbbf63080b775bd8b4c8bdb"
+"tokenizer.json" = "3df1f2219653c44fac9fa03b7f788b372eb2544ecc176737bb9aca8411b471a5"
+"tokenizer_config.json" = "17e4fb4c6f77f2d9c482cf54fce528d97635e6bb9d0e2ab8b9638cc8a52e6fae"
+"vocab.json" = "8592dced2879cb164332b9ec14e99164ba017949a6c05344cb64163d4839dbb2"

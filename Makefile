@@ -40,6 +40,8 @@ help:
 		'      Download locked artifacts in bounded containers.' \
 		'  make packages/images' \
 		'      Build both images without network access from existing wheelhouses.' \
+		'  make molformer/cache' \
+		'      Materialize the pinned non-weight MolFormer Hugging Face cache.' \
 		'' \
 		'The archive and Lightning checkpoint are not retained.'
 
@@ -179,3 +181,4 @@ checkpoint/manifest:
 	mv -f "$$stage/manifest.json" "$(CHECKPOINT_MANIFEST)"
 
 include make/packages.mk
+include make/molformer.mk
