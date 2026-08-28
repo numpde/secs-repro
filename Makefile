@@ -6,7 +6,7 @@ SHELL := /bin/bash
 override REPOSITORY_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 override HOST_UID := $(shell id -u)
 override HOST_GID := $(shell id -g)
-CHECKPOINT_IMAGE := secs-repro/checkpoint-extractor:local
+CHECKPOINT_IMAGE_TAG := secs-repro/checkpoint-extractor:local
 override CHECKPOINT_SPECS := $(wildcard checkpoints/*/checkpoint.toml)
 CHECKPOINT_SPEC ?= $(CHECKPOINT_SPECS)
 override CHECKPOINT_DIRECTORY = $(patsubst %/,%,$(dir $(CHECKPOINT_SPEC)))
@@ -52,7 +52,7 @@ help:
 checkpoint/image:
 	@$(DOCKER) build --quiet --network none --pull=false \
 		--file containers/checkpoint/Dockerfile \
-		--tag "$(CHECKPOINT_IMAGE)" \
+		--tag "$(CHECKPOINT_IMAGE_TAG)" \
 		"$(REPOSITORY_ROOT)"
 
 checkpoint: private export ARCHIVE_INPUT := $(if $(filter command line,$(origin ARCHIVE)),$(value ARCHIVE),)

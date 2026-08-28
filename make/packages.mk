@@ -2,7 +2,7 @@ override PYTHON_BASE := docker.io/library/python:3.12.12-slim-bookworm@sha256:59
 override UV_IMAGE := ghcr.io/astral-sh/uv@sha256:440fd6477af86a2f1b38080c539f1672cd22acb1b1a47e321dba5158ab08864d
 PACKAGES_CPU_TORCH_WHEELS := https://download.pytorch.org/whl/cpu/torch/
 PACKAGES_GPU_TORCH_WHEELS := https://download.pytorch.org/whl/cu130/torch/
-PACKAGES_LOCK_IMAGE := secs-repro/packages-lock
+PACKAGES_LOCK_IMAGE_TAG := secs-repro/packages-lock
 
 .PHONY: packages/base-images/pull packages/lock-image packages/locks/write
 .PHONY: packages/cpu/wheelhouse packages/gpu/wheelhouse packages/wheelhouse
@@ -17,7 +17,7 @@ packages/lock-image:
 		--build-arg PYTHON_BASE="$(PYTHON_BASE)" \
 		--build-arg UV_IMAGE="$(UV_IMAGE)" \
 		--file containers/packages/Dockerfile.lock \
-		--tag "$(PACKAGES_LOCK_IMAGE)" .
+		--tag "$(PACKAGES_LOCK_IMAGE_TAG)" .
 
 packages/locks/write:
 	@if test "$(HOST_UID)" -eq 0; then
