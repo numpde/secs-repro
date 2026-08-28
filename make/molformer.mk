@@ -2,12 +2,17 @@ MOLFORMER_CACHE := cache/molformer
 
 .PHONY: molformer/cache
 
-molformer/cache: packages/cpu/image
+molformer/cache:
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot materialize the MolFormer cache as host UID 0.' >&2
 		exit 2
 	fi
-	stage=$$(mktemp -d)
+	$(MAKE) --no-print-directory packages/cpu/image
+	cache_path="$(REPOSITORY_ROOT)/$(MOLFORMER_CACHE)"
+	cache_parent="$(REPOSITORY_ROOT)/$(dir $(MOLFORMER_CACHE))"
+	mkdir -p "$$cache_parent"
+	# Stage beside the destination so publication is a same-filesystem rename.
+	stage=$$(mktemp -d --tmpdir="$$cache_parent" .molformer.XXXXXXXX)
 	trap 'rm -rf "$$stage"' EXIT
 	$(DOCKER) run --rm --init --pull never --network bridge --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
@@ -20,7 +25,6 @@ molformer/cache: packages/cpu/image
 		--mount type=bind,src="$$stage",dst=/output \
 		--entrypoint python secs-repro/packages-cpu:local -P /opt/materialize.py \
 		--lock /input/molformer.lock.toml --output /output
-	mkdir -p "$(dir $(MOLFORMER_CACHE))"
-	rm -rf "$(MOLFORMER_CACHE)"
-	mv "$$stage" "$(MOLFORMER_CACHE)"
+	rm -rf "$$cache_path"
+	mv -T "$$stage" "$$cache_path"
 	trap - EXIT
