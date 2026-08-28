@@ -32,8 +32,11 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--manifest-output", type=Path, required=True)
     parser.add_argument("--model-config", type=Path, required=True)
     parser.add_argument("--precision", choices=DTYPES, required=True)
+    parser.add_argument("--source-record", required=True)
     parser.add_argument("--source-archive-md5", required=True)
     parser.add_argument("--source-member", required=True)
+    parser.add_argument("--implementation-repository", required=True)
+    parser.add_argument("--implementation-revision", required=True)
     return parser.parse_args()
 
 
@@ -102,8 +105,15 @@ def prepare_outputs(args: argparse.Namespace) -> None:
                     },
                     "model": {"file": model.name, "sha256": sha256(model)},
                     "source": {
-                        "archive_md5": args.source_archive_md5,
-                        "member": args.source_member,
+                        "archive": {
+                            "record": args.source_record,
+                            "md5": args.source_archive_md5,
+                            "member": args.source_member,
+                        },
+                        "implementation": {
+                            "repository": args.implementation_repository,
+                            "revision": args.implementation_revision,
+                        },
                     },
                 },
                 indent=2,

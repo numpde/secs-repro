@@ -62,7 +62,7 @@ def arguments() -> argparse.Namespace:
     source.add_argument("--archive", type=Path)
     source.add_argument("--url")
     parser.add_argument("--expected-archive-md5", required=True)
-    parser.add_argument("--member-suffix", required=True)
+    parser.add_argument("--member", required=True)
     parser.add_argument("--max-member-bytes", type=int, required=True)
     parser.add_argument("--scratch-directory", type=Path, required=True)
     return parser.parse_args()
@@ -85,10 +85,6 @@ def normalized_member_name(name: str) -> str:
     while name.startswith("./"):
         name = name[2:]
     return name.rstrip("/")
-
-
-def member_matches(name: str, suffix: str) -> bool:
-    return name == suffix or name.endswith("/" + suffix)
 
 
 def copy_member(archive: tarfile.TarFile, member: tarfile.TarInfo, destination) -> None:
@@ -115,11 +111,11 @@ def stage_checkpoint(
     try:
         for member in archive:
             name = normalized_member_name(member.name)
-            if not member_matches(name, args.member_suffix):
+            if name != args.member:
                 continue
             if temp_path is not None:
                 raise ExtractionRejected(
-                    f"archive contains more than one member ending in {args.member_suffix!r}"
+                    f"archive contains more than one member named {args.member!r}"
                 )
             if not member.isfile():
                 raise ExtractionRejected(f"checkpoint member is not a regular file: {member.name}")
@@ -137,9 +133,7 @@ def stage_checkpoint(
                 copy_member(archive, member, destination)
                 destination.flush()
         if temp_path is None:
-            raise ExtractionRejected(
-                f"archive has no member ending in {args.member_suffix!r}"
-            )
+            raise ExtractionRejected(f"archive has no member named {args.member!r}")
         return temp_path
     except BaseException:
         if temp_path is not None:

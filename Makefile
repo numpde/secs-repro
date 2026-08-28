@@ -8,15 +8,20 @@ HOST_UID := $(shell id -u)
 HOST_GID := $(shell id -g)
 CHECKPOINT_IMAGE := secs-repro/checkpoint-extractor:local
 CHECKPOINT_CONVERTER_IMAGE := secs-repro/packages-cpu:local
-ARCHIVE_MEMBER_SUFFIX := checkpoints/residual_augment_resolution_physics_finetune_20250708_1747/best_model.ckpt
-CHECKPOINT_DIRECTORY := $(patsubst %/,%,$(dir $(ARCHIVE_MEMBER_SUFFIX)))
+ARCHIVE_APPLICATION_ROOT := MoleculeBindZenodo/app-cpu
+ARCHIVE_MEMBER := $(ARCHIVE_APPLICATION_ROOT)/checkpoints/residual_augment_resolution_physics_finetune_20250708_1747/best_model.ckpt
+CHECKPOINT_RELATIVE_PATH := $(patsubst $(ARCHIVE_APPLICATION_ROOT)/%,%,$(ARCHIVE_MEMBER))
+CHECKPOINT_DIRECTORY := $(patsubst %/,%,$(dir $(CHECKPOINT_RELATIVE_PATH)))
 CHECKPOINT_WEIGHTS := $(CHECKPOINT_DIRECTORY)/secs-v3.safetensors
 CHECKPOINT_MODEL := $(CHECKPOINT_DIRECTORY)/model.yaml
 CHECKPOINT_MANIFEST := $(CHECKPOINT_DIRECTORY)/manifest.json
 CHECKPOINT_PRECISION ?= float32
-ARCHIVE_URL ?= https://zenodo.org/records/14638782/files/zenodo_secs_v3.tar.gz?download=1
+ZENODO_RECORD := https://zenodo.org/records/14638782
+ARCHIVE_URL ?= $(ZENODO_RECORD)/files/zenodo_secs_v3.tar.gz?download=1
 ARCHIVE_MD5 := 5ca6bed3fb7e70630020f55796fd26ab
 MAX_CHECKPOINT_BYTES := 4294967296
+SECS_REPOSITORY := $(shell git config -f .gitmodules --get submodule.secs.url)
+SECS_REVISION := $(shell git -C secs rev-parse HEAD)
 DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT docker --context default
 
 .PHONY: help checkpoint checkpoint/image
@@ -102,7 +107,7 @@ checkpoint:
 	$(DOCKER) run "$${extractor_args[@]}" "$(CHECKPOINT_IMAGE)" \
 		"$${source_args[@]}" \
 		--expected-archive-md5 "$(ARCHIVE_MD5)" \
-		--member-suffix "$(ARCHIVE_MEMBER_SUFFIX)" \
+		--member "$(ARCHIVE_MEMBER)" \
 		--max-member-bytes "$(MAX_CHECKPOINT_BYTES)" \
 		--scratch-directory /scratch \
 	| $(DOCKER) run -i "$${converter_args[@]}" "$(CHECKPOINT_CONVERTER_IMAGE)" \
@@ -113,7 +118,10 @@ checkpoint:
 		--manifest-output /output/manifest.json \
 		--model-config /opt/checkpoint/model.yaml \
 		--precision "$(CHECKPOINT_PRECISION)" \
+		--source-record "$(ZENODO_RECORD)" \
 		--source-archive-md5 "$(ARCHIVE_MD5)" \
-		--source-member "$(ARCHIVE_MEMBER_SUFFIX)"
+		--source-member "$(ARCHIVE_MEMBER)" \
+		--implementation-repository "$(SECS_REPOSITORY)" \
+		--implementation-revision "$(SECS_REVISION)"
 
 include make/packages.mk

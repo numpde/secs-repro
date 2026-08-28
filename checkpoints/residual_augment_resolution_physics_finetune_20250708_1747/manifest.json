@@ -4,8 +4,15 @@
     "sha256": "3acda668a520c362f09e69ee2d414764e362f17174c9f50ea3daa7f06b4b4557"
   },
   "source": {
-    "archive_md5": "5ca6bed3fb7e70630020f55796fd26ab",
-    "member": "residual_augment_resolution_physics_finetune_20250708_1747/best_model.ckpt"
+    "archive": {
+      "md5": "5ca6bed3fb7e70630020f55796fd26ab",
+      "member": "MoleculeBindZenodo/app-cpu/checkpoints/residual_augment_resolution_physics_finetune_20250708_1747/best_model.ckpt",
+      "record": "https://zenodo.org/records/14638782"
+    },
+    "implementation": {
+      "repository": "git@github.com:numpde/fork-of-secs.git",
+      "revision": "00536095c2e06e46d3dd0531c88230a5b98af0a7"
+    }
   },
   "weights": {
     "bytes": 269922576,
