@@ -30,9 +30,9 @@ def arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_spec(path: Path) -> dict:
-    with path.open("rb") as source:
-        return tomllib.load(source)
+def read_spec(path: Path) -> tuple[dict, str]:
+    contents = path.read_bytes()
+    return tomllib.loads(contents.decode()), hashlib.sha256(contents).hexdigest()
 
 
 def sha256(path: Path) -> str:
@@ -117,10 +117,15 @@ def archive_receipt(spec: dict) -> dict:
     return {"record": archive["record"], "md5": archive["md5"], "member": archive["member"]}
 
 
-def manifest_data(args: argparse.Namespace, spec: dict, weights_sha256: str) -> dict:
+def manifest_data(
+    args: argparse.Namespace,
+    spec: dict,
+    spec_sha256: str,
+    weights_sha256: str,
+) -> dict:
     header = safetensors_header(args.weights)
     return {
-        "spec": {"file": args.spec.name, "sha256": sha256(args.spec)},
+        "spec": {"file": args.spec.name, "sha256": spec_sha256},
         "source": {"archive": archive_receipt(spec)},
         "reference_implementation": {
             "repository": args.reference_repository,
@@ -137,16 +142,16 @@ def manifest_data(args: argparse.Namespace, spec: dict, weights_sha256: str) -> 
 
 
 def write_manifest(args: argparse.Namespace) -> None:
-    spec = load_spec(args.spec)
+    spec, spec_sha256 = read_spec(args.spec)
     weights_sha256 = sha256(args.weights)
     if args.existing_manifest is not None:
         existing = json.loads(args.existing_manifest.read_text())
         if existing["weights"]["sha256"] != weights_sha256:
             raise ValueError("weights do not match the existing provenance receipt")
-        if existing["source"]["archive"] != archive_receipt(spec):
-            raise ValueError("archive identity changed since the existing provenance receipt")
+        if existing["spec"]["sha256"] != spec_sha256:
+            raise ValueError("checkpoint specification changed since the weights were converted")
     args.manifest_output.write_text(
-        json.dumps(manifest_data(args, spec, weights_sha256), indent=2, sort_keys=True) + "\n"
+        json.dumps(manifest_data(args, spec, spec_sha256, weights_sha256), indent=2, sort_keys=True) + "\n"
     )
 
 

@@ -7,13 +7,13 @@ override REPOSITORY_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 override HOST_UID := $(shell id -u)
 override HOST_GID := $(shell id -g)
 CHECKPOINT_IMAGE := secs-repro/checkpoint-extractor:local
-CHECKPOINT_SPECS := $(wildcard checkpoints/*/checkpoint.toml)
+override CHECKPOINT_SPECS := $(wildcard checkpoints/*/checkpoint.toml)
 CHECKPOINT_SPEC ?= $(CHECKPOINT_SPECS)
-CHECKPOINT_DIRECTORY = $(patsubst %/,%,$(dir $(CHECKPOINT_SPEC)))
-CHECKPOINT_WEIGHTS := $(CHECKPOINT_DIRECTORY)/secs-v3.safetensors
-CHECKPOINT_MANIFEST := $(CHECKPOINT_DIRECTORY)/manifest.json
-SECS_REPOSITORY := $(shell git config -f .gitmodules --get submodule.secs.url)
-SECS_REVISION := $(shell git ls-files --stage secs | awk '{print $$2}')
+override CHECKPOINT_DIRECTORY = $(patsubst %/,%,$(dir $(CHECKPOINT_SPEC)))
+override CHECKPOINT_WEIGHTS := $(CHECKPOINT_DIRECTORY)/secs-v3.safetensors
+override CHECKPOINT_MANIFEST := $(CHECKPOINT_DIRECTORY)/manifest.json
+override SECS_REPOSITORY := $(shell git config -f .gitmodules --get submodule.secs.url)
+override SECS_REVISION := $(shell git ls-files --stage secs | awk '{print $$2}')
 DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT docker --context default
 
 .PHONY: help checkpoint checkpoint/image checkpoint/manifest
@@ -29,7 +29,7 @@ help:
 		'  make checkpoint CHECKPOINT_PRECISION=float16' \
 		'      Override the specification precision with float32, float16, or bfloat16.' \
 		'  make checkpoint/manifest' \
-		'      Refresh the receipt only when archive identity and weight hash still match.' \
+		'      Refresh the receipt only when specification and weight hashes still match.' \
 		'' \
 		'SECS package images' \
 		'' \
@@ -63,8 +63,10 @@ checkpoint:
 		printf '%s\n' 'Cannot prepare the checkpoint as host UID 0.' >&2
 		exit 2
 	fi
-	if test "$(words $(CHECKPOINT_SPEC))" -ne 1 || test ! -f "$(CHECKPOINT_SPEC)"; then
-		printf '%s\n' 'CHECKPOINT_SPEC must select one existing checkpoint.toml.' >&2
+	selected_spec=
+	case " $(CHECKPOINT_SPECS) " in *" $(CHECKPOINT_SPEC) "*) selected_spec=1 ;; esac
+	if test "$(words $(CHECKPOINT_SPEC))" -ne 1 || test -z "$$selected_spec"; then
+		printf '%s\n' 'CHECKPOINT_SPEC must select one repository checkpoint.toml.' >&2
 		exit 2
 	fi
 	if test -n "$${ARCHIVE_INPUT:-}" && test -n "$${ARCHIVE_URL_INPUT:-}"; then
@@ -145,6 +147,7 @@ checkpoint:
 		--spec /input/checkpoint.toml \
 		--reference-repository "$(SECS_REPOSITORY)" \
 		--reference-revision "$(SECS_REVISION)"
+	# Publish weights last; their presence marks a complete checkpoint.
 	mv -f "$$manifest_stage/manifest.json" "$(CHECKPOINT_MANIFEST)"
 	ln "$$weights_stage/secs-v3.safetensors" "$(CHECKPOINT_WEIGHTS)"
 
@@ -153,8 +156,10 @@ checkpoint/manifest:
 		printf '%s\n' 'Cannot refresh the checkpoint manifest as host UID 0.' >&2
 		exit 2
 	fi
+	selected_spec=
+	case " $(CHECKPOINT_SPECS) " in *" $(CHECKPOINT_SPEC) "*) selected_spec=1 ;; esac
 	if test "$(words $(CHECKPOINT_SPEC))" -ne 1 \
-		|| test ! -f "$(CHECKPOINT_SPEC)" \
+		|| test -z "$$selected_spec" \
 		|| test ! -f "$(CHECKPOINT_WEIGHTS)" \
 		|| test ! -f "$(CHECKPOINT_MANIFEST)"; then
 		printf '%s\n' 'Checkpoint specification, weights, or existing manifest are absent.' >&2
