@@ -104,7 +104,6 @@ def open_archive_source(args: argparse.Namespace, default_url: str):
 def stage_checkpoint(
     archive: tarfile.TarFile,
     member_name: str,
-    max_member_bytes: int,
     scratch_directory: Path,
 ) -> Path:
     """Copy the archive's unique expected regular member to a temporary file."""
@@ -121,10 +120,6 @@ def stage_checkpoint(
                 )
             if not member.isfile():
                 raise ExtractionRejected(f"checkpoint member is not a regular file: {member.name}")
-            if member.size > max_member_bytes:
-                raise ExtractionRejected(
-                    f"checkpoint member is {member.size} bytes; limit is {max_member_bytes}"
-                )
             with tempfile.NamedTemporaryFile(
                 mode="w+b",
                 prefix="best_model.ckpt.",
@@ -172,7 +167,6 @@ def extract(args: argparse.Namespace) -> None:
                 temp_path = stage_checkpoint(
                     archive,
                     archive_spec["member"],
-                    archive_spec["max_member_bytes"],
                     args.scratch_directory,
                 )
             verify_archive(measured, archive_spec["md5"])

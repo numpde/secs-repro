@@ -14,7 +14,7 @@ CHECKPOINT_DIRECTORY = $(patsubst %/,%,$(dir $(CHECKPOINT_SPEC)))
 CHECKPOINT_WEIGHTS := $(CHECKPOINT_DIRECTORY)/secs-v3.safetensors
 CHECKPOINT_MANIFEST := $(CHECKPOINT_DIRECTORY)/manifest.json
 SECS_REPOSITORY := $(shell git config -f .gitmodules --get submodule.secs.url)
-SECS_REVISION := $(shell git -C secs rev-parse HEAD)
+SECS_REVISION := $(shell git ls-files --stage secs | awk '{print $$2}')
 DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT docker --context default
 
 .PHONY: help checkpoint checkpoint/image checkpoint/manifest
@@ -30,7 +30,7 @@ help:
 		'  make checkpoint CHECKPOINT_PRECISION=float16' \
 		'      Override the specification precision with float32, float16, or bfloat16.' \
 		'  make checkpoint/manifest' \
-		'      Refresh the tracked receipt from existing weights and specification.' \
+		'      Refresh the receipt only when archive identity and weight hash still match.' \
 		'' \
 		'SECS package images' \
 		'' \
@@ -73,12 +73,15 @@ checkpoint:
 		archive_path=$$(realpath -e -- "$${ARCHIVE_INPUT}")
 	fi
 	output_dir=$$(realpath -e -- "$(CHECKPOINT_DIRECTORY)")
-	for artifact in "$(CHECKPOINT_WEIGHTS)" "$(CHECKPOINT_MANIFEST)"; do
-		if test -e "$$artifact" || test -L "$$artifact"; then
-			printf '%s\n' "Cannot prepare checkpoint artifacts: $$artifact already exists." >&2
-			exit 2
-		fi
-	done
+	if test -e "$(CHECKPOINT_WEIGHTS)" || test -L "$(CHECKPOINT_WEIGHTS)"; then
+		printf '%s\n' 'Cannot prepare checkpoint: $(CHECKPOINT_WEIGHTS) already exists.' >&2
+		exit 2
+	fi
+	weights_stage=$$(mktemp -d --tmpdir="$$output_dir" .weights.XXXXXXXX)
+	manifest_stage=$$(mktemp -d --tmpdir="$$output_dir" .manifest.XXXXXXXX)
+	trap 'rm -rf "$$weights_stage" "$$manifest_stage"' EXIT
+	weights_stage_dir=$$(realpath -e -- "$$weights_stage")
+	manifest_stage_dir=$$(realpath -e -- "$$manifest_stage")
 	$(MAKE) --no-print-directory packages/cpu/image
 	$(MAKE) --no-print-directory checkpoint/image
 	extractor_args=(--rm --init --pull never --read-only
@@ -105,8 +108,8 @@ checkpoint:
 		"--cap-drop" ALL --security-opt no-new-privileges:true
 		"--pids-limit" 64 --cpus 2 --memory 6g --memory-swap 6g
 		"--tmpfs" /scratch:size=2g,mode=0700,uid=$(HOST_UID),gid=$(HOST_GID),noexec,nosuid,nodev
-		"--mount" "type=bind,src=$$output_dir,dst=/output"
-		"--mount" "type=bind,src=$(REPOSITORY_ROOT)/tools/checkpoint_artifacts.py,dst=/opt/checkpoint/artifacts.py,readonly"
+		"--mount" "type=bind,src=$$weights_stage_dir,dst=/output"
+		"--mount" "type=bind,src=$(REPOSITORY_ROOT)/tools/convert_checkpoint.py,dst=/opt/checkpoint/convert.py,readonly"
 		"--mount" "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly"
 		"--entrypoint" python
 	)
@@ -115,14 +118,29 @@ checkpoint:
 		--spec /input/checkpoint.toml \
 		--scratch-directory /scratch \
 	| $(DOCKER) run -i "$${converter_args[@]}" "$(CHECKPOINT_CONVERTER_IMAGE)" \
-		-P /opt/checkpoint/artifacts.py convert \
+		-P /opt/checkpoint/convert.py \
 		--scratch-directory /scratch \
 		--weights-output /output/secs-v3.safetensors \
+		--spec /input/checkpoint.toml \
+		--run-name "$(notdir $(CHECKPOINT_DIRECTORY))" \
+		"$${precision_args[@]}"
+	$(DOCKER) run --rm --init --pull never --network none --read-only \
+		--user "$(HOST_UID):$(HOST_GID)" \
+		--cap-drop ALL --security-opt no-new-privileges:true \
+		--pids-limit 32 --cpus 1 --memory 128m --memory-swap 128m \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/write_checkpoint_manifest.py,dst=/opt/checkpoint/write_manifest.py,readonly" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly" \
+		--mount "type=bind,src=$$weights_stage_dir/secs-v3.safetensors,dst=/input/secs-v3.safetensors,readonly" \
+		--mount "type=bind,src=$$manifest_stage_dir,dst=/output" \
+		--entrypoint python "$(CHECKPOINT_IMAGE)" \
+		-P /opt/checkpoint/write_manifest.py \
+		--weights /input/secs-v3.safetensors \
 		--manifest-output /output/manifest.json \
 		--spec /input/checkpoint.toml \
-		"$${precision_args[@]}" \
-		--implementation-repository "$(SECS_REPOSITORY)" \
-		--implementation-revision "$(SECS_REVISION)"
+		--reference-repository "$(SECS_REPOSITORY)" \
+		--reference-revision "$(SECS_REVISION)"
+	mv -f "$$manifest_stage/manifest.json" "$(CHECKPOINT_MANIFEST)"
+	ln "$$weights_stage/secs-v3.safetensors" "$(CHECKPOINT_WEIGHTS)"
 
 checkpoint/manifest:
 	@if test "$(HOST_UID)" -eq 0; then
@@ -131,28 +149,33 @@ checkpoint/manifest:
 	fi
 	if test "$(words $(CHECKPOINT_SPEC))" -ne 1 \
 		|| test ! -f "$(CHECKPOINT_SPEC)" \
-		|| test ! -f "$(CHECKPOINT_WEIGHTS)"; then
-		printf '%s\n' 'Checkpoint specification or weights are absent.' >&2
+		|| test ! -f "$(CHECKPOINT_WEIGHTS)" \
+		|| test ! -f "$(CHECKPOINT_MANIFEST)"; then
+		printf '%s\n' 'Checkpoint specification, weights, or existing manifest are absent.' >&2
 		exit 2
 	fi
-	stage=$$(mktemp -d)
+	output_dir=$$(realpath -e -- "$(CHECKPOINT_DIRECTORY)")
+	stage=$$(mktemp -d --tmpdir="$$output_dir" .manifest.XXXXXXXX)
 	trap 'rm -rf "$$stage"' EXIT
+	stage_dir=$$(realpath -e -- "$$stage")
 	$(MAKE) --no-print-directory checkpoint/image
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 128m --memory-swap 128m \
-		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/checkpoint_artifacts.py,dst=/opt/checkpoint/artifacts.py,readonly" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/write_checkpoint_manifest.py,dst=/opt/checkpoint/write_manifest.py,readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_WEIGHTS),dst=/input/secs-v3.safetensors,readonly" \
-		--mount "type=bind,src=$$stage,dst=/output" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_MANIFEST),dst=/input/manifest.json,readonly" \
+		--mount "type=bind,src=$$stage_dir,dst=/output" \
 		--entrypoint python "$(CHECKPOINT_IMAGE)" \
-		-P /opt/checkpoint/artifacts.py manifest \
+		-P /opt/checkpoint/write_manifest.py \
 		--weights /input/secs-v3.safetensors \
+		--existing-manifest /input/manifest.json \
 		--manifest-output /output/manifest.json \
 		--spec /input/checkpoint.toml \
-		--implementation-repository "$(SECS_REPOSITORY)" \
-		--implementation-revision "$(SECS_REVISION)"
-	install -m 0644 "$$stage/manifest.json" "$(CHECKPOINT_MANIFEST)"
+		--reference-repository "$(SECS_REPOSITORY)" \
+		--reference-revision "$(SECS_REVISION)"
+	mv -f "$$stage/manifest.json" "$(CHECKPOINT_MANIFEST)"
 
 include make/packages.mk

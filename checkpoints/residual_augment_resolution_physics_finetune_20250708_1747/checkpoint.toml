@@ -3,21 +3,30 @@ record = "https://zenodo.org/records/14638782"
 url = "https://zenodo.org/records/14638782/files/zenodo_secs_v3.tar.gz?download=1"
 md5 = "5ca6bed3fb7e70630020f55796fd26ab"
 member = "MoleculeBindZenodo/app-cpu/checkpoints/residual_augment_resolution_physics_finetune_20250708_1747/best_model.ckpt"
-max_member_bytes = 4294967296
 
 [conversion]
 precision = "bfloat16"
 
-[model]
-embedding_size = 1024
-modalities = ["smiles", "h_nmr"]
+[data]
+central_modality = "smiles"
+modalities = ["h_nmr"]
 
 [model.encoders.smiles]
 name = "molformer"
+pretrained = false
+freeze_encoder = false
 
 [model.encoders.h_nmr]
 name = "cnn"
+freeze_encoder = false
+scale = "xlarge"
 use_initial_residual = true
+
+[model.projection_heads]
+smiles_is_on = true
+smiles_freeze = false
+h_nmr_is_on = true
+h_nmr_freeze = false
 
 [model.projection_heads.smiles]
 dims = [768, 1024]

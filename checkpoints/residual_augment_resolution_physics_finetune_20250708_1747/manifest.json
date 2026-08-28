@@ -1,48 +1,42 @@
 {
+  "reference_implementation": {
+    "repository": "git@github.com:numpde/fork-of-secs.git",
+    "revision": "00536095c2e06e46d3dd0531c88230a5b98af0a7"
+  },
   "source": {
     "archive": {
       "md5": "5ca6bed3fb7e70630020f55796fd26ab",
       "member": "MoleculeBindZenodo/app-cpu/checkpoints/residual_augment_resolution_physics_finetune_20250708_1747/best_model.ckpt",
       "record": "https://zenodo.org/records/14638782"
-    },
-    "implementation": {
-      "repository": "git@github.com:numpde/fork-of-secs.git",
-      "revision": "00536095c2e06e46d3dd0531c88230a5b98af0a7"
     }
   },
   "spec": {
     "file": "checkpoint.toml",
-    "sha256": "76fc43c181fdb4cfe1585266cd832400d1047cda3e0d964e366c7da4ae3cdf20"
+    "sha256": "3fc1840ccdfc74e167d3b5aea944c79775a8fc4c0b1ec9d76fe9a4e5fcddd360"
   },
   "weights": {
     "bytes": 269922576,
     "file": "secs-v3.safetensors",
     "inventory": {
-      "batch_norm_buffers": {
-        "num_batches_tracked": 142,
-        "running_mean": 142,
-        "running_var": 142
-      },
-      "encoders": {
-        "h_nmr": {
+      "components": {
+        "encoder:h_nmr": {
           "scalar_values": 88637806,
           "tensors": 1046
         },
-        "smiles": {
+        "encoder:smiles": {
           "scalar_values": 44399616,
           "tensors": 207
-        }
-      },
-      "projection_heads": {
-        "h_nmr": {
+        },
+        "projection_head:h_nmr": {
           "scalar_values": 1051648,
           "tensors": 4
         },
-        "smiles": {
+        "projection_head:smiles": {
           "scalar_values": 788992,
           "tensors": 4
         }
       },
+      "h_nmr_batch_norm_groups": 142,
       "tensors": 1261
     },
     "precision": "bfloat16",
