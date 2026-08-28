@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 class MolFormerCacheTest(unittest.TestCase):
-    def test_locked_snapshot_matches_secs_and_supports_forward_pass(self):
+    def test_locked_snapshot_matches_secs_and_supports_stable_repeated_forward(self):
         with Path("/input/molformer.lock.toml").open("rb") as source:
             snapshot = tomllib.load(source)["snapshot"]
 
@@ -27,9 +27,11 @@ class MolFormerCacheTest(unittest.TestCase):
 
         with torch.inference_mode():
             embedding = encoder((tokens["input_ids"], tokens["attention_mask"]))
+            repeated_embedding = encoder((tokens["input_ids"], tokens["attention_mask"]))
 
         self.assertEqual(tuple(embedding.shape), (1, encoder.output_dim))
         self.assertTrue(torch.isfinite(embedding).all().item())
+        torch.testing.assert_close(repeated_embedding, embedding)
 
 
 if __name__ == "__main__":
