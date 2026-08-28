@@ -43,6 +43,11 @@ help:
 		'  make molformer/cache' \
 		'      Materialize the pinned non-weight MolFormer Hugging Face cache.' \
 		'' \
+		'SECS tests' \
+		'' \
+		'  make test/integration' \
+		'      Run real-artifact integration tests offline in the CPU package image.' \
+		'' \
 		'The archive and Lightning checkpoint are not retained.'
 
 checkpoint/image:
@@ -182,3 +187,4 @@ checkpoint/manifest:
 
 include make/packages.mk
 include make/molformer.mk
+include make/tests.mk
