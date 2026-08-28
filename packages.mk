@@ -1,0 +1,112 @@
+PYTHON_BASE ?= docker.io/library/python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+UV_IMAGE ?= ghcr.io/astral-sh/uv@sha256:440fd6477af86a2f1b38080c539f1672cd22acb1b1a47e321dba5158ab08864d
+PACKAGES_CPU_TORCH_WHEELS := https://download.pytorch.org/whl/cpu/torch/
+PACKAGES_GPU_TORCH_WHEELS := https://download.pytorch.org/whl/cu130/torch/
+PACKAGES_LOCK_IMAGE := secs-repro/packages-lock
+
+.PHONY: packages/base-images/pull packages/lock-image packages/locks/write
+.PHONY: packages/cpu/wheelhouse packages/gpu/wheelhouse packages/wheelhouse
+.PHONY: packages/cpu/image packages/gpu/image packages/image packages/images
+
+packages/base-images/pull:
+	$(DOCKER) pull "$(PYTHON_BASE)"
+	$(DOCKER) pull "$(UV_IMAGE)"
+
+packages/lock-image:
+	$(DOCKER) build --network none --pull=false \
+		--build-arg PYTHON_BASE="$(PYTHON_BASE)" \
+		--build-arg UV_IMAGE="$(UV_IMAGE)" \
+		--file containers/packages/Dockerfile.lock \
+		--tag "$(PACKAGES_LOCK_IMAGE)" .
+
+packages/locks/write: packages/lock-image
+	@stage=$$(mktemp -d)
+	trap 'rm -rf "$$stage"' EXIT
+	for variant in cpu gpu; do
+		case "$$variant" in
+			cpu) group=packages-cpu ;;
+			gpu) group=packages-gpu ;;
+		esac
+		$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
+			--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
+			--pull never --pids-limit 64 --cpus 2 --memory 1g --memory-swap 1g \
+			--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+			--env UV_CACHE_DIR=/output/.uv-cache \
+			--workdir /input \
+			--mount type=bind,src="$(REPOSITORY_ROOT)/secs/pyproject.toml",dst=/input/pyproject.toml,readonly \
+			--mount type=bind,src="$$stage",dst=/output \
+			"$(PACKAGES_LOCK_IMAGE)" pyproject.toml \
+			--group packages-build --group "$$group" --extra elucidation \
+			--python-version 3.12.12 --python-platform x86_64-manylinux_2_28 \
+			--generate-hashes --index-url https://pypi.org/simple \
+			--output-file "/output/packages-$$variant.raw"
+		$(DOCKER) run --rm --network none --read-only --cap-drop ALL \
+			--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
+			--pull never --pids-limit 16 --cpus 1 --memory 64m --memory-swap 64m \
+			--entrypoint python --mount type=bind,src="$$stage",dst=/output \
+			"$(PACKAGES_LOCK_IMAGE)" /usr/local/bin/normalize_lock.py \
+			"/output/packages-$$variant.raw" "/output/packages-$$variant.lock"
+		rm "$$stage/packages-$$variant.raw"
+	done
+	rm -rf "$$stage/.uv-cache"
+	mkdir -p requirements
+	install -m 0644 "$$stage/packages-cpu.lock" requirements/packages-cpu.lock
+	install -m 0644 "$$stage/packages-gpu.lock" requirements/packages-gpu.lock
+
+packages/cpu/wheelhouse: requirements/packages-cpu.lock
+	@$(MAKE) --no-print-directory packages/wheelhouse VARIANT=cpu
+
+packages/gpu/wheelhouse: requirements/packages-gpu.lock
+	@$(MAKE) --no-print-directory packages/wheelhouse VARIANT=gpu
+
+packages/wheelhouse:
+	@lock="$(REPOSITORY_ROOT)/requirements/packages-$(VARIANT).lock"
+	case "$(VARIANT)" in
+		cpu) torch_wheels="$(PACKAGES_CPU_TORCH_WHEELS)" ;;
+		gpu) torch_wheels="$(PACKAGES_GPU_TORCH_WHEELS)" ;;
+	esac
+	stage=$$(mktemp -d)
+	trap 'rm -rf "$$stage"' EXIT
+	mkdir "$$stage/.tmp"
+	$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
+		--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
+		--pull never --pids-limit 64 --cpus 2 --memory 1g --memory-swap 1g \
+		--env PIP_NO_CACHE_DIR=1 --env TMPDIR=/wheelhouse/.tmp \
+		--mount type=bind,src="$$lock",dst=/input/requirements.lock,readonly \
+		--mount type=bind,src="$$stage",dst=/wheelhouse \
+		"$(PYTHON_BASE)" python -m pip download --require-hashes \
+		--only-binary=:all: --no-binary=antlr4-python3-runtime \
+		--no-deps --index-url https://pypi.org/simple --find-links "$$torch_wheels" \
+		--dest /wheelhouse -r /input/requirements.lock
+	rm -rf "$$stage/.tmp"
+	( cd "$$stage" && sha256sum * | LC_ALL=C sort ) > "$$stage/.complete"
+	mkdir -p wheelhouse
+	rm -rf "wheelhouse/packages-$(VARIANT)"
+	mv "$$stage" "wheelhouse/packages-$(VARIANT)"
+	trap - EXIT
+
+packages/cpu/image:
+	@test -f wheelhouse/packages-cpu/.complete || { \
+		printf '%s\n' 'CPU wheelhouse is absent; run make packages/cpu/wheelhouse.' >&2; exit 2; }
+	$(MAKE) --no-print-directory packages/image VARIANT=cpu
+
+packages/gpu/image:
+	@test -f wheelhouse/packages-gpu/.complete || { \
+		printf '%s\n' 'GPU wheelhouse is absent; run make packages/gpu/wheelhouse.' >&2; exit 2; }
+	$(MAKE) --no-print-directory packages/image VARIANT=gpu
+
+packages/image:
+	@id=$$( {
+		printf '%s\n' "$(PYTHON_BASE)" "$(VARIANT)"
+		cat .dockerignore requirements/packages-$(VARIANT).lock containers/packages/Dockerfile \
+			secs/pyproject.toml secs/README.md wheelhouse/packages-$(VARIANT)/.complete
+		find secs/src -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+	} | sha256sum | cut -d' ' -f1 )
+	$(DOCKER) build --network none --pull=false \
+		--build-arg PYTHON_BASE="$(PYTHON_BASE)" \
+		--build-arg PACKAGES_INPUT_ID="$$id" \
+		--build-arg PACKAGES_VARIANT="$(VARIANT)" \
+		--file containers/packages/Dockerfile \
+		--tag "secs-repro/packages-$(VARIANT):inputs-$$id" .
+
+packages/images: packages/cpu/image packages/gpu/image

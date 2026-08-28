@@ -1,0 +1,4 @@
+[submodule "secs"]
+	path = secs
+	url = git@github.com:numpde/fork-of-secs.git
+	shallow = true

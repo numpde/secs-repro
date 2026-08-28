@@ -1,0 +1,10 @@
+ARG UV_IMAGE
+ARG PYTHON_BASE
+
+FROM ${UV_IMAGE} AS uv
+FROM ${PYTHON_BASE}
+
+COPY --from=uv /uv /usr/local/bin/uv
+COPY tools/normalize_lock.py /usr/local/bin/normalize_lock.py
+
+ENTRYPOINT ["uv", "pip", "compile"]
