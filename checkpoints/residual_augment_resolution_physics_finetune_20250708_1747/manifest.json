@@ -1,8 +1,4 @@
 {
-  "model": {
-    "file": "model.yaml",
-    "sha256": "3acda668a520c362f09e69ee2d414764e362f17174c9f50ea3daa7f06b4b4557"
-  },
   "source": {
     "archive": {
       "md5": "5ca6bed3fb7e70630020f55796fd26ab",
@@ -13,6 +9,10 @@
       "repository": "git@github.com:numpde/fork-of-secs.git",
       "revision": "00536095c2e06e46d3dd0531c88230a5b98af0a7"
     }
+  },
+  "spec": {
+    "file": "checkpoint.toml",
+    "sha256": "76fc43c181fdb4cfe1585266cd832400d1047cda3e0d964e366c7da4ae3cdf20"
   },
   "weights": {
     "bytes": 269922576,

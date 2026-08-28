@@ -14,6 +14,7 @@ from pathlib import Path
 import sys
 import tarfile
 import tempfile
+import tomllib
 import urllib.parse
 import urllib.request
 
@@ -61,9 +62,7 @@ def arguments() -> argparse.Namespace:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--archive", type=Path)
     source.add_argument("--url")
-    parser.add_argument("--expected-archive-md5", required=True)
-    parser.add_argument("--member", required=True)
-    parser.add_argument("--max-member-bytes", type=int, required=True)
+    parser.add_argument("--spec", type=Path, required=True)
     parser.add_argument("--scratch-directory", type=Path, required=True)
     return parser.parse_args()
 
@@ -94,16 +93,19 @@ def copy_member(archive: tarfile.TarFile, member: tarfile.TarInfo, destination) 
             destination.write(chunk)
 
 
-def open_archive_source(args: argparse.Namespace):
+def open_archive_source(args: argparse.Namespace, default_url: str):
     """Select the read-only local source or the network source."""
 
     if args.archive is not None:
         return args.archive.open("rb")
-    return open_url(args.url)
+    return open_url(args.url or default_url)
 
 
 def stage_checkpoint(
-    archive: tarfile.TarFile, args: argparse.Namespace
+    archive: tarfile.TarFile,
+    member_name: str,
+    max_member_bytes: int,
+    scratch_directory: Path,
 ) -> Path:
     """Copy the archive's unique expected regular member to a temporary file."""
 
@@ -111,29 +113,29 @@ def stage_checkpoint(
     try:
         for member in archive:
             name = normalized_member_name(member.name)
-            if name != args.member:
+            if name != member_name:
                 continue
             if temp_path is not None:
                 raise ExtractionRejected(
-                    f"archive contains more than one member named {args.member!r}"
+                    f"archive contains more than one member named {member_name!r}"
                 )
             if not member.isfile():
                 raise ExtractionRejected(f"checkpoint member is not a regular file: {member.name}")
-            if member.size > args.max_member_bytes:
+            if member.size > max_member_bytes:
                 raise ExtractionRejected(
-                    f"checkpoint member is {member.size} bytes; limit is {args.max_member_bytes}"
+                    f"checkpoint member is {member.size} bytes; limit is {max_member_bytes}"
                 )
             with tempfile.NamedTemporaryFile(
                 mode="w+b",
                 prefix="best_model.ckpt.",
-                dir=args.scratch_directory,
+                dir=scratch_directory,
                 delete=False,
             ) as destination:
                 temp_path = Path(destination.name)
                 copy_member(archive, member, destination)
                 destination.flush()
         if temp_path is None:
-            raise ExtractionRejected(f"archive has no member named {args.member!r}")
+            raise ExtractionRejected(f"archive has no member named {member_name!r}")
         return temp_path
     except BaseException:
         if temp_path is not None:
@@ -160,13 +162,20 @@ def extract(args: argparse.Namespace) -> None:
 
     temp_path: Path | None = None
     try:
-        with open_archive_source(args) as raw_source:
+        with args.spec.open("rb") as source:
+            archive_spec = tomllib.load(source)["archive"]
+        with open_archive_source(args, archive_spec["url"]) as raw_source:
             measured = MeasuredReader(raw_source)
             # Stream mode bounds memory, and copy_member deliberately applies no
             # archive path, permissions, ownership, or other tar metadata.
             with tarfile.open(fileobj=measured, mode="r|gz") as archive:
-                temp_path = stage_checkpoint(archive, args)
-            verify_archive(measured, args.expected_archive_md5)
+                temp_path = stage_checkpoint(
+                    archive,
+                    archive_spec["member"],
+                    archive_spec["max_member_bytes"],
+                    args.scratch_directory,
+                )
+            verify_archive(measured, archive_spec["md5"])
 
         with temp_path.open("rb") as checkpoint:
             while chunk := checkpoint.read(READ_BYTES):
