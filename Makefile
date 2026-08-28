@@ -78,9 +78,9 @@ checkpoint:
 	$(MAKE) --no-print-directory packages/cpu/image
 	$(MAKE) --no-print-directory checkpoint/image
 	extractor_args=(--rm --init --pull never --read-only
-		--cap-drop ALL --security-opt no-new-privileges:true
-		--pids-limit 32 --cpus 1 --memory 2304m --memory-swap 2304m
-		--tmpfs /scratch:size=2g,mode=0700,uid=65532,gid=65532,noexec,nosuid,nodev
+		"--cap-drop" ALL --security-opt no-new-privileges:true
+		"--pids-limit" 32 --cpus 1 --memory 2304m --memory-swap 2304m
+		"--tmpfs" /scratch:size=2g,mode=0700,uid=65532,gid=65532,noexec,nosuid,nodev
 	)
 	source_args=()
 	if test -n "$${ARCHIVE_INPUT:-}"; then
@@ -91,13 +91,13 @@ checkpoint:
 		source_args=(--url "$${ARCHIVE_URL_INPUT}")
 	fi
 	converter_args=(--rm --init --pull never --network none --read-only --user "$(HOST_UID):$(HOST_GID)"
-		--cap-drop ALL --security-opt no-new-privileges:true
-		--pids-limit 64 --cpus 2 --memory 6g --memory-swap 6g
-		--tmpfs /scratch:size=2g,mode=0700,uid=$(HOST_UID),gid=$(HOST_GID),noexec,nosuid,nodev
-		--mount "type=bind,src=$$output_dir,dst=/output"
-		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/convert_checkpoint.py,dst=/opt/checkpoint/convert.py,readonly"
-		--mount "type=bind,src=$(REPOSITORY_ROOT)/configs/secs-v3.yaml,dst=/opt/checkpoint/model.yaml,readonly"
-		--entrypoint python
+		"--cap-drop" ALL --security-opt no-new-privileges:true
+		"--pids-limit" 64 --cpus 2 --memory 6g --memory-swap 6g
+		"--tmpfs" /scratch:size=2g,mode=0700,uid=$(HOST_UID),gid=$(HOST_GID),noexec,nosuid,nodev
+		"--mount" "type=bind,src=$$output_dir,dst=/output"
+		"--mount" "type=bind,src=$(REPOSITORY_ROOT)/tools/convert_checkpoint.py,dst=/opt/checkpoint/convert.py,readonly"
+		"--mount" "type=bind,src=$(REPOSITORY_ROOT)/configs/secs-v3.yaml,dst=/opt/checkpoint/model.yaml,readonly"
+		"--entrypoint" python
 	)
 	$(DOCKER) run "$${extractor_args[@]}" "$(CHECKPOINT_IMAGE)" \
 		"$${source_args[@]}" \
