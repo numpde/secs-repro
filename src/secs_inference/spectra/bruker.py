@@ -3,12 +3,7 @@ from pathlib import Path
 import nmrglue as ng
 import numpy as np
 
-from secs_inference.spectrum import Float32Array, SourceSpectrum, prepare_secs_spectrum
-
-
-def prepare_bruker_upload(upload_directory: str | Path) -> Float32Array:
-    """Read a processed Bruker upload and produce the SECS spectrum input."""
-    return prepare_secs_spectrum(read_processed_bruker(upload_directory))
+from secs_inference.spectra.source import SourceSpectrum
 
 
 def read_processed_bruker(upload_directory: str | Path) -> SourceSpectrum:

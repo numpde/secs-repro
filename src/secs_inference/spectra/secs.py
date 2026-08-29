@@ -1,22 +1,14 @@
-from dataclasses import dataclass
-
 import numpy as np
 from numpy.typing import NDArray
 
+from secs_inference.spectra.source import Float64Array, SourceSpectrum
+
 
 Float32Array = NDArray[np.float32]
-Float64Array = NDArray[np.float64]
 
 SECS_PPM_FROM = -2.0
 SECS_PPM_TO = 10.0
 SECS_SPECTRUM_POINTS = 10_000
-
-
-@dataclass(frozen=True)
-class SourceSpectrum:
-    ppm: Float64Array
-    intensities: Float64Array
-
 
 def prepare_secs_spectrum(source: SourceSpectrum) -> Float32Array:
     """Resample source data onto the ascending grid expected by SECS."""
