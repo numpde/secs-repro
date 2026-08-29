@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -38,7 +39,7 @@ class SecsInference:
         model,
         tokenizer,
         device: torch.device,
-        dtype: torch.dtype,
+        compute_dtype: torch.dtype,
         spectrum_points: int,
         smiles_context_length: int,
         smiles_batch_size: int,
@@ -46,7 +47,7 @@ class SecsInference:
         self._model = model
         self._tokenizer = tokenizer
         self._device = device
-        self._dtype = dtype
+        self._compute_dtype = compute_dtype
         self._spectrum_points = spectrum_points
         self._smiles_context_length = smiles_context_length
         self._smiles_batch_size = smiles_batch_size
@@ -58,11 +59,17 @@ class SecsInference:
         *,
         molformer_lock: str | Path,
         device: str,
-        dtype: torch.dtype,
+        compute_dtype: torch.dtype,
         smiles_batch_size: int,
     ) -> SecsInference:
+        """Load a checkpoint with Float32 parameters and Float32 or BFloat16 forward compute."""
         if smiles_batch_size <= 0:
             raise ValueError("smiles_batch_size must be positive.")
+        if compute_dtype not in (torch.float32, torch.bfloat16):
+            raise ValueError(
+                f"Cannot load SECS inference with {compute_dtype = }; "
+                f"the compute dtype must be float32 or bfloat16."
+            )
         compute_device = torch.device(device)
 
         manifest_path = Path(checkpoint_manifest)
@@ -108,7 +115,11 @@ class SecsInference:
         from secs.data.components.secs_tokenizers import SMILES_TOKENIZER
         from secs.models import MolBind
 
-        model = MolBind(OmegaConf.create(specification)).to(device=compute_device, dtype=dtype)
+        # The checkpoint's storage dtype does not define its runtime parameter
+        # dtype. MolFormer pooling returns Float32, so keeping parameters in
+        # Float32 avoids an incompatible LayerNorm boundary while autocast
+        # controls the eligible reduced-precision forward operations.
+        model = MolBind(OmegaConf.create(specification)).to(device=compute_device)
         weights = load_file(weights_path, device="cpu")
         model.load_state_dict(weights, strict=True)
         model.eval()
@@ -116,11 +127,16 @@ class SecsInference:
             model,
             SMILES_TOKENIZER,
             compute_device,
-            dtype,
+            compute_dtype,
             spectrum_points,
             smiles_context_length,
             smiles_batch_size,
         )
+
+    def _autocast_context(self):
+        if self._compute_dtype == torch.float32:
+            return nullcontext()
+        return torch.autocast(device_type=self._device.type, dtype=self._compute_dtype)
 
     @torch.inference_mode()
     def embed_spectrum(self, spectrum: Sequence[float] | FloatArray) -> FloatArray:
@@ -134,8 +150,9 @@ class SecsInference:
         normalized = values / maximum_intensity
         model_order = normalized[::-1].copy()
 
-        model_input = torch.from_numpy(model_order).to(device=self._device, dtype=self._dtype).reshape(1, 1, -1)
-        embedding = self._model.encode_modality(model_input, modality="h_nmr")
+        model_input = torch.from_numpy(model_order).to(device=self._device).reshape(1, 1, -1)
+        with self._autocast_context():
+            embedding = self._model.encode_modality(model_input, modality="h_nmr")
         return embedding.squeeze(0).float().cpu().numpy()
 
     @torch.inference_mode()
@@ -150,7 +167,9 @@ class SecsInference:
                 max_length=self._smiles_context_length,
             )
             model_input = tokens["input_ids"].to(self._device), tokens["attention_mask"].to(self._device)
-            batch_embeddings.append(self._model.encode_modality(model_input, modality="smiles").float().cpu())
+            with self._autocast_context():
+                embedding = self._model.encode_modality(model_input, modality="smiles")
+            batch_embeddings.append(embedding.float().cpu())
         return torch.cat(batch_embeddings).numpy()
 
     def rank(self, spectrum: Sequence[float] | FloatArray, candidates: list[str]) -> list[tuple[str, float]]:

@@ -12,7 +12,17 @@ from secs_inference import SecsInference
 from secs_inference.elucidation import SecsElucidator
 
 
-class CheckpointManifestTest(unittest.TestCase):
+class SecsInferenceLoadTest(unittest.TestCase):
+    def test_load_rejects_unsupported_compute_dtype_before_model_construction(self):
+        with self.assertRaises(ValueError):
+            SecsInference.load(
+                "unused",
+                molformer_lock="unused",
+                device="cpu",
+                compute_dtype=torch.float16,
+                smiles_batch_size=1,
+            )
+
     def test_load_rejects_weight_drift_before_model_construction(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             checkpoint_directory = Path(temporary_directory)
@@ -41,9 +51,27 @@ class CheckpointManifestTest(unittest.TestCase):
                     manifest,
                     molformer_lock="unused",
                     device="cpu",
-                    dtype=torch.float32,
+                    compute_dtype=torch.float32,
                     smiles_batch_size=1,
                 )
+
+    def test_bfloat16_compute_keeps_runtime_parameters_in_float32(self):
+        inference = SecsInference.load(
+            "/checkpoint/manifest.json",
+            molformer_lock="/input/molformer.lock.toml",
+            device="cpu",
+            compute_dtype=torch.bfloat16,
+            smiles_batch_size=1,
+        )
+        # The production BFloat16 path runs on CUDA, while a CPU BFloat16
+        # forward exceeds this lane's 3 GiB limit. Inspecting parameters keeps
+        # the whole-model-cast regression covered without treating CPU autocast
+        # as evidence about CUDA execution.
+        parameter_dtypes = {
+            parameter.dtype for parameter in inference._model.parameters() if parameter.is_floating_point()
+        }
+
+        self.assertEqual(parameter_dtypes, {torch.float32})
 
 
 class SecsIntegrationTest(unittest.TestCase):
@@ -53,7 +81,7 @@ class SecsIntegrationTest(unittest.TestCase):
             "/checkpoint/manifest.json",
             molformer_lock="/input/molformer.lock.toml",
             device="cpu",
-            dtype=torch.float32,
+            compute_dtype=torch.float32,
             smiles_batch_size=256,
         )
 
@@ -72,6 +100,8 @@ class SecsIntegrationTest(unittest.TestCase):
 
         self.assertEqual(spectrum_embedding.shape, (1024,))
         self.assertEqual(smiles_embeddings.shape, (2, 1024))
+        self.assertEqual(spectrum_embedding.dtype, np.float32)
+        self.assertEqual(smiles_embeddings.dtype, np.float32)
         self.assertTrue(np.isfinite(spectrum_embedding).all())
         self.assertTrue(np.isfinite(smiles_embeddings).all())
         self.assertEqual([smiles for smiles, _ in ranked], expected_order)
