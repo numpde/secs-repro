@@ -1,0 +1,59 @@
+##TITLE= Audit trail, TopSpin 3.6.2
+##JCAMPDX= 5.01
+##ORIGIN= Bruker BioSpin GmbH
+##OWNER= sv
+$$ /opt/v/sv/F3697/1/pdata/1/auditp.txt
+##AUDIT TRAIL=  $$ (NUMBER, WHEN, WHO, WHERE, PROCESS, VERSION, WHAT)
+(   1,<2025-08-28 10:24:44.154 +0200>,<sv>,<drx500oc>,<go4>,<TopSpin 3.6.2>,
+      <created by zg
+	started at 2025-08-28 10:24:33.795 +0200,
+	POWCHK enabled, PULCHK disabled,
+       configuration hash MD5:
+       9B BA 4E 40 5D 11 75 64 84 B4 97 A6 48 CC DC 6F
+       data hash MD5: 80126
+       13 67 7F DB 5B 96 89 08 39 E5 2F FD 92 EB 9B 0D>)
+(   2,<2025-08-28 10:24:44.264 +0200>,<sv>,<drx500oc>,<proc1d>,<TopSpin 3.6.2>,
+      <Start of raw data processing
+       fp FT_mod = 6 PKNL = 1 PHC0 = 292.2271 PHC1 = 1.264374 SI = 128K 
+       data hash MD5: 128K
+       78 6D 4E AA A5 DA E8 48 DA 04 29 29 13 BB 98 4F>)
+(   3,<2025-08-28 10:24:53.261 +0200>,<sv>,<drx500oc>,<proc1d>,<TopSpin 3.6.2>,
+      <pk fgphup PHC0 = -25.15 PHC1 = 0 
+       data hash MD5: 128K
+       42 A3 D8 D5 93 BA 9C FF BF 5D 05 47 C0 C2 04 14>)
+(   4,<2025-08-28 10:24:56.640 +0200>,<sv>,<drx500oc>,<proc1d>,<TopSpin 3.6.2>,
+      <apk 
+       data hash MD5: 128K
+       FC B2 56 DE 39 90 58 CA 87 72 A3 D2 FB 5E B3 57>)
+(   5,<2025-08-28 10:24:57.581 +0200>,<sv>,<drx500oc>,<proc1d>,<TopSpin 3.6.2>,
+      <abs ABSG = 5 
+       data hash MD5: 128K
+       38 2B 78 58 8B 3C 95 79 9A 8B AA 6B 07 7B 46 D5>)
+(   6,<2025-08-28 10:46:07.145 +0200>,<sv>,<drx500oc>,<audit>,<TopSpin 3.6.2>,
+      <user comment:
+       TITLE=Roman: Strychnin  NS 1 no Shim
+       500 MHz 1H NMRTITLE_END
+       data hash MD5: 128K
+       38 2B 78 58 8B 3C 95 79 9A 8B AA 6B 07 7B 46 D5>)
+(   7,<2025-08-28 10:51:41.474 +0200>,<sv>,<drx500oc>,<audit>,<TopSpin 3.6.2>,
+      <user comment:
+       TITLE=Roman: Strychnin  NS 1 no Shim
+       500 MHz 1H NMRTITLE_END
+       data hash MD5: 128K
+       38 2B 78 58 8B 3C 95 79 9A 8B AA 6B 07 7B 46 D5>)
+(   8,<2025-08-28 10:51:44.326 +0200>,<sv>,<drx500oc>,<audit>,<TopSpin 3.6.2>,
+      <user comment:
+       TITLE=Roman: Strychnin  NS 1 no Shim @25 °C
+       500 MHz 1H NMRTITLE_END
+       data hash MD5: 128K
+       38 2B 78 58 8B 3C 95 79 9A 8B AA 6B 07 7B 46 D5>)
+(   9,<2025-08-28 10:51:44.463 +0200>,<sv>,<drx500oc>,<audit>,<TopSpin 3.6.2>,
+      <user comment:
+       TITLE=Roman: Strychnin  NS 1 no Shim @25 °C
+       500 MHz 1H NMRTITLE_END
+       data hash MD5: 128K
+       38 2B 78 58 8B 3C 95 79 9A 8B AA 6B 07 7B 46 D5>)
+##END=
+
+$$ hash MD5
+$$ FB 78 A0 8E 6C BD 3E 11 0C 91 96 96 2B 90 BE 51

@@ -107,27 +107,21 @@ raw-only fixture and its own scientific qualification.
 Upload boundary
 ---------------
 
-The browser may let a user select the ``F3697/1`` folder directly.  The API,
-however, needs one immutable artifact.  Its future input schema must provide one
-bounded byte sequence that preserves every admitted member's bytes and relative
-path.  A ZIP is one non-normative illustration:
+This design assumes the API's in-progress Job-to-Upload many-to-many contract.
+An Upload is exactly what the user uploaded; this repository does not wrap it in
+a second artifact or archive format.
 
-    F3697-1.zip
-    |-- acqus
-    |-- fid
-    `-- pdata/1/...
+Selecting ``F3697/1`` as a folder creates the Upload collection needed to
+reconstruct that tree.  The API owns each Upload's identity, bytes, relative
+path, authorization, and Job association.  The provider adapter materializes
+the associated Uploads unchanged beneath one read-only experiment root.  It
+does not inspect Bruker contents or choose an experiment.  Only
+``read_bruker_experiment`` decides whether the resulting tree is supported.
 
-The envelope is not a Bruker source format.  The API owns its schema and
-admission.  The provider adapter safely materializes the schema-defined payload
-root and mounts it unchanged at the preprocessing container's fixed read-only
-input path; it does not inspect Bruker files to discover that root.  Only
-``read_bruker_experiment`` decides whether the mounted tree is supported.  The
-formula travels directly to the elucidation workflow, separately from this
-artifact.
-
-The current NMR API does not yet implement artifact-backed Job inputs.  This is
-a consumer requirement for that future contract, not a claim about an existing
-upload route.
+The molecular formula travels directly to the elucidation workflow, separately
+from the Upload collection.  This contract is assumed for design and local
+implementation but remains unavailable for end-to-end integration until the API
+work is released.
 
 
 Neutral values
@@ -207,8 +201,8 @@ does not install ``secs_inference`` or checkpoint dependencies.  The lane has:
 It emits ``spectrum.npy`` as Float32 with pickle disabled and a bounded
 ``receipt.json``.  The receipt contains ``ReaderReceipt`` and the SECS encoding
 profile.  It contains no vendor-file copy, artifact identity, or access
-capability.  The provider adapter binds this scientific receipt to the API-owned
-artifact digest.
+capability.  The provider adapter binds this scientific receipt to the
+associated API-owned Upload identities and digests.
 
 Container isolation limits authority and parser effects; it is not described as
 a hostile-code sandbox.
@@ -259,8 +253,8 @@ Implementation order
 3. Admit one reviewed nmrglue release through the existing lock and wheelhouse
    lane, then add ``read_bruker_experiment`` for the processed representation.
 4. Add the preprocessing container lane and prove the processed path.
-5. Add the API adapter only after the NMR API releases an artifact-backed Job
-   input contract.
+5. Add the API adapter only after the NMR API releases its Job-to-Upload input
+   contract.
 
 Any later source format is a separate design and dependency decision.  That
 design must prove whether the existing neutral seam is sufficient rather than
