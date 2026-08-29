@@ -59,7 +59,7 @@ class MeasuredReader:
 
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    source = parser.add_mutually_exclusive_group(required=True)
+    source = parser.add_mutually_exclusive_group()
     source.add_argument("--archive", type=Path)
     source.add_argument("--url")
     parser.add_argument(
