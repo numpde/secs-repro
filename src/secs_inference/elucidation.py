@@ -10,7 +10,9 @@ from secs.utils.elucidation import get_atom_counts_from_formula
 from secs_inference.model import FloatArray, SecsInference
 
 
-class _InferenceSmilesEmbedder:
+class _HnmrCandidateEmbedder:
+    """Expose this checkpoint's SMILES embeddings to the H-NMR objective."""
+
     def __init__(self, inference: SecsInference) -> None:
         self._inference = inference
 
@@ -44,7 +46,7 @@ class SecsElucidator:
             self._initial_population_size,
         )
 
-        candidate_embedder = _InferenceSmilesEmbedder(self._inference)
+        candidate_embedder = _HnmrCandidateEmbedder(self._inference)
         objective = spectral_objective(
             candidate_embedder,
             {"h_nmr": spectrum_embedding},

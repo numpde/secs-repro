@@ -58,7 +58,10 @@ class SecsInference:
         manifest_path = Path(checkpoint_manifest)
         manifest = json.loads(manifest_path.read_text())
         checkpoint_directory = manifest_path.parent
-        with (checkpoint_directory / manifest["spec"]["file"]).open("rb") as source:
+        specification_path = checkpoint_directory / manifest["spec"]["file"]
+        weights_path = checkpoint_directory / manifest["weights"]["file"]
+
+        with specification_path.open("rb") as source:
             specification = tomllib.load(source)
         spectrum_points = specification["model"]["encoders"]["h_nmr"]["input_length"]
         smiles_context_length = specification["inputs"]["smiles"]["context_length"]
@@ -67,19 +70,25 @@ class SecsInference:
 
         from secs.models.encoders.smiles.molformer import MOLFORMER_CHECKPOINT, MOLFORMER_REVISION
 
-        secs_snapshot = MOLFORMER_CHECKPOINT, MOLFORMER_REVISION
-        admitted_snapshot = locked_snapshot["repository"], locked_snapshot["revision"]
-        if secs_snapshot != admitted_snapshot:
-            raise ValueError(f"SECS requires MolFormer {secs_snapshot}, but the admitted snapshot is {admitted_snapshot}.")
+        required_molformer_snapshot = MOLFORMER_CHECKPOINT, MOLFORMER_REVISION
+        admitted_molformer_snapshot = locked_snapshot["repository"], locked_snapshot["revision"]
+        if required_molformer_snapshot != admitted_molformer_snapshot:
+            raise ValueError(
+                f"SECS requires MolFormer {required_molformer_snapshot}, "
+                f"but the admitted snapshot is {admitted_molformer_snapshot}."
+            )
 
         from omegaconf import OmegaConf
         from safetensors.torch import load_file
+
+        # Importing the tokenizer loads trusted remote code from the admitted cache,
+        # so the revision comparison above must happen before this import.
         from secs.data.components.secs_tokenizers import SMILES_TOKENIZER
         from secs.models import MolBind
 
         model = MolBind(OmegaConf.create(specification)).to(device=compute_device, dtype=dtype)
-        state = load_file(checkpoint_directory / manifest["weights"]["file"], device="cpu")
-        model.load_state_dict(state, strict=True)
+        weights = load_file(weights_path, device="cpu")
+        model.load_state_dict(weights, strict=True)
         model.eval()
         return cls(
             model,
@@ -96,20 +105,20 @@ class SecsInference:
         values = np.asarray(spectrum, dtype=np.float32)
         if values.shape != (self._spectrum_points,):
             raise ValueError(f"Expected {self._spectrum_points} spectrum intensities, got shape {values.shape}.")
-        maximum = values.max()
-        if not np.isfinite(values).all() or maximum <= 0:
+        maximum_intensity = values.max()
+        if not np.isfinite(values).all() or maximum_intensity <= 0:
             raise ValueError("Spectrum intensities must be finite and contain a positive signal.")
 
-        normalized = values / maximum
+        normalized = values / maximum_intensity
         model_order = normalized[::-1].copy()
 
-        tensor = torch.from_numpy(model_order).to(device=self._device, dtype=self._dtype).reshape(1, 1, -1)
-        embedding = self._model.encode_modality(tensor, modality="h_nmr")
+        model_input = torch.from_numpy(model_order).to(device=self._device, dtype=self._dtype).reshape(1, 1, -1)
+        embedding = self._model.encode_modality(model_input, modality="h_nmr")
         return embedding.squeeze(0).float().cpu().numpy()
 
     @torch.inference_mode()
     def embed_smiles(self, smiles: list[str]) -> FloatArray:
-        embeddings = []
+        batch_embeddings = []
         for start in range(0, len(smiles), self._smiles_batch_size):
             tokens = self._tokenizer(
                 smiles[start : start + self._smiles_batch_size],
@@ -118,9 +127,9 @@ class SecsInference:
                 return_tensors="pt",
                 max_length=self._smiles_context_length,
             )
-            inputs = tokens["input_ids"].to(self._device), tokens["attention_mask"].to(self._device)
-            embeddings.append(self._model.encode_modality(inputs, modality="smiles").float().cpu())
-        return torch.cat(embeddings).numpy()
+            model_input = tokens["input_ids"].to(self._device), tokens["attention_mask"].to(self._device)
+            batch_embeddings.append(self._model.encode_modality(model_input, modality="smiles").float().cpu())
+        return torch.cat(batch_embeddings).numpy()
 
     def rank(self, spectrum: Sequence[float] | FloatArray, candidates: list[str]) -> list[tuple[str, float]]:
         if not candidates:
