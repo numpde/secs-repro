@@ -22,8 +22,13 @@ DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT docker --context default
 
 help:
 	@printf '%s\n' \
-		'SECS checkpoint preparation' \
+		'SECS CPU workflow' \
 		'' \
+		'1. Prepare CPU dependencies' \
+		'  make packages/base-images/pull packages/cpu/wheelhouse' \
+		'      Pull the pinned base images and download the hash-locked CPU package archives.' \
+		'' \
+		'2. Prepare the checkpoint' \
 		'  make checkpoint' \
 		'      Stream and verify the archive configured by checkpoint.toml, then write' \
 		'      secs-v3.safetensors and manifest.json beside checkpoint.toml.' \
@@ -33,28 +38,34 @@ help:
 		'      Download from this HTTPS URL instead of the URL in checkpoint.toml.' \
 		'  make checkpoint CHECKPOINT_PRECISION=float16' \
 		'      Store floating-point tensors as float16; float32 and bfloat16 are also supported.' \
-		'      ARCHIVE or ARCHIVE_URL may be combined with CHECKPOINT_PRECISION.' \
-		'  make checkpoint/manifest' \
-		'      Recreate manifest.json only if its recorded specification and weight hashes still match.' \
+		'      ARCHIVE and ARCHIVE_URL are alternatives; either may be combined with CHECKPOINT_PRECISION.' \
+		'      The archive stream and extracted Lightning checkpoint are not retained after conversion.' \
 		'' \
-		'The archive stream and extracted Lightning checkpoint are not retained after conversion.' \
-		'' \
-		'SECS package images' \
-		'' \
-		'  make packages/base-images/pull packages/locks/write' \
-		'      Pull the pinned base images and write CPU and GPU dependency locks.' \
-		'  make packages/cpu/wheelhouse packages/gpu/wheelhouse' \
-		'      Download the hash-locked CPU and GPU package archives into wheelhouse/.' \
-		'  make packages/images' \
-		'      Build the CPU and GPU package images offline from existing wheelhouses.' \
+		'3. Prepare the MolFormer cache' \
 		'  make molformer/cache' \
 		'      Download the pinned MolFormer tokenizer, configuration, and model code into cache/.' \
+		'      Steps 2 and 3 may be completed in either order.' \
 		'' \
-		'SECS tests' \
-		'' \
+		'4. Run the CPU integration proof' \
 		'  make test/integration' \
-		'      With a prepared checkpoint, MolFormer cache, and CPU wheelhouse, rank SMILES' \
-		'      and run one GA generation without network access.'
+		'      Rank SMILES and run one GA generation without network access.' \
+		'' \
+		'Dependency maintenance' \
+		'' \
+		'  make checkpoint/manifest' \
+		'      Recreate manifest.json only if its recorded specification and weight hashes still match.' \
+		'  make packages/base-images/pull packages/locks/write' \
+		'      Regenerate the CPU and GPU dependency locks after dependency intent changes.' \
+		'' \
+		'Optional package images' \
+		'' \
+		'  make packages/cpu/image' \
+		'      Build the CPU package image offline; steps 2-4 build or reuse it automatically.' \
+		'  make packages/base-images/pull packages/gpu/wheelhouse packages/gpu/image' \
+		'      Pull the base images, download the larger CUDA-enabled package set, and build' \
+		'      the GPU package image offline.' \
+		'' \
+		'No GPU integration test is currently provided.'
 
 checkpoint/image:
 	@$(DOCKER) build --quiet --network none --pull=false \
