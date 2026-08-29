@@ -49,10 +49,21 @@ help:
 		'4. Run the CPU integration proof' \
 		'  make test/integration' \
 		'      Rank SMILES and run one GA generation without network access.' \
-		'  make test/integration/bruker-reference' \
-		'      Compare nmrglue decoding of F3697/1 with the pinned frontend vector.' \
-		'' \
-		'Dependency maintenance' \
+	'  make test/integration/bruker-reference' \
+	'      Compare nmrglue decoding of F3697/1 with the pinned frontend vector.' \
+	'' \
+	'5. Build the GPU candidate bundle' \
+	'  make packages/base-images/pull packages/gpu/wheelhouse' \
+	'      Refresh the pinned GPU package archives before building the candidate image.' \
+	'  make candidates' \
+	'      Stream the configured PubChem parquet, embed its SMILES on GPU 0, and publish' \
+	'      a row-aligned table, FAISS index, build specification, and manifest under candidates/.' \
+	'  make candidates ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz' \
+	'      Read the pinned archive locally without granting the extractor network access.' \
+	'      ARCHIVE_URL overrides the configured HTTPS source instead; do not set both.' \
+	'      CANDIDATE_GPU, CANDIDATE_CPUS, CANDIDATE_MEMORY, and CANDIDATE_DTYPE tune resources.' \
+	'' \
+	'Dependency maintenance' \
 		'' \
 		'  make checkpoint/manifest' \
 		'      Recreate manifest.json only if its recorded specification and weight hashes still match.' \
@@ -218,4 +229,5 @@ checkpoint/manifest:
 include make/packages.mk
 include make/molformer.mk
 include make/tests.mk
+include make/candidates.mk
 include make/fixtures.mk

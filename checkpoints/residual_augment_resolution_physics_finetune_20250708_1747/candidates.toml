@@ -2,7 +2,6 @@
 member = "MoleculeBindZenodo/app-cpu/filtered_pubchem.parquet"
 
 [table]
-columns = ["smiles", "molecular_formula"]
 batch_rows = 8192
 
 [embedding]
