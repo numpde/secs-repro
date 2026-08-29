@@ -14,7 +14,7 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_snapshot(snapshot: Path, files: dict[str, str]) -> None:
+def verify_locked_files(snapshot: Path, files: dict[str, str]) -> None:
     for name, expected in files.items():
         path = snapshot / name
         if sha256(path) != expected:
@@ -44,7 +44,7 @@ def main() -> None:
         )
     )
 
-    verify_snapshot(snapshot, files)
+    verify_locked_files(snapshot, files)
 
 
 if __name__ == "__main__":

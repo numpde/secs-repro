@@ -51,7 +51,7 @@ def receive_checkpoint(scratch_directory: Path) -> Path:
     return checkpoint
 
 
-def inference_state(checkpoint_path: Path, precision: str, spec: dict) -> dict:
+def load_inference_state(checkpoint_path: Path, precision: str, spec: dict) -> dict:
     import torch
 
     dtypes = {
@@ -108,7 +108,7 @@ def convert(args: argparse.Namespace) -> None:
         raise ValueError(f"unsupported checkpoint precision: {precision}")
 
     checkpoint_path = receive_checkpoint(args.scratch_directory)
-    state = inference_state(checkpoint_path, precision, spec)
+    state = load_inference_state(checkpoint_path, precision, spec)
     checkpoint_path.unlink()
     save_file(state, args.weights_output)
     print(f"wrote {args.weights_output}")

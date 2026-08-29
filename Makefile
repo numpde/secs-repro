@@ -87,11 +87,11 @@ checkpoint:
 		printf '%s\n' 'Cannot prepare checkpoint: $(CHECKPOINT_WEIGHTS) already exists.' >&2
 		exit 2
 	fi
-	weights_stage=$$(mktemp -d --tmpdir="$$output_dir" .weights.XXXXXXXX)
+	checkpoint_stage=$$(mktemp -d --tmpdir="$$output_dir" .weights.XXXXXXXX)
 	manifest_stage=$$(mktemp -d --tmpdir="$$output_dir" .manifest.XXXXXXXX)
-	trap 'rm -rf "$$weights_stage" "$$manifest_stage"' EXIT
-	weights_stage_dir=$$(realpath -e -- "$$weights_stage")
-	manifest_stage_dir=$$(realpath -e -- "$$manifest_stage")
+	trap 'rm -rf "$$checkpoint_stage" "$$manifest_stage"' EXIT
+	checkpoint_stage_dir=$$(realpath -e -- "$$checkpoint_stage")
+	checkpoint_stage_dir=$$(realpath -e -- "$$manifest_stage")
 	converter_image=$$($(MAKE) --no-print-directory packages/cpu/image)
 	extractor_image=$$($(MAKE) --no-print-directory checkpoint/image)
 	extractor_args=(--rm --init --pull never --read-only
@@ -100,13 +100,13 @@ checkpoint:
 		"--tmpfs" /scratch:size=2g,mode=1777,noexec,nosuid,nodev
 		"--mount" "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly"
 	)
-	source_args=()
+	archive_source_args=()
 	if test -n "$${ARCHIVE_INPUT:-}"; then
 		extractor_args+=(--network none --mount "type=bind,src=$$archive_path,dst=/input/archive.tar.gz,readonly")
-		source_args=(--archive /input/archive.tar.gz)
+		archive_source_args=(--archive /input/archive.tar.gz)
 	elif test -n "$${ARCHIVE_URL_INPUT:-}"; then
 		extractor_args+=(--network bridge)
-		source_args=(--url "$${ARCHIVE_URL_INPUT}")
+		archive_source_args=(--url "$${ARCHIVE_URL_INPUT}")
 	else
 		extractor_args+=(--network bridge)
 	fi
@@ -118,13 +118,13 @@ checkpoint:
 		"--cap-drop" ALL --security-opt no-new-privileges:true
 		"--pids-limit" 64 --cpus 2 --memory 6g --memory-swap 6g
 		"--tmpfs" /scratch:size=2g,mode=0700,uid=$(HOST_UID),gid=$(HOST_GID),noexec,nosuid,nodev
-		"--mount" "type=bind,src=$$weights_stage_dir,dst=/output"
+		"--mount" "type=bind,src=$$checkpoint_stage_dir,dst=/output"
 		"--mount" "type=bind,src=$(REPOSITORY_ROOT)/tools/convert_checkpoint.py,dst=/opt/checkpoint/convert.py,readonly"
 		"--mount" "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly"
 		"--entrypoint" python
 	)
 	$(DOCKER) run "$${extractor_args[@]}" "$$extractor_image" \
-		"$${source_args[@]}" \
+		"$${archive_source_args[@]}" \
 		--spec /input/checkpoint.toml \
 		--scratch-directory /scratch \
 	| $(DOCKER) run -i "$${converter_args[@]}" "$$converter_image" \
@@ -140,8 +140,8 @@ checkpoint:
 		--pids-limit 32 --cpus 1 --memory 128m --memory-swap 128m \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/write_checkpoint_manifest.py,dst=/opt/checkpoint/write_manifest.py,readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly" \
-		--mount "type=bind,src=$$weights_stage_dir/$(CHECKPOINT_WEIGHTS_FILENAME),dst=/input/$(CHECKPOINT_WEIGHTS_FILENAME),readonly" \
-		--mount "type=bind,src=$$manifest_stage_dir,dst=/output" \
+		--mount "type=bind,src=$$checkpoint_stage_dir/$(CHECKPOINT_WEIGHTS_FILENAME),dst=/input/$(CHECKPOINT_WEIGHTS_FILENAME),readonly" \
+		--mount "type=bind,src=$$checkpoint_stage_dir,dst=/output" \
 		--entrypoint python "$$extractor_image" \
 		-P /opt/checkpoint/write_manifest.py \
 		--weights /input/$(CHECKPOINT_WEIGHTS_FILENAME) \
@@ -149,10 +149,10 @@ checkpoint:
 		--spec /input/checkpoint.toml \
 		--reference-repository "$(SECS_REPOSITORY)" \
 		--reference-revision "$(SECS_REVISION)"
-	chmod 0644 "$$weights_stage/$(CHECKPOINT_WEIGHTS_FILENAME)"
+	chmod 0644 "$$checkpoint_stage/$(CHECKPOINT_WEIGHTS_FILENAME)"
 	# Publish weights last; their presence marks a complete checkpoint.
 	mv -f "$$manifest_stage/$(CHECKPOINT_MANIFEST_FILENAME)" "$(CHECKPOINT_MANIFEST)"
-	ln "$$weights_stage/$(CHECKPOINT_WEIGHTS_FILENAME)" "$(CHECKPOINT_WEIGHTS)"
+	ln "$$checkpoint_stage/$(CHECKPOINT_WEIGHTS_FILENAME)" "$(CHECKPOINT_WEIGHTS)"
 
 checkpoint/manifest:
 	@if test "$(HOST_UID)" -eq 0; then
