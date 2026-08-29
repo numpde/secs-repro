@@ -25,31 +25,33 @@ help:
 		'SECS checkpoint preparation' \
 		'' \
 		'  make checkpoint' \
-		'      Stream the pinned Zenodo archive and publish inference-only artifacts.' \
+		'      Download the archive in checkpoint.toml and write secs-v3.safetensors and manifest.json.' \
 		'  make checkpoint ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz' \
-		'      Read the same archive from a local, read-only path without network access.' \
+		'      Read a local archive without network access; the source file is left unchanged.' \
+		'  make checkpoint ARCHIVE_URL=https://example.org/zenodo_secs_v3.tar.gz' \
+		'      Download from this HTTPS URL instead of the URL in checkpoint.toml.' \
 		'  make checkpoint CHECKPOINT_PRECISION=float16' \
-		'      Override the specification precision with float32, float16, or bfloat16.' \
+		'      Store floating-point tensors as float32, float16, or bfloat16.' \
 		'  make checkpoint/manifest' \
-		'      Refresh the receipt only when specification and weight hashes still match.' \
+		'      Recreate manifest.json only if its recorded specification and weight hashes still match.' \
 		'' \
 		'SECS package images' \
 		'' \
 		'  make packages/base-images/pull packages/locks/write' \
-		'      Pull pinned bases and write CPU/GPU hash locks.' \
+		'      Pull the pinned base images and write CPU and GPU dependency locks.' \
 		'  make packages/cpu/wheelhouse packages/gpu/wheelhouse' \
-		'      Download locked artifacts in bounded containers.' \
+		'      Download the hash-locked CPU and GPU wheels into wheelhouse/.' \
 		'  make packages/images' \
-		'      Build both images without network access from existing wheelhouses.' \
+		'      Build the CPU and GPU package images offline from existing wheelhouses.' \
 		'  make molformer/cache' \
-		'      Materialize the pinned non-weight MolFormer Hugging Face cache.' \
+		'      Download the pinned MolFormer tokenizer, configuration, and model code into cache/.' \
 		'' \
 		'SECS tests' \
 		'' \
 		'  make test/integration' \
-		'      Load the checkpoint, rank SMILES, and run one GA generation offline.' \
+		'      Load the real checkpoint, rank SMILES, and run one GA generation in the offline CPU image.' \
 		'' \
-		'The archive and Lightning checkpoint are not retained.'
+		'Downloaded archive data and extracted Lightning checkpoints are not saved.'
 
 checkpoint/image:
 	@$(DOCKER) build --quiet --network none --pull=false \
@@ -62,29 +64,29 @@ checkpoint: private export ARCHIVE_URL_INPUT := $(if $(filter command line,$(ori
 checkpoint: private export CHECKPOINT_PRECISION_INPUT := $(if $(filter command line,$(origin CHECKPOINT_PRECISION)),$(value CHECKPOINT_PRECISION),)
 checkpoint:
 	@if test "$(HOST_UID)" -eq 0; then
-		printf '%s\n' 'Cannot prepare the checkpoint as host UID 0.' >&2
+		printf '%s\n' 'Run make checkpoint as a non-root host user.' >&2
 		exit 2
 	fi
 	selected_spec=
 	case " $(CHECKPOINT_SPECS) " in *" $(CHECKPOINT_SPEC) "*) selected_spec=1 ;; esac
 	if test "$(words $(CHECKPOINT_SPEC))" -ne 1 || test -z "$$selected_spec"; then
-		printf '%s\n' 'CHECKPOINT_SPEC must select one repository checkpoint.toml.' >&2
+		printf '%s\n' 'CHECKPOINT_SPEC must name exactly one checkpoints/*/checkpoint.toml file.' >&2
 		exit 2
 	fi
 	if test -n "$${ARCHIVE_INPUT:-}" && test -n "$${ARCHIVE_URL_INPUT:-}"; then
-		printf '%s\n' 'ARCHIVE and ARCHIVE_URL cannot be supplied together.' >&2
+		printf '%s\n' 'Choose one archive source: set either ARCHIVE or ARCHIVE_URL, not both.' >&2
 		exit 2
 	fi
 	if test -n "$${ARCHIVE_INPUT:-}"; then
 		if test ! -f "$${ARCHIVE_INPUT}"; then
-			printf '%s\n' "ARCHIVE must name a regular file: $${ARCHIVE_INPUT}" >&2
+			printf '%s\n' "ARCHIVE must name an existing regular file: $${ARCHIVE_INPUT}" >&2
 			exit 2
 		fi
 		archive_path=$$(realpath -e -- "$${ARCHIVE_INPUT}")
 	fi
 	output_dir=$$(realpath -e -- "$(CHECKPOINT_DIRECTORY)")
 	if test -e "$(CHECKPOINT_WEIGHTS)" || test -L "$(CHECKPOINT_WEIGHTS)"; then
-		printf '%s\n' 'Cannot prepare checkpoint: $(CHECKPOINT_WEIGHTS) already exists.' >&2
+		printf '%s\n' 'Refusing to overwrite existing checkpoint weights: $(CHECKPOINT_WEIGHTS)' >&2
 		exit 2
 	fi
 	checkpoint_stage=$$(mktemp -d --tmpdir="$$output_dir" .checkpoint.XXXXXXXX)
@@ -154,7 +156,7 @@ checkpoint:
 
 checkpoint/manifest:
 	@if test "$(HOST_UID)" -eq 0; then
-		printf '%s\n' 'Cannot refresh the checkpoint manifest as host UID 0.' >&2
+		printf '%s\n' 'Run make checkpoint/manifest as a non-root host user.' >&2
 		exit 2
 	fi
 	selected_spec=
@@ -163,7 +165,7 @@ checkpoint/manifest:
 		|| test -z "$$selected_spec" \
 		|| test ! -f "$(CHECKPOINT_WEIGHTS)" \
 		|| test ! -f "$(CHECKPOINT_MANIFEST)"; then
-		printf '%s\n' 'Checkpoint specification, weights, or existing manifest are absent.' >&2
+		printf '%s\n' 'Cannot refresh manifest: select one checkpoint with existing weights and manifest.json.' >&2
 		exit 2
 	fi
 	output_dir=$$(realpath -e -- "$(CHECKPOINT_DIRECTORY)")
