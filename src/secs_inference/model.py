@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Sequence
@@ -12,6 +13,15 @@ from torch.nn import functional as F
 
 
 FloatArray = NDArray[np.float32]
+_HASH_READ_BYTES = 1024 * 1024
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as artifact:
+        for chunk in iter(lambda: artifact.read(_HASH_READ_BYTES), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class SecsInference:
@@ -60,6 +70,18 @@ class SecsInference:
         checkpoint_directory = manifest_path.parent
         specification_path = checkpoint_directory / manifest["spec"]["file"]
         weights_path = checkpoint_directory / manifest["weights"]["file"]
+
+        for artifact_name, artifact_path in (
+            ("spec", specification_path),
+            ("weights", weights_path),
+        ):
+            expected_sha256 = manifest[artifact_name]["sha256"]
+            actual_sha256 = _sha256(artifact_path)
+            if actual_sha256 != expected_sha256:
+                raise ValueError(
+                    f"Checkpoint artifact '{artifact_name}' does not match {manifest_path.name}: "
+                    f"expected SHA-256 {expected_sha256}, got {actual_sha256}."
+                )
 
         with specification_path.open("rb") as source:
             specification = tomllib.load(source)
