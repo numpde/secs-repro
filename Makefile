@@ -57,7 +57,7 @@ help:
 	'      Refresh the pinned GPU package archives before building the candidate image.' \
 	'  make candidates' \
 	'      Stream the configured PubChem parquet, embed its SMILES on GPU 0, and publish' \
-	'      a row-aligned table, FAISS index, build specification, and manifest under candidates/.' \
+	'      a row-aligned table, FAISS index, and manifest under the checkpoint directory.' \
 	'  make candidates ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz' \
 	'      Read the pinned archive locally without granting the extractor network access.' \
 	'      ARCHIVE_URL overrides the configured HTTPS source instead; do not set both.' \
