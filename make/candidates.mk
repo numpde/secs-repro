@@ -30,6 +30,12 @@ candidates: checkpoint/image packages/gpu/image
 	candidate_spec=$$(realpath -e -- "$(CANDIDATE_SPEC)"); \
 	cache_directory=$$(realpath -e -- "$(MOLFORMER_CACHE)"); \
 	package_image=$$($(DOCKER) image inspect --format '{{.Id}}' "$(call packages_image_tag,gpu)"); \
+	$(DOCKER) run --rm --pull never --network none --read-only \
+		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 64 \
+		--cpus 1 --memory 2g --memory-swap 2g --gpus "device=$${CANDIDATE_GPU_INPUT}" \
+		--user "$$(id -u):$$(id -g)" \
+		--tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --entrypoint python "$$package_image" \
+		-P -c 'import sys, torch; sys.exit("Selected GPU is unavailable to the candidate container.") if not torch.cuda.is_available() else torch.empty(1, device="cuda:0")'; \
 	output_parent=$$(dirname -- "$(CANDIDATE_DIRECTORY)"); \
 	mkdir -p -- "$$output_parent"; \
 	stage=$$(mktemp -d "$$output_parent/.candidate-build.XXXXXX"); \
