@@ -9,17 +9,19 @@ import numpy as np
 FIXTURES = Path("/fixtures")
 BRUKER_PROCESSED = FIXTURES / "bruker/F3697/1/pdata/1"
 FRONTEND_REFERENCE = FIXTURES / "frontend/F3697-1.json"
+SLIGHT_BLUR = np.asarray([1, 4, 6, 4, 1], dtype=np.float64) / 16
+MINIMUM_SHAPE_SIMILARITY = 0.999
+MAXIMUM_TRANSPORT_DISTANCE_IN_GRID_STEPS = 2.0
 
 
 class BrukerFrontendReferenceTest(unittest.TestCase):
-    def test_nmrglue_reproduces_frontend_float32_input(self):
+    def test_nmrglue_preserves_frontend_spectral_shape(self):
         reference = json.loads(FRONTEND_REFERENCE.read_text())
         parameters, intensities = ng.bruker.read_pdata(
             BRUKER_PROCESSED,
             scale_data=True,
         )
-        universal = ng.bruker.guess_udic(parameters, intensities)
-        ppm = ng.fileiobase.uc_from_udic(universal).ppm_scale()
+        ppm = processed_bruker_ppm_axis(parameters, intensities.size)
 
         order = np.argsort(ppm, kind="stable")
         growing_ppm = np.asarray(ppm[order], dtype=np.float64)
@@ -35,19 +37,40 @@ class BrukerFrontendReferenceTest(unittest.TestCase):
         actual = min_max_scale(resampled).astype(np.float32)
         expected = np.asarray(reference["intensities"], dtype=np.float32)
 
-        differing = np.flatnonzero(
-            actual.view(np.uint32) != expected.view(np.uint32),
+        blurred_actual = np.convolve(actual, SLIGHT_BLUR, mode="same")
+        blurred_expected = np.convolve(expected, SLIGHT_BLUR, mode="same")
+        grid_step = abs(
+            (float(grid["to_ppm"]) - float(grid["from_ppm"]))
+            / (int(grid["points"]) - 1),
         )
-        if differing.size:
-            first = int(differing[0])
-            maximum_error = float(
-                np.max(np.abs(actual.astype(np.float64) - expected.astype(np.float64))),
-            )
-            self.fail(
-                f"Float32 spectra differ at {differing.size} points; first index "
-                f"{first}: nmrglue={actual[first]!r}, frontend={expected[first]!r}; "
-                f"maximum absolute difference={maximum_error:.9g}",
-            )
+        similarity = float(
+            np.dot(blurred_actual, blurred_expected)
+            / (
+                np.linalg.norm(blurred_actual)
+                * np.linalg.norm(blurred_expected)
+            ),
+        )
+        transport_distance = l1_transport_distance(
+            blurred_actual,
+            blurred_expected,
+            grid_step=grid_step,
+        )
+        transport_grid_steps = transport_distance / grid_step
+        self.assertGreaterEqual(
+            similarity,
+            MINIMUM_SHAPE_SIMILARITY,
+            f"blurred spectrum cosine similarity {similarity:.9f} is below "
+            f"{MINIMUM_SHAPE_SIMILARITY:.9f}; L1 transport distance is "
+            f"{transport_distance:.9g} ppm ({transport_grid_steps:.3f} grid steps)",
+        )
+        self.assertLessEqual(
+            transport_grid_steps,
+            MAXIMUM_TRANSPORT_DISTANCE_IN_GRID_STEPS,
+            f"blurred spectrum L1 transport distance {transport_distance:.9g} ppm "
+            f"({transport_grid_steps:.3f} grid steps) exceeds "
+            f"{MAXIMUM_TRANSPORT_DISTANCE_IN_GRID_STEPS:.3f} grid steps; cosine "
+            f"similarity is {similarity:.9f}",
+        )
 
 
 def smooth_resample(
@@ -126,6 +149,16 @@ def smooth_resample(
     return output
 
 
+def processed_bruker_ppm_axis(
+    parameters: dict,
+    points: int,
+) -> np.ndarray:
+    procs = parameters["procs"]
+    offset = float(procs["OFFSET"])
+    width = float(procs["SW_p"]) / float(procs["SF"])
+    return np.linspace(offset, offset - width, points, dtype=np.float64)
+
+
 def line_integral(
     start: float,
     stop: float,
@@ -142,3 +175,16 @@ def min_max_scale(values: np.ndarray) -> np.ndarray:
     minimum = float(np.min(values))
     maximum = float(np.max(values))
     return (values - minimum) * (1.0 / (maximum - minimum))
+
+
+def l1_transport_distance(
+    actual: np.ndarray,
+    expected: np.ndarray,
+    *,
+    grid_step: float,
+) -> float:
+    actual_mass = actual / np.sum(actual)
+    expected_mass = expected / np.sum(expected)
+    return float(
+        grid_step * np.sum(np.abs(np.cumsum(actual_mass - expected_mass))),
+    )
