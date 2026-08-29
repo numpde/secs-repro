@@ -8,7 +8,7 @@ from secs_inference import SecsInference
 from secs_inference.elucidation import SecsElucidator
 
 
-class InferenceTest(unittest.TestCase):
+class SecsIntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.inference = SecsInference.load(
@@ -45,7 +45,7 @@ class InferenceTest(unittest.TestCase):
         )
         self.assertTrue(all(np.isfinite(score) for _, score in ranked))
 
-    def test_real_checkpoint_scores_a_graph_ga_search(self):
+    def test_real_checkpoint_runs_one_graph_ga_generation(self):
         spectrum = np.zeros(10_000, dtype=np.float32)
         spectrum[1_234] = 1.0
         initial_population = ["CCO", "COC", "CC", "CCC", "CCN", "CC=O", "C=C", "CO"]

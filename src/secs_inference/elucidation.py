@@ -19,7 +19,7 @@ class _InferenceSmilesEmbedder:
 
 
 class SecsElucidator:
-    """Compose retrieval, SECS scoring, and molecular search for one deployment."""
+    """Retrieve, score, and evolve candidates for an H-NMR spectrum and formula."""
 
     def __init__(
         self,
@@ -35,15 +35,20 @@ class SecsElucidator:
         self._initial_population_size = initial_population_size
 
     def elucidate(self, spectrum: Sequence[float] | FloatArray, formula: str) -> OptimizerResult:
-        target = torch.from_numpy(self._inference.embed_spectrum(spectrum))
+        target_atom_counts = get_atom_counts_from_formula(formula)
+        spectrum_embedding = torch.from_numpy(self._inference.embed_spectrum(spectrum))
+
         initial_population = self._candidate_source.propose(
-            target,
+            spectrum_embedding,
             formula,
             self._initial_population_size,
         )
+
+        candidate_embedder = _InferenceSmilesEmbedder(self._inference)
         objective = spectral_objective(
-            _InferenceSmilesEmbedder(self._inference),
-            {"h_nmr": target},
-            get_atom_counts_from_formula(formula),
+            candidate_embedder,
+            {"h_nmr": spectrum_embedding},
+            target_atom_counts,
         )
+
         return self._optimizer.run(initial_population, objective)
