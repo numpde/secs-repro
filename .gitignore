@@ -3,4 +3,5 @@
 /checkpoints/**/*.zst
 /wheelhouse/
 /cache/
-/candidates/
+/checkpoints/*/candidates/
+/checkpoints/*/.candidate-build.*/

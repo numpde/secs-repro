@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import shutil
 import sys
 import tomllib
 
@@ -191,16 +190,14 @@ def build(args: argparse.Namespace) -> None:
 
     index_path = args.output_directory / "smiles.faiss"
     faiss.write_index(index, str(index_path))
-    published_spec = args.output_directory / args.candidate_spec.name
-    shutil.copyfile(args.candidate_spec, published_spec)
     checkpoint_manifest = json.loads(args.checkpoint_manifest.read_text())
     with args.molformer_lock.open("rb") as source:
         molformer_snapshot = tomllib.load(source)["snapshot"]
     manifest = {
         "schema_version": 1,
         "candidate_spec": {
-            "file": published_spec.name,
-            "sha256": sha256(published_spec),
+            "checkpoint_file": args.candidate_spec.name,
+            "sha256": sha256(args.candidate_spec),
         },
         "builder_sha256": sha256(Path(__file__)),
         "package_image_id": args.package_image_id,
