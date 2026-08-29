@@ -25,22 +25,26 @@ help:
 		'SECS checkpoint preparation' \
 		'' \
 		'  make checkpoint' \
-		'      Download the archive in checkpoint.toml and write secs-v3.safetensors and manifest.json.' \
+		'      Stream and verify the archive configured by checkpoint.toml, then write' \
+		'      secs-v3.safetensors and manifest.json beside checkpoint.toml.' \
 		'  make checkpoint ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz' \
 		'      Read a local archive without network access; the source file is left unchanged.' \
 		'  make checkpoint ARCHIVE_URL=https://example.org/zenodo_secs_v3.tar.gz' \
 		'      Download from this HTTPS URL instead of the URL in checkpoint.toml.' \
 		'  make checkpoint CHECKPOINT_PRECISION=float16' \
-		'      Store floating-point tensors as float32, float16, or bfloat16.' \
+		'      Store floating-point tensors as float16; float32 and bfloat16 are also supported.' \
+		'      ARCHIVE or ARCHIVE_URL may be combined with CHECKPOINT_PRECISION.' \
 		'  make checkpoint/manifest' \
 		'      Recreate manifest.json only if its recorded specification and weight hashes still match.' \
+		'' \
+		'The archive stream and extracted Lightning checkpoint are not retained after conversion.' \
 		'' \
 		'SECS package images' \
 		'' \
 		'  make packages/base-images/pull packages/locks/write' \
 		'      Pull the pinned base images and write CPU and GPU dependency locks.' \
 		'  make packages/cpu/wheelhouse packages/gpu/wheelhouse' \
-		'      Download the hash-locked CPU and GPU wheels into wheelhouse/.' \
+		'      Download the hash-locked CPU and GPU package archives into wheelhouse/.' \
 		'  make packages/images' \
 		'      Build the CPU and GPU package images offline from existing wheelhouses.' \
 		'  make molformer/cache' \
@@ -49,9 +53,8 @@ help:
 		'SECS tests' \
 		'' \
 		'  make test/integration' \
-		'      Load the real checkpoint, rank SMILES, and run one GA generation in the offline CPU image.' \
-		'' \
-		'Downloaded archive data and extracted Lightning checkpoints are not saved.'
+		'      With a prepared checkpoint, MolFormer cache, and CPU wheelhouse, rank SMILES' \
+		'      and run one GA generation without network access.'
 
 checkpoint/image:
 	@$(DOCKER) build --quiet --network none --pull=false \
@@ -161,11 +164,16 @@ checkpoint/manifest:
 	fi
 	selected_spec=
 	case " $(CHECKPOINT_SPECS) " in *" $(CHECKPOINT_SPEC) "*) selected_spec=1 ;; esac
-	if test "$(words $(CHECKPOINT_SPEC))" -ne 1 \
-		|| test -z "$$selected_spec" \
-		|| test ! -f "$(CHECKPOINT_WEIGHTS)" \
-		|| test ! -f "$(CHECKPOINT_MANIFEST)"; then
-		printf '%s\n' 'Cannot refresh manifest: select one checkpoint with existing weights and manifest.json.' >&2
+	if test "$(words $(CHECKPOINT_SPEC))" -ne 1 || test -z "$$selected_spec"; then
+		printf '%s\n' 'Cannot refresh manifest: CHECKPOINT_SPEC must name exactly one checkpoints/*/checkpoint.toml file.' >&2
+		exit 2
+	fi
+	if test ! -f "$(CHECKPOINT_WEIGHTS)"; then
+		printf '%s\n' 'Cannot refresh manifest because checkpoint weights are missing: $(CHECKPOINT_WEIGHTS). Run make checkpoint first.' >&2
+		exit 2
+	fi
+	if test ! -f "$(CHECKPOINT_MANIFEST)"; then
+		printf '%s\n' 'Cannot refresh manifest because the existing manifest is missing: $(CHECKPOINT_MANIFEST). Restore the manifest that belongs to these weights before retrying.' >&2
 		exit 2
 	fi
 	output_dir=$$(realpath -e -- "$(CHECKPOINT_DIRECTORY)")
