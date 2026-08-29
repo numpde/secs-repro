@@ -2,7 +2,7 @@ Bruker experiment decoding and SECS input design
 ================================================
 
 Date: 2026-08-29
-Status: candidate design; implementation is not authorized
+Status: accepted first-slice boundary; processed reader not yet implemented
 
 
 Purpose
