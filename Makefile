@@ -49,6 +49,8 @@ help:
 		'4. Run the CPU integration proof' \
 		'  make test/integration' \
 		'      Rank SMILES and run one GA generation without network access.' \
+		'  make test/integration/bruker-reference' \
+		'      Compare nmrglue decoding of F3697/1 with the pinned frontend vector.' \
 		'' \
 		'Dependency maintenance' \
 		'' \
