@@ -4,6 +4,7 @@ override UV_IMAGE := ghcr.io/astral-sh/uv@sha256:440fd6477af86a2f1b38080c539f167
 PACKAGES_CPU_TORCH_WHEELS := https://download.pytorch.org/whl/cpu/torch/
 PACKAGES_GPU_TORCH_WHEELS := https://download.pytorch.org/whl/cu130/torch/
 PACKAGES_LOCK_IMAGE_TAG := secs-repro/packages-lock
+packages_image_tag = secs-repro/packages-$(1):local
 
 .PHONY: packages/base-images/pull packages/lock-image packages/locks/write
 .PHONY: packages/cpu/wheelhouse packages/gpu/wheelhouse packages/wheelhouse
@@ -133,6 +134,6 @@ packages/image:
 		--build-context "wheelhouse=$(REPOSITORY_ROOT)/wheelhouse/packages-$(VARIANT)" \
 		--file containers/packages/Dockerfile \
 		--tag "secs-repro/packages-$(VARIANT):inputs-$$id" \
-		--tag "secs-repro/packages-$(VARIANT):local" .
+		--tag "$(call packages_image_tag,$(VARIANT))" .
 
 packages/images: packages/cpu/image packages/gpu/image
