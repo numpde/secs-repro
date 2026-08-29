@@ -32,11 +32,6 @@ Keep source understanding separate from the SECS input profile:
                   read_bruker_experiment
                             |
                             v
-         neutral processed spectrum or source-corrected FID
-                            |
-                     FID processing, if needed
-                            |
-                            v
                   neutral 1D proton spectrum
                             |
                             v
@@ -45,12 +40,12 @@ Keep source understanding separate from the SECS input profile:
                             v
            float32[10000], ascending -2..10 ppm
 
-``nmr_preprocessing`` owns Bruker decoding and source-independent FID
-processing.  It imports neither SECS nor Torch.
+``nmr_preprocessing`` owns Bruker decoding.  It imports neither SECS nor Torch.
 
 ``secs_input`` owns the SECS grid: ppm range, interpolation, scaling, length,
-and final Float32 cast.  The existing ``secs_inference`` package continues to
-own checkpoint length, model-order reversal, device, and compute dtype.
+and final Float32 cast.  The existing ``secs_inference`` package checks that
+profile against checkpoint configuration and continues to own model-order
+reversal, device, and compute dtype.
 
 Use nmrglue behind the Bruker boundary.  Do not expose nmrglue dictionaries as
 our contract.  Its vendor dictionary is Bruker-specific, while its universal
@@ -83,16 +78,15 @@ parameters are required to interpret those numeric bytes.
 The first slice recognizes an experiment only when it can obtain:
 
 * acquisition parameters from ``acqus``;
-* either a raw ``fid`` or the processed ``pdata/1/1r`` together with its
-  ``pdata/1/procs`` parameters;
+* ``pdata/1/1r`` together with its ``pdata/1/procs`` parameters;
 * verified one-dimensional ``1H`` identity and the facts needed to construct a
   ppm axis.
 
 This is recognition, not a general validator for every legal TopSpin dataset.
 Files that do not establish the supported case are simply unsupported.
 
-The first slice recognizes only ``pdata/1/1r`` as processed input.  It does not
-search other ``pdata`` directories or choose among them.
+The first slice recognizes only ``pdata/1/1r`` as input.  It does not search
+other ``pdata`` directories, choose among them, or process ``fid``.
 
 
 Example: F3697/1
@@ -104,39 +98,32 @@ the first slice.
 
 ``F3697/1`` alone is one 500 MHz, CDCl3, 1D ``1H`` experiment.  It contains both
 a raw ``fid`` and a processed ``pdata/1/1r`` representation.  The frontend's
-pinned NMRium loader decodes those representations; the frontend then penalizes
-an FID-derived spectrum by one point, so the processed representation wins.
-
-The Python path should reproduce that useful policy directly:
-
-* the presence of ``pdata/1/1r`` or ``pdata/1/procs`` selects the processed
-  route, which must decode successfully as a complete pair;
-* process the raw FID only when both processed members are absent;
-* never process a frequency-domain ``1r`` through the FID pipeline.
-
-This does not require copying the frontend's generic loader-order tie behavior.
+pinned NMRium loader decodes both and its preference hierarchy selects the
+processed representation.  The first Python slice reads that processed pair
+directly.  Raw-FID processing is deferred until a separate slice has a real
+raw-only fixture and its own scientific qualification.
 
 
 Upload boundary
 ---------------
 
 The browser may let a user select the ``F3697/1`` folder directly.  The API,
-however, needs one immutable artifact.  Its future Bruker input schema should
-therefore carry the folder as one bounded archive preserving every admitted
-member's bytes and relative path, for example:
+however, needs one immutable artifact.  Its future input schema must provide one
+bounded byte sequence that preserves every admitted member's bytes and relative
+path.  A ZIP is one non-normative illustration:
 
     F3697-1.zip
-    `-- F3697/
-        `-- 1/
-            |-- acqus
-            |-- fid
-            `-- pdata/1/...
+    |-- acqus
+    |-- fid
+    `-- pdata/1/...
 
-The archive is an API envelope, not a Bruker source format.  Archive admission,
-safe materialization, and resolution of the single experiment root belong to
-the API/provider adapter, not the Bruker reader.  The adapter mounts that root at
-the preprocessing container's fixed read-only input path.  The formula travels
-directly to the elucidation workflow, separately from this artifact.
+The envelope is not a Bruker source format.  The API owns its schema and
+admission.  The provider adapter safely materializes the schema-defined payload
+root and mounts it unchanged at the preprocessing container's fixed read-only
+input path; it does not inspect Bruker files to discover that root.  Only
+``read_bruker_experiment`` decides whether the mounted tree is supported.  The
+formula travels directly to the elucidation workflow, separately from this
+artifact.
 
 The current NMR API does not yet implement artifact-backed Job inputs.  This is
 a consumer requirement for that future contract, not a claim about an existing
@@ -146,26 +133,19 @@ upload route.
 Neutral values
 --------------
 
-The neutral seam needs only three values:
+The neutral seam needs only two values:
 
-``SourceRef``
+``ReaderReceipt``
     The selected source-relative files, Bruker reader identity and version, and
-    any source correction applied while the reader owned the vendor parameters.
-    This is the canonical reader receipt.
-
-``Fid1D``
-    Source-corrected NumPy ``complex128`` samples, dwell time, verified
-    acquisition facts, and ``SourceRef``.
+    the verified source facts used to decode them.
 
 ``Spectrum1D``
-    Float64 ppm coordinates and real intensities, verified acquisition facts,
-    ``SourceRef``, and whether the representation was processed by the
-    spectrometer or derived from an FID.
+    Float64 ppm coordinates, real intensities, and ``ReaderReceipt``.
 
-Every scientific value in the neutral seam is required and verified.  Do not
-add optional metadata without a current processing or provenance consumer, and
-do not substitute placeholder frequencies, nuclei, axis labels, or sentinel
-numbers for absent facts.
+The Bruker reader constructs these values only when the fields needed to decode
+the processed representation are present.  The SECS encoder owns its numeric
+input preconditions.  Do not add optional metadata without a current consumer
+or substitute placeholder facts for absent ones.
 
 Do not add ``NmrDataset``, a reader registry, a generic metadata model, or a
 processing-event framework for this slice.  There is one admitted experiment
@@ -177,47 +157,14 @@ Bruker decoding
 
 ``read_bruker_experiment(root)``:
 
-1. Reads the admitted files without following paths outside ``root``.
+1. Opens only the fixed admitted paths relative to ``root``; archive path and
+   link admission remain the materializer's responsibility.
 2. Uses nmrglue to decode Bruker parameters and numeric arrays.
 3. Translates only the acquisition and axis facts consumed downstream.
-4. If ``pdata/1/1r`` or ``pdata/1/procs`` exists, decodes the complete pair as
-   ``Spectrum1D`` or returns ``UnsupportedBrukerExperiment``.
-5. Only when both processed members are absent, returns a source-corrected
-   ``Fid1D``.
+4. Decodes ``pdata/1/1r`` with ``pdata/1/procs`` as ``Spectrum1D``.
 
-Bruker digital-filter removal requires vendor acquisition parameters.  The
-reader derives applicability from those parameters, applies the correction
-exactly once, and records the chosen nmrglue method and parameters in
-``SourceRef``.  ``F3697/1`` is a positive case: its acquisition parameters
-include a nonzero group delay.  Generic FID processing starts from the corrected
-samples and does not apply it again.
-
-nmrglue documents its digital-filter implementation as an approximation of an
-unknown exact vendor method.  Qualification must compare the resulting spectrum
-with the spectrometer-processed representation; the implementation should not
-hide that limitation behind extra checks.
-
-
-FID processing
---------------
-
-After the reader-owned source correction, the first versioned processing
-profile mirrors the pinned frontend behavior:
-
-1. Start from the reader's source-corrected complex samples.
-2. Apply 1 Hz exponential line broadening.  For nmrglue this is
-   ``proc_base.em(lb=1.0 / spectral_width_hz)`` because ``lb`` is normalized.
-3. Zero-fill to twice the next power of two of the input length.
-4. Perform the NMR-ordered Fourier transform.
-5. Construct the ppm axis from verified acquisition facts.
-6. Reproduce the frontend's automatic proposal and wide phase search.
-7. Apply the selected zero- and first-order phase correction.
-8. Use complex magnitude only when ``maximum > 0`` and
-   ``-minimum > 0.2 * maximum`` remain true.
-
-nmrglue provides numeric primitives but does not own this profile.  In
-particular, its generic autophase routine is not an assumed replacement for the
-frontend's phase search.
+The raw ``fid`` may remain in the uploaded original directory, but this slice
+does not read or process it.
 
 
 SECS encoding
@@ -231,9 +178,10 @@ SECS encoding
 * linear minimum/maximum scaling to 0..1;
 * one final Float64-to-Float32 cast.
 
-The first slice characterizes the JavaScript ``xyEquallySpaced`` and
-``xRescale`` behavior only for spectra reachable from the admitted Bruker
-fixture.  This is a compatibility question, not a reason to create a generic
+The encoder accepts paired, finite Float64 arrays with at least two distinct ppm
+coordinates and the coverage required by the fixed grid.  The first slice
+characterizes JavaScript ``xyEquallySpaced`` and ``xRescale`` behavior only for
+the admitted processed Bruker fixture.  This is not a reason to create a generic
 interpolation abstraction or an edge-case matrix for unsupported inputs.
 
 The output remains in ascending ppm order.  ``SecsInference`` retains its
@@ -243,22 +191,24 @@ checkpoint-owned max normalization and reversal into model training order.
 Container boundary
 ------------------
 
-Bruker parsing and FID processing run in a dedicated preprocessing image, not
-on the host and not in the checkpoint-bearing inference process.  The lane has:
+Bruker parsing and SECS encoding run in a dedicated preprocessing image, not on
+the host and not in the checkpoint-bearing inference process.  The image
+composes ``nmr_preprocessing`` with the Torch-free ``secs_input`` closure; it
+does not install ``secs_inference`` or checkpoint dependencies.  The lane has:
 
 * no network;
 * a read-only root filesystem and input mount;
 * a fixed non-root UID/GID, dropped capabilities, and no-new-privileges;
-* bounded memory, PIDs, CPU, wall time, scratch tmpfs, and output bytes;
+* bounded memory, PIDs, CPU, wall time, and scratch tmpfs;
 * one explicit writable output mount;
 * no engine socket, credentials, checkpoint, source checkout, or unrelated host
   filesystem access.
 
 It emits ``spectrum.npy`` as Float32 with pickle disabled and a bounded
-``receipt.json``.  The receipt contains ``SourceRef``, the FID-processing profile
-when used, and the SECS encoding profile.  It contains no vendor-file copy,
-artifact identity, or access capability.  The API/provider adapter binds this
-scientific receipt to the API-owned artifact digest.
+``receipt.json``.  The receipt contains ``ReaderReceipt`` and the SECS encoding
+profile.  It contains no vendor-file copy, artifact identity, or access
+capability.  The provider adapter binds this scientific receipt to the API-owned
+artifact digest.
 
 Container isolation limits authority and parser effects; it is not described as
 a hostile-code sandbox.
@@ -267,39 +217,35 @@ a hostile-code sandbox.
 Outcomes
 --------
 
-The first slice needs two meaningful outcomes:
+The first slice needs one domain outcome:
 
-``UnsupportedBrukerExperiment``
-    The materialized directory cannot be decoded as the single supported Bruker
-    1D proton experiment and representation case.  The underlying decode cause
-    is preserved for operators.
+``UnrecognizedSpectrumInput``
+    The materialized directory cannot produce the single supported processed
+    Bruker 1D proton spectrum.  The underlying recognition or decode cause is
+    preserved for operators.
 
-``FidProcessingFailed``
-    An admitted raw experiment cannot produce a frequency-domain spectrum.
-
-These names describe boundary outcomes, not a required exception hierarchy.
-The API adapter owns concise user-facing messages and preserves the underlying
-cause and bounded receipt evidence.
+This name describes a boundary outcome, not a required exception hierarchy.
+Encoding, container, and runtime faults remain preprocessing or execution
+failures.  The API adapter owns concise user-facing wording and preserves the
+underlying cause and bounded receipt evidence.
 
 
 Qualification
 -------------
 
-The implementation is admitted against the existing ``F3697/1`` raw and
-processed pair plus a small synthetic encoder fixture.
+The implementation is admitted against the existing processed ``F3697/1``
+representation plus a small synthetic encoder fixture.
 
 The Bruker proof establishes:
 
 * the decoded nucleus, observation frequency, spectral width, and ppm axis;
-* selection of ``pdata/1/1r`` when it is present;
-* fallback to ``fid`` when the processed representation is absent;
-* one-time digital-filter handling and the phase/magnitude decision;
-* scientifically bounded peak-position and normalized-shape agreement between
-  the FID-derived and spectrometer-processed spectra.
+* decoding of ``pdata/1/1r`` with ``pdata/1/procs``;
+* rejection of a tree that does not establish that supported pair.
 
 The SECS proof establishes exact grid endpoints, length, order, scaling, and
-Float32 conversion against a receipt produced by frontend revision
-``5ab78f61e9fb679f3f0b9823be5217ae250e213f``.
+Float32 conversion against a reference vector recorded from frontend revision
+``5ab78f61e9fb679f3f0b9823be5217ae250e213f``.  The local fixture records that
+revision and the characterized frontend encoding profile.
 
 No test claims support for a format or Bruker structure outside these fixtures.
 
@@ -307,13 +253,13 @@ No test claims support for a format or Bruker structure outside these fixtures.
 Implementation order
 --------------------
 
-1. Record the pinned frontend's processed ``F3697/1`` SECS vector and relevant
-   selection/processing receipt.
-2. Add the three neutral values and ``encode_secs_spectrum``.
-3. Add ``read_bruker_experiment`` for the processed representation.
+1. Record the pinned frontend's processed ``F3697/1`` SECS vector, exact
+   revision, and encoding profile used to produce it.
+2. Add the two neutral values and ``encode_secs_spectrum``.
+3. Admit one reviewed nmrglue release through the existing lock and wheelhouse
+   lane, then add ``read_bruker_experiment`` for the processed representation.
 4. Add the preprocessing container lane and prove the processed path.
-5. Add raw-FID decoding and processing, then compare it with ``pdata/1/1r``.
-6. Add the API adapter only after the NMR API releases an artifact-backed Job
+5. Add the API adapter only after the NMR API releases an artifact-backed Job
    input contract.
 
 Any later source format is a separate design and dependency decision.  That
@@ -328,6 +274,7 @@ The first slice deliberately excludes:
 
 * whole Bruker studies containing multiple experiments;
 * processed representations outside ``pdata/1``;
+* raw Bruker FID processing;
 * multidimensional Bruker experiments;
 * Varian/Agilent, JCAMP-DX, JEOL JDF, NMRium, and generic numeric arrays;
 * a plugin registry or client-supplied format name;
