@@ -56,6 +56,8 @@ help:
 		'      Recreate manifest.json only if its recorded specification and weight hashes still match.' \
 		'  make packages/base-images/pull packages/locks/write' \
 		'      Regenerate the CPU and GPU dependency locks after dependency intent changes.' \
+		'  make fixtures/frontend-reference/base-image/pull fixtures/frontend-reference/write' \
+		'      Recreate the F3697/1 SECS vector with the pinned frontend in an offline container.' \
 		'' \
 		'Optional package images' \
 		'' \
@@ -214,3 +216,4 @@ checkpoint/manifest:
 include make/packages.mk
 include make/molformer.mk
 include make/tests.mk
+include make/fixtures.mk
