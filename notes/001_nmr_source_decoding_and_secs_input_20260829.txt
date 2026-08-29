@@ -13,9 +13,9 @@ experiment into the 10,000-point spectrum consumed by SECS.
 
 The first admitted source is one Bruker experiment directory such as
 ``F3697/1``.  Other vendor formats, generic spectrum files, and a Bruker study
-containing several numbered experiments are unsupported.  They should produce
-one unrecognized-input outcome rather than speculative parsing or a hierarchy
-of format-specific validation errors.
+containing several numbered experiments are unsupported for now.  They should
+produce one unrecognized-input outcome rather than speculative parsing or a
+hierarchy of format-specific validation errors.
 
 The molecular formula is a separate elucidation input.  It is not part of the
 vendor dataset and does not pass through spectrum preprocessing.
@@ -334,8 +334,9 @@ The first slice deliberately excludes:
 * arbitrary URLs or reader-side archive extraction;
 * automatic choice among ambiguous experiments or representations.
 
-Unsupported inputs remain unsupported.  We do not add speculative parsers,
-fallbacks, or format-completeness validation to improve their error taxonomy.
+These inputs are unsupported in the first slice, not rejected permanently.  We
+do not add speculative parsers, fallbacks, or format-completeness validation
+before a later format is deliberately admitted.
 
 
 Research sources
