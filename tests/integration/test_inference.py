@@ -1,3 +1,7 @@
+import hashlib
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
 import numpy as np
@@ -6,6 +10,40 @@ import torch
 from secs.elucidation import GraphGAOptimizer, StaticCandidateSource
 from secs_inference import SecsInference
 from secs_inference.elucidation import SecsElucidator
+
+
+class CheckpointManifestTest(unittest.TestCase):
+    def test_load_rejects_weight_drift_before_model_construction(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            checkpoint_directory = Path(temporary_directory)
+            specification = checkpoint_directory / "checkpoint.toml"
+            weights = checkpoint_directory / "secs-v3.safetensors"
+            specification.write_bytes(b"specification")
+            weights.write_bytes(b"weights")
+            manifest = checkpoint_directory / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "spec": {
+                            "file": specification.name,
+                            "sha256": hashlib.sha256(specification.read_bytes()).hexdigest(),
+                        },
+                        "weights": {"file": weights.name, "sha256": "0" * 64},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "Checkpoint artifact 'weights' does not match manifest.json"
+            ):
+                SecsInference.load(
+                    manifest,
+                    molformer_lock="unused",
+                    device="cpu",
+                    dtype=torch.float32,
+                    smiles_batch_size=1,
+                )
 
 
 class SecsIntegrationTest(unittest.TestCase):
