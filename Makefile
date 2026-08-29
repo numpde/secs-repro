@@ -16,15 +16,22 @@ override CHECKPOINT_MANIFEST := $(CHECKPOINT_DIRECTORY)/manifest.json
 override CHECKPOINT_MANIFEST_FILENAME := $(notdir $(CHECKPOINT_MANIFEST))
 override SECS_REPOSITORY := $(shell git config -f .gitmodules --get submodule.secs.url)
 override SECS_REVISION := $(shell git ls-files --stage secs | awk '{print $$2}')
-DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT docker --context default
+export SECS_WLAN_INTERFACE_INPUT := $(if $(filter command line,$(origin WLAN_INTERFACE)),$(value WLAN_INTERFACE))
+DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT $(CURDIR)/tools/docker.sh --context default
 
 .PHONY: help checkpoint checkpoint/image checkpoint/manifest
 
 help:
 	@printf '%s\n' \
-		'SECS CPU workflow' \
-		'' \
-		'1. Prepare CPU dependencies' \
+	'SECS CPU workflow' \
+	'' \
+	'Network routing' \
+	'  make <target> WLAN_INTERFACE=<name>' \
+	'      Route container-owned HTTP(S) downloads through that host interface.' \
+	'      Omit WLAN_INTERFACE to use Docker networking normally.' \
+	'      Docker daemon image pulls continue to use the daemon default route.' \
+	'' \
+	'1. Prepare CPU dependencies' \
 		'  make packages/base-images/pull packages/cpu/wheelhouse' \
 		'      Pull the pinned base images and download the hash-locked CPU package archives.' \
 		'' \
