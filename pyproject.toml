@@ -7,13 +7,15 @@ name = "secs-inference"
 version = "0.1.0"
 requires-python = ">=3.11, <3.13"
 dependencies = [
-  "mol-ga==0.2.1",
   "numpy",
   "omegaconf",
   "safetensors",
   "secs",
   "torch",
 ]
+
+[project.optional-dependencies]
+elucidation = ["secs[elucidation]"]
 
 [tool.uv.sources]
 secs = { path = "secs" }

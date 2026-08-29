@@ -44,6 +44,7 @@ packages/locks/write:
 			--mount type=bind,src="$(REPOSITORY_ROOT)/secs",dst=/input/secs,readonly \
 			--mount type=bind,src="$$stage",dst=/output \
 			"$$lock_image" pyproject.toml \
+			--extra elucidation \
 			--group secs/pyproject.toml:packages-build \
 			--group "secs/pyproject.toml:$$group" --no-emit-package secs \
 			--python-version "$(PACKAGES_PYTHON_VERSION)" --python-platform x86_64-manylinux_2_28 \

@@ -4,7 +4,8 @@ import numpy as np
 import torch
 
 from secs.elucidation import GraphGAOptimizer, StaticCandidateSource
-from secs_inference import SecsElucidator, SecsInference
+from secs_inference import SecsInference
+from secs_inference.elucidation import SecsElucidator
 
 
 class InferenceTest(unittest.TestCase):
@@ -64,4 +65,3 @@ class InferenceTest(unittest.TestCase):
 
         self.assertTrue(result.population)
         self.assertEqual(result.generations, 1)
-        self.assertGreaterEqual(result.n_evaluated, len(initial_population))

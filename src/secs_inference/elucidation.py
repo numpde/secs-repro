@@ -2,7 +2,9 @@ from collections.abc import Sequence
 
 import torch
 
-from secs.elucidation import CandidateSource, MoleculeOptimizer, OptimizerResult, spectral_objective
+from secs.elucidation.candidates import CandidateSource
+from secs.elucidation.components import spectral_objective
+from secs.elucidation.optimizers.base import MoleculeOptimizer, OptimizerResult
 from secs.utils.elucidation import get_atom_counts_from_formula
 
 from secs_inference.model import FloatArray, SecsInference
@@ -24,7 +26,8 @@ class SecsElucidator:
         inference: SecsInference,
         candidate_source: CandidateSource,
         optimizer: MoleculeOptimizer,
-        initial_population_size: int = 2048,
+        *,
+        initial_population_size: int,
     ) -> None:
         self._inference = inference
         self._candidate_source = candidate_source
