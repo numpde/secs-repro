@@ -104,12 +104,30 @@ def build(args: argparse.Namespace) -> None:
     with args.candidate_spec.open("rb") as source:
         candidate_spec = tomllib.load(source)
 
+    table_config = candidate_spec["table"]
+    embedding_config = candidate_spec["embedding"]
+    index_config = candidate_spec["index"]
+    if index_config["metric"] != "inner_product":
+        raise ValueError(f"Unsupported FAISS metric: {index_config['metric']!r}")
+
+    torch_dtype = {
+        "float32": torch.float32,
+        "float16": torch.float16,
+        "bfloat16": torch.bfloat16,
+    }[args.dtype]
+    inference = SecsInference.load(
+        args.checkpoint_manifest,
+        molformer_lock=args.molformer_lock,
+        device=args.device,
+        dtype=torch_dtype,
+        smiles_batch_size=embedding_config["batch_size"],
+    )
+
     args.output_directory.mkdir(parents=True, exist_ok=True)
     source_path = args.scratch_directory / "filtered_pubchem.parquet"
     print("Reading the admitted PubChem parquet from stdin.", file=sys.stderr, flush=True)
     source_bytes, source_sha256 = stage_input(source_path)
 
-    table_config = candidate_spec["table"]
     source_table = pl.scan_parquet(source_path)
     source_schema_object = source_table.collect_schema()
     candidate_schema = {column: source_schema_object[column] for column in CANDIDATE_COLUMNS}
@@ -135,20 +153,6 @@ def build(args: argparse.Namespace) -> None:
         raise ValueError(f"Candidate columns must contain rows without nulls; got rows={row_count}, nulls={statistics}.")
     source_path.unlink()
 
-    torch_dtype = {
-        "float32": torch.float32,
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-    }[args.dtype]
-    inference = SecsInference.load(
-        args.checkpoint_manifest,
-        molformer_lock=args.molformer_lock,
-        device=args.device,
-        dtype=torch_dtype,
-        smiles_batch_size=candidate_spec["embedding"]["batch_size"],
-    )
-
-    index_config = candidate_spec["index"]
     training_smiles = stratified_training_smiles(
         table,
         row_count,
@@ -162,8 +166,6 @@ def build(args: argparse.Namespace) -> None:
     del training_smiles
     dimension = training_embeddings.shape[1]
 
-    if index_config["metric"] != "inner_product":
-        raise ValueError(f"Unsupported FAISS metric: {index_config['metric']!r}")
     faiss.omp_set_num_threads(args.threads)
     index = faiss.index_factory(
         dimension,
