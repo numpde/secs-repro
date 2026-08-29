@@ -47,7 +47,7 @@ help:
 		'SECS tests' \
 		'' \
 		'  make test/integration' \
-		'      Load the real checkpoint and rank SMILES in the offline CPU image.' \
+		'      Load the checkpoint, rank SMILES, and run one GA generation offline.' \
 		'' \
 		'The archive and Lightning checkpoint are not retained.'
 
@@ -87,11 +87,9 @@ checkpoint:
 		printf '%s\n' 'Cannot prepare checkpoint: $(CHECKPOINT_WEIGHTS) already exists.' >&2
 		exit 2
 	fi
-	checkpoint_stage=$$(mktemp -d --tmpdir="$$output_dir" .weights.XXXXXXXX)
-	manifest_stage=$$(mktemp -d --tmpdir="$$output_dir" .manifest.XXXXXXXX)
-	trap 'rm -rf "$$checkpoint_stage" "$$manifest_stage"' EXIT
+	checkpoint_stage=$$(mktemp -d --tmpdir="$$output_dir" .checkpoint.XXXXXXXX)
+	trap 'rm -rf "$$checkpoint_stage"' EXIT
 	checkpoint_stage_dir=$$(realpath -e -- "$$checkpoint_stage")
-	checkpoint_stage_dir=$$(realpath -e -- "$$manifest_stage")
 	converter_image=$$($(MAKE) --no-print-directory packages/cpu/image)
 	extractor_image=$$($(MAKE) --no-print-directory checkpoint/image)
 	extractor_args=(--rm --init --pull never --read-only
@@ -151,7 +149,7 @@ checkpoint:
 		--reference-revision "$(SECS_REVISION)"
 	chmod 0644 "$$checkpoint_stage/$(CHECKPOINT_WEIGHTS_FILENAME)"
 	# Publish weights last; their presence marks a complete checkpoint.
-	mv -f "$$manifest_stage/$(CHECKPOINT_MANIFEST_FILENAME)" "$(CHECKPOINT_MANIFEST)"
+	mv -f "$$checkpoint_stage/$(CHECKPOINT_MANIFEST_FILENAME)" "$(CHECKPOINT_MANIFEST)"
 	ln "$$checkpoint_stage/$(CHECKPOINT_WEIGHTS_FILENAME)" "$(CHECKPOINT_WEIGHTS)"
 
 checkpoint/manifest:
@@ -169,9 +167,9 @@ checkpoint/manifest:
 		exit 2
 	fi
 	output_dir=$$(realpath -e -- "$(CHECKPOINT_DIRECTORY)")
-	stage=$$(mktemp -d --tmpdir="$$output_dir" .manifest.XXXXXXXX)
-	trap 'rm -rf "$$stage"' EXIT
-	stage_dir=$$(realpath -e -- "$$stage")
+	manifest_stage=$$(mktemp -d --tmpdir="$$output_dir" .manifest.XXXXXXXX)
+	trap 'rm -rf "$$manifest_stage"' EXIT
+	manifest_stage_dir=$$(realpath -e -- "$$manifest_stage")
 	extractor_image=$$($(MAKE) --no-print-directory checkpoint/image)
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
@@ -181,7 +179,7 @@ checkpoint/manifest:
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_WEIGHTS),dst=/input/$(CHECKPOINT_WEIGHTS_FILENAME),readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_MANIFEST),dst=/input/$(CHECKPOINT_MANIFEST_FILENAME),readonly" \
-		--mount "type=bind,src=$$stage_dir,dst=/output" \
+		--mount "type=bind,src=$$manifest_stage_dir,dst=/output" \
 		--entrypoint python "$$extractor_image" \
 		-P /opt/checkpoint/write_manifest.py \
 		--weights /input/$(CHECKPOINT_WEIGHTS_FILENAME) \
@@ -190,7 +188,7 @@ checkpoint/manifest:
 		--spec /input/checkpoint.toml \
 		--reference-repository "$(SECS_REPOSITORY)" \
 		--reference-revision "$(SECS_REVISION)"
-	mv -f "$$stage/$(CHECKPOINT_MANIFEST_FILENAME)" "$(CHECKPOINT_MANIFEST)"
+	mv -f "$$manifest_stage/$(CHECKPOINT_MANIFEST_FILENAME)" "$(CHECKPOINT_MANIFEST)"
 
 include make/packages.mk
 include make/molformer.mk
