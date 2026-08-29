@@ -20,6 +20,10 @@ from secs_inference import SecsInference
 
 READ_BYTES = 1024 * 1024
 CANDIDATE_COLUMNS = ("smiles", "molecular_formula")
+COMPUTE_DTYPE_BY_NAME = {
+    "float32": torch.float32,
+    "bfloat16": torch.bfloat16,
+}
 
 
 def arguments() -> argparse.Namespace:
@@ -32,7 +36,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--output-directory", type=Path, required=True)
     parser.add_argument("--source-kind", choices=("configured", "override", "local"), required=True)
     parser.add_argument("--device", required=True)
-    parser.add_argument("--dtype", choices=("float32", "float16", "bfloat16"), required=True)
+    parser.add_argument("--compute-dtype", choices=COMPUTE_DTYPE_BY_NAME, required=True)
     parser.add_argument("--threads", type=int, required=True)
     parser.add_argument("--package-image-id", required=True)
     return parser.parse_args()
@@ -110,16 +114,11 @@ def build(args: argparse.Namespace) -> None:
     if index_config["metric"] != "inner_product":
         raise ValueError(f"Unsupported FAISS metric: {index_config['metric']!r}")
 
-    torch_dtype = {
-        "float32": torch.float32,
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-    }[args.dtype]
     inference = SecsInference.load(
         args.checkpoint_manifest,
         molformer_lock=args.molformer_lock,
         device=args.device,
-        dtype=torch_dtype,
+        compute_dtype=COMPUTE_DTYPE_BY_NAME[args.compute_dtype],
         smiles_batch_size=embedding_config["batch_size"],
     )
 
@@ -216,7 +215,6 @@ def build(args: argparse.Namespace) -> None:
             "manifest_sha256": sha256(args.checkpoint_manifest),
             "spec_sha256": checkpoint_manifest["spec"]["sha256"],
             "weights_sha256": checkpoint_manifest["weights"]["sha256"],
-            "compute_dtype": args.dtype,
         },
         "molformer": {
             "lock_sha256": sha256(args.molformer_lock),
@@ -232,6 +230,7 @@ def build(args: argparse.Namespace) -> None:
         },
         "embedding": {
             "dimension": dimension,
+            "compute_dtype": args.compute_dtype,
             "storage_dtype": "float32",
             "normalization": "l2",
         },

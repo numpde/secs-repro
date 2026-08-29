@@ -68,7 +68,8 @@ help:
 	'  make candidates ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz' \
 	'      Read the pinned archive locally without granting the extractor network access.' \
 	'      ARCHIVE_URL overrides the configured HTTPS source instead; do not set both.' \
-	'      CANDIDATE_GPU, CANDIDATE_CPUS, CANDIDATE_MEMORY, and CANDIDATE_DTYPE tune resources.' \
+	'      CANDIDATE_GPU, CANDIDATE_CPUS, and CANDIDATE_MEMORY tune resources.' \
+	'      CANDIDATE_DTYPE selects float32 or bfloat16 forward compute.' \
 	'' \
 	'Dependency maintenance' \
 		'' \

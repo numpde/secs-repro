@@ -23,6 +23,11 @@ candidates: checkpoint/image packages/gpu/image
 	[[ "$${CANDIDATE_GPU_INPUT}" =~ ^[0-9]+$$ ]] || { \
 		printf '%s\n' 'CANDIDATE_GPU must name one GPU by its nonnegative integer index.' >&2; exit 2; \
 	}; \
+	case "$${CANDIDATE_DTYPE_INPUT}" in \
+		float32|bfloat16) ;; \
+		*) printf 'Cannot build candidates with CANDIDATE_DTYPE=%q; select float32 or bfloat16 forward compute.\n' \
+			"$${CANDIDATE_DTYPE_INPUT}" >&2; exit 2 ;; \
+	esac; \
 	test ! -e "$(CANDIDATE_DIRECTORY)" || { \
 		printf '%s\n' 'Candidate bundle already exists at $(CANDIDATE_DIRECTORY).' >&2; exit 2; \
 	}; \
@@ -60,7 +65,7 @@ candidates: checkpoint/image packages/gpu/image
 			--mount type=bind,src="$(CURDIR)/tools/build_candidate_index.py",dst=/opt/build.py,readonly \
 			--mount type=bind,src="$$stage",dst=/output \
 			--entrypoint /bin/sh "$$package_image" \
-			-c 'umask 0022; python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && exec python -P /opt/build.py --archive-spec /checkpoint/checkpoint.toml --candidate-spec /input/candidates.toml --checkpoint-manifest /checkpoint/manifest.json --molformer-lock /input/molformer.lock.toml --scratch-directory /scratch --output-directory /output --source-kind "$$1" --device cuda:0 --dtype "$$2" --threads "$$3" --package-image-id "$$4"' \
+			-c 'umask 0022; python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && exec python -P /opt/build.py --archive-spec /checkpoint/checkpoint.toml --candidate-spec /input/candidates.toml --checkpoint-manifest /checkpoint/manifest.json --molformer-lock /input/molformer.lock.toml --scratch-directory /scratch --output-directory /output --source-kind "$$1" --device cuda:0 --compute-dtype "$$2" --threads "$$3" --package-image-id "$$4"' \
 			candidate-builder "$$1" "$${CANDIDATE_DTYPE_INPUT}" "$${CANDIDATE_CPUS_INPUT}" "$$package_image"; \
 	}; \
 	run_network_extractor() { \
