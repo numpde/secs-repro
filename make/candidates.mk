@@ -33,20 +33,20 @@ candidates: checkpoint/image packages/gpu/image
 	$(DOCKER) run --rm --pull never --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 64 \
 		--cpus 1 --memory 2g --memory-swap 2g --gpus "device=$${CANDIDATE_GPU_INPUT}" \
-		--user "$$(id -u):$$(id -g)" \
 		--tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m --entrypoint python "$$package_image" \
 		-P -c 'import sys, torch; sys.exit("Selected GPU is unavailable to the candidate container.") if not torch.cuda.is_available() else torch.empty(1, device="cuda:0")'; \
 	output_parent=$$(dirname -- "$(CANDIDATE_DIRECTORY)"); \
 	mkdir -p -- "$$output_parent"; \
 	stage=$$(mktemp -d "$$output_parent/.candidate-build.XXXXXX"); \
 	stage=$$(realpath -e -- "$$stage"); \
+	chmod 2770 "$$stage"; \
 	trap 'rm -rf -- "$$stage"' EXIT HUP INT TERM; \
 	run_consumer() { \
 		$(DOCKER) run --rm -i --pull never --network none --read-only \
 			--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 512 \
 			--cpus "$${CANDIDATE_CPUS_INPUT}" --memory "$${CANDIDATE_MEMORY_INPUT}" \
 			--memory-swap "$${CANDIDATE_MEMORY_INPUT}" --gpus "device=$${CANDIDATE_GPU_INPUT}" \
-			--user "$$(id -u):$$(id -g)" \
+			--group-add "$$(id -g)" \
 			--tmpfs /scratch:rw,noexec,nosuid,nodev,size=2g \
 			--tmpfs /modules:rw,noexec,nosuid,nodev,size=128m \
 			--tmpfs /tmp:rw,noexec,nosuid,nodev,size=1g \
@@ -60,7 +60,7 @@ candidates: checkpoint/image packages/gpu/image
 			--mount type=bind,src="$(CURDIR)/tools/build_candidate_index.py",dst=/opt/build.py,readonly \
 			--mount type=bind,src="$$stage",dst=/output \
 			--entrypoint /bin/sh "$$package_image" \
-			-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && exec python -P /opt/build.py --archive-spec /checkpoint/checkpoint.toml --candidate-spec /input/candidates.toml --checkpoint-manifest /checkpoint/manifest.json --molformer-lock /input/molformer.lock.toml --scratch-directory /scratch --output-directory /output --source-kind "$$1" --device cuda:0 --dtype "$$2" --threads "$$3" --package-image-id "$$4"' \
+			-c 'umask 0022; python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && exec python -P /opt/build.py --archive-spec /checkpoint/checkpoint.toml --candidate-spec /input/candidates.toml --checkpoint-manifest /checkpoint/manifest.json --molformer-lock /input/molformer.lock.toml --scratch-directory /scratch --output-directory /output --source-kind "$$1" --device cuda:0 --dtype "$$2" --threads "$$3" --package-image-id "$$4"' \
 			candidate-builder "$$1" "$${CANDIDATE_DTYPE_INPUT}" "$${CANDIDATE_CPUS_INPUT}" "$$package_image"; \
 	}; \
 	run_network_extractor() { \
@@ -94,5 +94,6 @@ candidates: checkpoint/image packages/gpu/image
 	else \
 		run_network_extractor | run_consumer configured; \
 	fi; \
+	chmod g-s,u=rwx,go=rx "$$stage"; \
 	mv -T -- "$$stage" "$(CANDIDATE_DIRECTORY)"; \
 	trap - EXIT HUP INT TERM
