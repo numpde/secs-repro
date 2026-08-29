@@ -91,8 +91,14 @@ def _piecewise_linear_integral(
         (intensities[segments + 1] - intensities[segments])
         / (ppm[segments + 1] - ppm[segments])
     )
-    return (
+    integral = (
         cumulative_integral[segments]
         + intensities[segments] * offsets
         + slopes * offsets**2 / 2
+    )
+    integral = np.where(coordinates <= ppm[0], 0.0, integral)
+    return np.where(
+        coordinates >= ppm[-1],
+        cumulative_integral[-1],
+        integral,
     )
