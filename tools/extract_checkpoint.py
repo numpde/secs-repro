@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Admit one SECS checkpoint from a compressed tar stream.
+"""Admit one file from the pinned SECS archive.
 
 The archive is never materialized. The selected member remains temporary until
-the complete compressed stream matches the expected digest, then its bytes are
-emitted to the networkless conversion container.
+the complete compressed stream matches the expected digest; only then are its
+bytes emitted to the networkless consumer.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import urllib.request
 READ_BYTES = 1024 * 1024
 PROGRESS_BYTES = 512 * 1024 * 1024
 class ExtractionRejected(RuntimeError):
-    """The input cannot produce the one expected checkpoint artifact."""
+    """The input cannot produce the expected archive member."""
 
 
 class HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -62,7 +62,17 @@ def arguments() -> argparse.Namespace:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--archive", type=Path)
     source.add_argument("--url")
-    parser.add_argument("--spec", type=Path, required=True)
+    parser.add_argument(
+        "--spec",
+        type=Path,
+        required=True,
+        help="Read the archive URL, digest, and default member path from this TOML file.",
+    )
+    parser.add_argument(
+        "--member-spec",
+        type=Path,
+        help="Override only the selected member path using this TOML file.",
+    )
     parser.add_argument("--scratch-directory", type=Path, required=True)
     return parser.parse_args()
 
@@ -101,7 +111,7 @@ def open_archive_source(args: argparse.Namespace, default_url: str):
     return open_url(args.url or default_url)
 
 
-def stage_checkpoint(
+def stage_member(
     archive: tarfile.TarFile,
     member_name: str,
     scratch_directory: Path,
@@ -119,10 +129,10 @@ def stage_checkpoint(
                     f"archive contains more than one member named {member_name!r}"
                 )
             if not member.isfile():
-                raise ExtractionRejected(f"checkpoint member is not a regular file: {member.name}")
+                raise ExtractionRejected(f"archive member is not a regular file: {member.name}")
             with tempfile.NamedTemporaryFile(
                 mode="w+b",
-                prefix="best_model.ckpt.",
+                prefix="archive-member.",
                 dir=scratch_directory,
                 delete=False,
             ) as destination:
@@ -153,26 +163,30 @@ def verify_archive(reader: MeasuredReader, expected_md5: str) -> None:
 
 
 def extract(args: argparse.Namespace) -> None:
-    """Stage and verify the requested checkpoint before emitting any bytes."""
+    """Stage and verify the requested member before emitting any bytes."""
 
     temp_path: Path | None = None
     try:
         with args.spec.open("rb") as source:
             archive_spec = tomllib.load(source)["archive"]
+        member_name = archive_spec["member"]
+        if args.member_spec is not None:
+            with args.member_spec.open("rb") as source:
+                member_name = tomllib.load(source)["archive"]["member"]
         with open_archive_source(args, archive_spec["url"]) as raw_source:
             measured = MeasuredReader(raw_source)
             # Stream mode bounds memory, and copy_member deliberately applies no
             # archive path, permissions, ownership, or other tar metadata.
             with tarfile.open(fileobj=measured, mode="r|gz") as archive:
-                temp_path = stage_checkpoint(
+                temp_path = stage_member(
                     archive,
-                    archive_spec["member"],
+                    member_name,
                     args.scratch_directory,
                 )
             verify_archive(measured, archive_spec["md5"])
 
-        with temp_path.open("rb") as checkpoint:
-            while chunk := checkpoint.read(READ_BYTES):
+        with temp_path.open("rb") as selected_member:
+            while chunk := selected_member.read(READ_BYTES):
                 sys.stdout.buffer.write(chunk)
         sys.stdout.buffer.flush()
     finally:
