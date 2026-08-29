@@ -4,20 +4,20 @@ from pathlib import Path
 
 import numpy as np
 
-from secs_inference.spectra.bruker import read_processed_bruker
+from secs_inference.spectra.bruker import read_bruker_pdata
 from secs_inference.spectra.secs import prepare_secs_spectrum
 
 
 FIXTURES = Path("/fixtures")
-BRUKER_UPLOAD = FIXTURES / "bruker/F3697/1"
+BRUKER_PDATA = FIXTURES / "bruker/F3697/1/pdata/1"
 FRONTEND_REFERENCE = FIXTURES / "frontend/F3697-1.json"
 SLIGHT_BLUR = np.asarray([1, 4, 6, 4, 1], dtype=np.float64) / 16
 
 
 class BrukerFrontendReferenceTest(unittest.TestCase):
-    def test_bruker_upload_matches_frontend_float32_input(self):
+    def test_bruker_pdata_matches_frontend_float32_input(self):
         reference = json.loads(FRONTEND_REFERENCE.read_text())
-        source = read_processed_bruker(BRUKER_UPLOAD)
+        source = read_bruker_pdata(BRUKER_PDATA)
         actual = prepare_secs_spectrum(source)
         expected = np.asarray(reference["intensities"], dtype=np.float32)
 

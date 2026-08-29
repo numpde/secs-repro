@@ -6,11 +6,10 @@ import numpy as np
 from secs_inference.spectra.source import SourceSpectrum
 
 
-def read_processed_bruker(upload_directory: str | Path) -> SourceSpectrum:
-    """Read processing number 1 and reconstruct its endpoint-inclusive ppm axis."""
-    processed_directory = Path(upload_directory) / "pdata" / "1"
+def read_bruker_pdata(processed_directory: str | Path) -> SourceSpectrum:
+    """Read one Bruker pdata directory and reconstruct its endpoint-inclusive ppm axis."""
     parameters, intensities = ng.bruker.read_pdata(
-        processed_directory,
+        Path(processed_directory),
         scale_data=True,
     )
     procs = parameters["procs"]
