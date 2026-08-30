@@ -2,7 +2,9 @@ CANDIDATE_SPEC := $(CHECKPOINT_DIRECTORY)/candidates.toml
 CANDIDATE_DIRECTORY := $(CHECKPOINT_DIRECTORY)/candidates
 CANDIDATE_GPU ?= 0
 CANDIDATE_CPUS ?= 8
-CANDIDATE_MEMORY ?= 32g
+# Qualification applies its reserve policy to this same production limit, so
+# the default must stay above the measured full-build projection.
+CANDIDATE_MEMORY ?= 40g
 CANDIDATE_DTYPE ?= bfloat16
 
 .PHONY: candidates
