@@ -76,16 +76,6 @@ help:
 	'      Build, reload, and search fixed nested real-data samples, then retain only' \
 	'      non-production evidence and a bounded full-build resource projection.' \
 	'' \
-	'7. Probe TensorRT without changing production inference' \
-	'  make tensorrt/probe ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz WLAN_INTERFACE=<name>' \
-	'      Stage pinned probe-only dependencies through WLAN, then require full TensorRT' \
-	'      coverage, real-data equivalence, tail correctness, and the necessary' \
-	'      embedding-time budget. This does not qualify the complete candidate build.' \
-	'  make tensorrt/diagnose ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz WLAN_INTERFACE=<name>' \
-	'      After a numerical rejection, compare an endpoint-bound diagnostic graph at' \
-	'      MolFormer layer, pooling, and projection boundaries. Its report is explicitly' \
-	'      non-qualifying and supplies a localization hypothesis, not a causal finding.' \
-	'' \
 	'Dependency maintenance' \
 		'' \
 		'  make checkpoint/manifest' \
@@ -254,5 +244,4 @@ include make/molformer.mk
 include make/tests.mk
 include make/candidates.mk
 include make/candidate-qualification.mk
-include make/tensorrt-probe.mk
 include make/fixtures.mk
