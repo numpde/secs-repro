@@ -84,6 +84,7 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 	builder_name="secs-tensorrt-wheel-builder-$$run_nonce"
 	extractor_name="secs-tensorrt-extractor-$$run_nonce"
 	probe_name="secs-tensorrt-probe-$$run_nonce"
+	container_label="secs-repro.tensorrt-probe.run=$$run_nonce"
 	download_cidfile="$$stage/download.cid"
 	builder_cidfile="$$stage/builder.cid"
 	extractor_cidfile="$$stage/extractor.cid"
@@ -174,32 +175,75 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 	}
 	remove_owned_containers() {
 		cleanup_failed=0
-		for cidfile in "$$download_cidfile" "$$builder_cidfile" "$$extractor_cidfile" "$$probe_cidfile"; do
+		cidfiles=("$$download_cidfile" "$$builder_cidfile" "$$extractor_cidfile" "$$probe_cidfile")
+		container_names=("$$download_name" "$$builder_name" "$$extractor_name" "$$probe_name")
+		for index in "$${!cidfiles[@]}"; do
+			cidfile="$${cidfiles[$$index]}"
+			container_name="$${container_names[$$index]}"
+			container_target=
 			if test -s "$$cidfile"; then
 				container_id=$$(< "$$cidfile")
 				if [[ "$$container_id" =~ ^[0-9a-f]{64}$$ ]]; then
-					removal_status=0
-					removal_output=$$(timeout --signal=TERM --kill-after=2s 5s \
-						$(DOCKER) rm --force "$$container_id" 2>&1) || removal_status=$$?
-					if test "$$removal_status" -ne 0; then
-						case "$$removal_output" in
-							*'No such object'*|*'No such container'*) ;;
-							*)
-								printf 'Could not confirm cleanup of container %s: %s\n' \
-									"$$container_id" "$$removal_output" >&2
-								printf '%s status=%s %s\n' "$$container_id" \
-									"$$removal_status" "$$removal_output" \
-									>> "$$stage/output/cleanup-failed"
-								cleanup_failed=1
-								;;
-						esac
-					fi
+					container_target="$$container_id"
 				else
 					printf 'Malformed container ID in %s: %s\n' "$$cidfile" "$$container_id" >&2
 					printf 'malformed %s %s\n' "$$cidfile" "$$container_id" \
 						>> "$$stage/output/cleanup-failed"
 					cleanup_failed=1
 				fi
+			fi
+			if test -z "$$container_target"; then
+				# Docker may create the named container immediately before an
+				# interrupted client writes its cidfile. The per-run label proves
+				# ownership; resolving the name once to an ID keeps deletion bound
+				# to that object if another container later acquires the name.
+				inspection_status=0
+				inspection=$$(timeout --signal=TERM --kill-after=2s 5s \
+					$(DOCKER) inspect --format \
+					'{{.Id}} {{index .Config.Labels "secs-repro.tensorrt-probe.run"}}' \
+					"$$container_name" 2>&1) || inspection_status=$$?
+				if test "$$inspection_status" -ne 0; then
+					case "$$inspection" in
+						*'No such object'*|*'No such container'*) continue ;;
+						*)
+							printf 'Could not inspect cleanup candidate %s: %s\n' \
+								"$$container_name" "$$inspection" >&2
+							printf 'inspect %s status=%s %s\n' "$$container_name" \
+								"$$inspection_status" "$$inspection" \
+								>> "$$stage/output/cleanup-failed"
+							cleanup_failed=1
+							continue
+							;;
+					esac
+				fi
+				read -r inspected_id owner trailing <<< "$$inspection"
+				if [[ ! "$$inspected_id" =~ ^[0-9a-f]{64}$$ ]] || \
+					test "$$owner" != "$$run_nonce" || test -n "$$trailing" || \
+					test "$$inspected_id $$owner" != "$$inspection"; then
+					printf 'Container %s did not resolve to this run ownership.\n' \
+						"$$container_name" >&2
+					printf 'ownership %s %s\n' "$$container_name" "$$inspection" \
+						>> "$$stage/output/cleanup-failed"
+					cleanup_failed=1
+					continue
+				fi
+				container_target="$$inspected_id"
+			fi
+			removal_status=0
+			removal_output=$$(timeout --signal=TERM --kill-after=2s 5s \
+				$(DOCKER) rm --force "$$container_target" 2>&1) || removal_status=$$?
+			if test "$$removal_status" -ne 0; then
+				case "$$removal_output" in
+					*'No such object'*|*'No such container'*) ;;
+					*)
+						printf 'Could not confirm cleanup of container %s: %s\n' \
+							"$$container_target" "$$removal_output" >&2
+						printf '%s status=%s %s\n' "$$container_target" \
+							"$$removal_status" "$$removal_output" \
+							>> "$$stage/output/cleanup-failed"
+						cleanup_failed=1
+						;;
+				esac
 			fi
 		done
 		if test "$$cleanup_failed" -eq 0; then
@@ -259,7 +303,7 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 	# The networked phase receives only the immutable lock and its downloader.
 	# Downloaded bytes are hash-checked before any downloaded code can run.
 	timeout --signal=TERM --kill-after=30s 30m \
-		$(DOCKER) run --rm --init --name "$$download_name" --pull never \
+		$(DOCKER) run --init --name "$$download_name" --label "$$container_label" --pull never \
 		--cidfile "$$download_cidfile" \
 		--network bridge --read-only --user "$(HOST_UID):$(HOST_GID)" \
 		--cap-drop ALL --security-opt no-new-privileges:true \
@@ -279,7 +323,7 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 	# TensorRT publishes its two meta-packages only as source archives. Build
 	# them after hash admission, without network, model data, or GPU authority.
 	timeout --signal=TERM --kill-after=30s 10m \
-		$(DOCKER) run --rm --init --name "$$builder_name" --pull never \
+		$(DOCKER) run --init --name "$$builder_name" --label "$$container_label" --pull never \
 		--cidfile "$$builder_cidfile" \
 		--network none --read-only --user "$(HOST_UID):$(HOST_GID)" \
 		--cap-drop ALL --security-opt no-new-privileges:true \
@@ -302,6 +346,9 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 	wait "$${active_client_pids[0]}" || builder_status=$$?
 	active_client_pids=()
 	test "$$builder_status" -eq 0 || exit "$$builder_status"
+	probe_install_bytes=$$(python3 -P "$(REPOSITORY_ROOT)/tools/stage_tensorrt_probe.py" \
+		--lock "$(TENSORRT_DOWNLOAD_LOCK)" --output "$$stage/wheelhouse" \
+		--print-required-install-bytes)
 	checkpoint_directory=$$(realpath -e -- "$(CHECKPOINT_DIRECTORY)")
 	cache_directory=$$(realpath -e -- "$(MOLFORMER_CACHE)")
 	frontend_spectrum=$$(realpath -e -- tests/fixtures/frontend/F3697-1.json)
@@ -315,6 +362,23 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 					$(DOCKER) stop --time 3 "$$probe_id" >/dev/null 2>&1 || true
 			fi
 			return 2
+		}
+		read_probe_state() {
+			if ! inspection=$$(timeout --signal=TERM --kill-after=2s 5s \
+				$(DOCKER) inspect --format '{{.State.Running}}' "$$probe_id" 2>&1); then
+				case "$$inspection" in
+					*'No such object'*|*'No such container'*) probe_state=missing ;;
+					*) monitor_failure \
+						"Docker lost probe inspection authority: $$inspection" || return ;;
+				esac
+				return
+			fi
+			case "$$inspection" in
+				true) probe_state=running ;;
+				false) probe_state=stopped ;;
+				*) monitor_failure \
+					"Docker returned a malformed probe running state: $$inspection" || return ;;
+			esac
 		}
 		while :; do
 				if test -z "$$probe_id"; then
@@ -330,30 +394,19 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 				[[ "$$probe_id" =~ ^[0-9a-f]{64}$$ ]] || \
 					monitor_failure 'The probe cidfile did not contain an admitted container ID.' || return
 			fi
-			if ! inspection=$$(timeout --signal=TERM --kill-after=2s 5s \
-				$(DOCKER) inspect "$$probe_id" 2>&1); then
-				case "$$inspection" in
-					*'No such object'*|*'No such container'*)
-						test -e "$$stage/docker-client-finished" && return 0
-						sleep 0.1
-						continue
-						;;
-					*) monitor_failure "Docker lost probe inspection authority: $$inspection" || return ;;
-				esac
+			read_probe_state || return
+			if test "$$probe_state" != running; then
+				test -e "$$stage/docker-client-finished" && return 0
+				sleep 0.1
+				continue
 			fi
 			if ! container_pids=$$(timeout --signal=TERM --kill-after=2s 5s \
 				$(DOCKER) top "$$probe_id" -eo pid | tail -n +2); then
-				if ! inspection=$$(timeout --signal=TERM --kill-after=2s 5s \
-					$(DOCKER) inspect "$$probe_id" 2>&1); then
-					case "$$inspection" in
-						*'No such object'*|*'No such container'*)
-							test -e "$$stage/docker-client-finished" && return 0
-							sleep 0.1
-							continue
-							;;
-						*) monitor_failure \
-							"Docker lost probe inspection authority: $$inspection" || return ;;
-					esac
+				read_probe_state || return
+				if test "$$probe_state" != running; then
+					test -e "$$stage/docker-client-finished" && return 0
+					sleep 0.1
+					continue
 				fi
 				monitor_failure 'Docker could not inspect the probe process set.' || return
 			fi
@@ -379,15 +432,15 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 	mkfifo "$$stage/source.fifo"
 	probe_status=0
 	timeout --signal=TERM --kill-after=60s 4h \
-		$(DOCKER) run --rm --init -i --name "$$probe_name" --pull never \
+		$(DOCKER) run --init -i --name "$$probe_name" --label "$$container_label" --pull never \
 			--cidfile "$$probe_cidfile" \
 			--network none --read-only --cap-drop ALL \
 			--security-opt no-new-privileges:true --pids-limit 512 \
 			--cpus 8 --memory "$${TENSORRT_MEMORY_INPUT}" \
 			--memory-swap "$${TENSORRT_MEMORY_INPUT}" \
 			--gpus "device=$${TENSORRT_GPU_INPUT}" --group-add "$(HOST_GID)" \
-			--tmpfs /probe:rw,exec,nosuid,nodev,size=6g \
-			--tmpfs /tmp:rw,exec,nosuid,nodev,size=2g \
+			--tmpfs /probe:rw,exec,nosuid,nodev,size="$$probe_install_bytes" \
+			--tmpfs /tmp:rw,exec,nosuid,nodev,size="$$probe_install_bytes" \
 			--tmpfs /scratch:rw,noexec,nosuid,nodev,size=8g \
 			--tmpfs /derived-cache:rw,noexec,nosuid,nodev,size=512m \
 			--tmpfs /modules:rw,noexec,nosuid,nodev,size=128m \
@@ -448,7 +501,7 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 	monitor_gpu &
 	monitor_pid=$$!
 	timeout --signal=TERM --kill-after=30s 30m \
-		$(DOCKER) run --rm --init --name "$$extractor_name" --pull never \
+		$(DOCKER) run --init --name "$$extractor_name" --label "$$container_label" --pull never \
 		--cidfile "$$extractor_cidfile" \
 		--network none --read-only --cap-drop ALL \
 		--security-opt no-new-privileges:true --pids-limit 64 \
