@@ -2,7 +2,8 @@ TENSORRT_GPU ?= 0
 TENSORRT_MEMORY ?= 40g
 override TENSORRT_DOWNLOAD_LOCK := $(REPOSITORY_ROOT)/tensorrt-probe.lock.json
 override TENSORRT_OUTPUT_ROOT := $(REPOSITORY_ROOT)/qualification/tensorrt-probe
-override TENSORRT_CANDIDATE_SPEC := $(CHECKPOINT_DIRECTORY)/candidates.toml
+override TENSORRT_CACHE := $(REPOSITORY_ROOT)/cache/tensorrt-probe
+override TENSORRT_CANDIDATE_SPEC := $(abspath $(CHECKPOINT_DIRECTORY)/candidates.toml)
 override TENSORRT_CHECKPOINT_IMAGE_TAG := secs-repro/checkpoint-extractor:local
 
 .PHONY: tensorrt/probe
@@ -24,8 +25,22 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 	@test -z "$$dirty" || { \
 		printf '%s\n%s\n' 'Commit or remove checkout changes before producing TensorRT evidence:' "$$dirty" >&2; exit 2; }
 	@archive=$$(realpath -e -- "$${TENSORRT_ARCHIVE_INPUT}")
+	mkdir -p "$(TENSORRT_CACHE)"
+	download_lock_sha256=$$(sha256sum "$(TENSORRT_DOWNLOAD_LOCK)" | cut -d' ' -f1)
+	download_cache="$(TENSORRT_CACHE)/downloads-$$download_lock_sha256"
+	mkdir -p "$$download_cache"
+	exec 8>"$(TENSORRT_CACHE)/.lock"
+	flock -n 8 || { \
+		printf '%s\n' 'Another TensorRT probe owns the dependency cache.' >&2; exit 2; }
+	required_cache_bytes=$$(python3 -P "$(REPOSITORY_ROOT)/tools/stage_tensorrt_probe.py" \
+		--lock "$(TENSORRT_DOWNLOAD_LOCK)" --output "$$download_cache" \
+		--print-required-cache-bytes)
+	available_cache_bytes=$$(df --output=avail -B1 "$(TENSORRT_CACHE)" | tail -n 1)
+	test "$$available_cache_bytes" -ge "$$required_cache_bytes" || { \
+		printf 'TensorRT caching needs %s free bytes on the cache filesystem; only %s are available.\n' \
+			"$$required_cache_bytes" "$$available_cache_bytes" >&2; exit 2; }
 	required_tmp_bytes=$$(python3 -P "$(REPOSITORY_ROOT)/tools/stage_tensorrt_probe.py" \
-		--lock "$(TENSORRT_DOWNLOAD_LOCK)" --print-required-host-bytes)
+		--lock "$(TENSORRT_DOWNLOAD_LOCK)" --print-required-transient-bytes)
 	available_tmp_bytes=$$(df --output=avail -B1 /tmp | tail -n 1)
 	test "$$available_tmp_bytes" -ge "$$required_tmp_bytes" || { \
 		printf 'TensorRT staging needs %s free bytes under /tmp; only %s are available.\n' \
@@ -233,7 +248,7 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 	trap 'exit 129' HUP
 	trap 'exit 130' INT
 	trap 'exit 143' TERM
-	mkdir "$$stage/downloads" "$$stage/wheelhouse" "$$stage/output"
+	mkdir "$$stage/wheelhouse" "$$stage/output"
 	chmod 2770 "$$stage/output"
 	exec 3>&1 4>&2
 	mkfifo "$$stage/output/run.fifo"
@@ -253,7 +268,7 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 		--tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
 		--mount type=bind,src="$(TENSORRT_DOWNLOAD_LOCK)",dst=/input/lock.json,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/stage_tensorrt_probe.py",dst=/opt/stage.py,readonly \
-		--mount type=bind,src="$$stage/downloads",dst=/output \
+		--mount type=bind,src="$$download_cache",dst=/output \
 		--entrypoint python "$(PYTHON_BASE)" \
 		-P /opt/stage.py --lock /input/lock.json --output /output &
 	active_client_pids=("$$!")
@@ -273,7 +288,7 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 		--tmpfs /tmp:rw,exec,nosuid,nodev,size=512m \
 		--mount type=bind,src="$(TENSORRT_DOWNLOAD_LOCK)",dst=/input/lock.json,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/stage_tensorrt_probe.py",dst=/opt/stage.py,readonly \
-		--mount type=bind,src="$$stage/downloads",dst=/downloads,readonly \
+		--mount type=bind,src="$$download_cache",dst=/downloads,readonly \
 		--mount type=bind,src="$$stage/wheelhouse",dst=/wheelhouse \
 		--entrypoint /bin/sh "$$package_image" -c '\
 			python -P /opt/stage.py --verify-only --lock /input/lock.json --output /downloads && \
@@ -378,7 +393,7 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 			--tmpfs /modules:rw,noexec,nosuid,nodev,size=128m \
 			--env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1 \
 			--env HF_MODULES_CACHE=/modules --env PYTHONDONTWRITEBYTECODE=1 \
-			--mount type=bind,src="$$stage/downloads",dst=/downloads,readonly \
+			--mount type=bind,src="$$download_cache",dst=/downloads,readonly \
 			--mount type=bind,src="$$stage/wheelhouse",dst=/wheelhouse,readonly \
 			--mount type=bind,src="$$checkpoint_directory",dst=/checkpoint,readonly \
 			--mount type=bind,src="$$cache_directory",dst=/base-cache,readonly \
