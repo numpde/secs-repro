@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import urllib.parse
 import urllib.request
+import zipfile
 
 
 READ_BYTES = 1024 * 1024
@@ -110,6 +111,46 @@ def verify(lock: dict, output: Path) -> None:
             )
 
 
+def admitted_wheelhouse_wheels(wheelhouse: Path) -> list[Path]:
+    manifest = wheelhouse / ".complete"
+    if manifest.is_symlink() or not manifest.is_file():
+        raise ValueError("The wheelhouse manifest is not a regular owned file.")
+    entries: list[tuple[str, str]] = []
+    for line in manifest.read_text().splitlines():
+        digest, separator, name = line.partition("  ")
+        if (
+            separator != "  "
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            or Path(name).name != name
+            or not name.endswith(".whl")
+        ):
+            raise ValueError(f"Malformed wheelhouse manifest entry: {line!r}.")
+        entries.append((name, digest))
+    names = [name for name, _ in entries]
+    if not names or len(names) != len(set(names)):
+        raise ValueError("The wheelhouse manifest must name unique wheel files.")
+    actual_names = {path.name for path in wheelhouse.iterdir() if path.name != ".complete"}
+    if actual_names != set(names):
+        raise ValueError(
+            "The wheelhouse does not exactly match its manifest: "
+            f"found {sorted(actual_names)!r}, expected {sorted(names)!r}."
+        )
+    wheels = []
+    for name, expected_digest in entries:
+        wheel = wheelhouse / name
+        if wheel.is_symlink() or not wheel.is_file():
+            raise ValueError(f"Wheelhouse entry {name} is not a regular owned file.")
+        actual_digest = sha256(wheel)
+        if actual_digest != expected_digest:
+            raise ValueError(
+                f"Wheelhouse entry {name} has SHA-256 {actual_digest}; "
+                f"expected {expected_digest}."
+            )
+        wheels.append(wheel)
+    return wheels
+
+
 def download(lock: dict, output: Path) -> None:
     opener = urllib.request.build_opener(HttpsOnlyRedirectHandler())
     for artifact in lock["artifacts"]:
@@ -186,6 +227,7 @@ def main() -> None:
     mode.add_argument("--verify-only", action="store_true")
     mode.add_argument("--print-required-cache-bytes", action="store_true")
     mode.add_argument("--print-required-transient-bytes", action="store_true")
+    mode.add_argument("--print-required-install-bytes", action="store_true")
     args = parser.parse_args()
     lock = load_lock(args.lock)
     if args.print_required_cache_bytes:
@@ -207,6 +249,20 @@ def main() -> None:
         # The offline wheelhouse temporarily copies the admitted runtime wheels.
         # One GiB covers built meta wheels, reports, logs, and filesystem slack.
         print(sum(artifact["bytes"] for artifact in lock["artifacts"]) + 1024**3)
+        return
+    if args.print_required_install_bytes:
+        if args.output is None:
+            parser.error("--output is required with --print-required-install-bytes")
+        expanded_bytes = 0
+        # The completed wheelhouse, not the download lock, owns pip's complete
+        # install input because it also contains wheels built offline from the
+        # admitted TensorRT source archives.
+        for wheel_path in admitted_wheelhouse_wheels(args.output):
+            with zipfile.ZipFile(wheel_path) as wheel:
+                expanded_bytes += sum(member.file_size for member in wheel.infolist())
+        # pip needs a temporary extraction filesystem and a separate final
+        # target. The caller gives each this measured expansion plus one GiB.
+        print(expanded_bytes + 1024**3)
         return
     if args.output is None:
         parser.error("--output is required unless a required-bytes option is used")
