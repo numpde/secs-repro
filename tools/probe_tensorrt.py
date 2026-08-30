@@ -479,18 +479,31 @@ def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
     # compilation. The generic entry point owns export from a module;
     # dynamo.compile consumes an existing ExportedProgram without retracing it.
     exported = torch.export.export(eager, example)
+    with torch.inference_mode():
+        eager_example = output_tensor(eager(*example))
+        exported_example = output_tensor(exported.module()(*example))
+    exported_example_equal = bool(torch.equal(exported_example, eager_example))
+    require(
+        exported_example_equal,
+        "The exported program differs from the eager compile example.",
+    )
+    require_full_compilation = True
+    # TensorRT otherwise permits TF32-rounded multiplicands in FP32 inner
+    # products, a numerical relaxation the eager graph does not request.
+    disable_tf32 = True
     started = time.perf_counter()
     compiled = torch_tensorrt.dynamo.compile(
         exported,
         arg_inputs=example,
         min_block_size=1,
-        require_full_compilation=True,
+        require_full_compilation=require_full_compilation,
         use_python_runtime=True,
         use_explicit_typing=True,
         # The exported graph already owns production's mixed-precision
         # autocast. Leaving compiler autocast disabled prevents a second,
         # independent policy from rewriting those recorded dtype boundaries.
         enabled_precisions={torch.float32},
+        disable_tf32=disable_tf32,
         cache_built_engines=False,
         reuse_cached_engines=False,
     )
@@ -536,8 +549,10 @@ def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
         "engine_module_type": (
             f"{type(engine_module).__module__}.{type(engine_module).__qualname__}"
         ),
+        "exported_example_bitwise_equal_to_eager": exported_example_equal,
         "compute_nodes": compute_nodes,
-        "require_full_compilation": True,
+        "require_full_compilation": require_full_compilation,
+        "requested_disable_tf32": disable_tf32,
         "graph": graph,
     }
 
