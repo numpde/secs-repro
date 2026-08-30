@@ -8,8 +8,10 @@ batch_rows = 8192
 batch_size = 256
 
 [index]
-factory = "HNSW32,PQ16x8"
 metric = "inner_product"
+hnsw_neighbors = 32
+pq_subquantizers = 16
+pq_bits = 8
 training_rows = 100000
 training_seed = 0
 ef_construction = 256

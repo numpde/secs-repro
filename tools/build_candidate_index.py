@@ -24,6 +24,10 @@ COMPUTE_DTYPE_BY_NAME = {
     "float32": torch.float32,
     "bfloat16": torch.bfloat16,
 }
+FAISS_METRIC_BY_NAME = {
+    "inner_product": faiss.METRIC_INNER_PRODUCT,
+}
+FAISS_METRIC_NAME = {value: name for name, value in FAISS_METRIC_BY_NAME.items()}
 
 
 def arguments() -> argparse.Namespace:
@@ -72,6 +76,65 @@ def normalized_embeddings(inference: SecsInference, smiles: list[str]) -> np.nda
     return embeddings
 
 
+def configured_metric(index_config: dict) -> int:
+    """Resolve the supported metric before model loading or source publication."""
+
+    metric_name = index_config["metric"]
+    try:
+        return FAISS_METRIC_BY_NAME[metric_name]
+    except KeyError as error:
+        raise ValueError(f"Unsupported FAISS metric: {metric_name!r}") from error
+
+
+def configured_index(dimension: int, index_config: dict, metric: int):
+    """Construct the owned HNSW-PQ structure with the configured retrieval metric."""
+
+    # Faiss 1.13.2's generic factory silently constructs HNSW-PQ storage as L2
+    # even when its metric argument requests inner product. The metric-aware
+    # constructor makes the retrieval contract explicit at the owning boundary.
+    index = faiss.IndexHNSWPQ(
+        dimension,
+        index_config["pq_subquantizers"],
+        index_config["hnsw_neighbors"],
+        index_config["pq_bits"],
+        metric,
+    )
+    storage = faiss.downcast_index(index.storage)
+    if type(index) is not faiss.IndexHNSWPQ or type(storage) is not faiss.IndexPQ:
+        raise RuntimeError(
+            f"FAISS constructed {type(index).__name__} with {type(storage).__name__} storage; "
+            "candidate indexing requires IndexHNSWPQ with IndexPQ storage."
+        )
+    index.hnsw.efConstruction = index_config["ef_construction"]
+    index.hnsw.efSearch = index_config["ef_search"]
+    actual_structure = {
+        "metric": index.metric_type,
+        "storage_metric": storage.metric_type,
+        "hnsw_neighbors": index.hnsw.nb_neighbors(1),
+        "hnsw_level_zero_neighbors": index.hnsw.nb_neighbors(0),
+        "pq_subquantizers": storage.pq.M,
+        "pq_bits": storage.pq.nbits,
+        "ef_construction": index.hnsw.efConstruction,
+        "ef_search": index.hnsw.efSearch,
+    }
+    expected_structure = {
+        "metric": metric,
+        "storage_metric": metric,
+        "hnsw_neighbors": index_config["hnsw_neighbors"],
+        "hnsw_level_zero_neighbors": 2 * index_config["hnsw_neighbors"],
+        "pq_subquantizers": index_config["pq_subquantizers"],
+        "pq_bits": index_config["pq_bits"],
+        "ef_construction": index_config["ef_construction"],
+        "ef_search": index_config["ef_search"],
+    }
+    if actual_structure != expected_structure:
+        raise RuntimeError(
+            f"FAISS did not preserve the configured candidate-index structure: "
+            f"got {actual_structure}, expected {expected_structure}."
+        )
+    return index
+
+
 def stratified_training_smiles(
     table: pl.LazyFrame,
     row_count: int,
@@ -111,9 +174,7 @@ def build(args: argparse.Namespace) -> None:
     table_config = candidate_spec["table"]
     embedding_config = candidate_spec["embedding"]
     index_config = candidate_spec["index"]
-    if index_config["metric"] != "inner_product":
-        raise ValueError(f"Unsupported FAISS metric: {index_config['metric']!r}")
-
+    index_metric = configured_metric(index_config)
     inference = SecsInference.load(
         args.checkpoint_manifest,
         molformer_lock=args.molformer_lock,
@@ -166,13 +227,7 @@ def build(args: argparse.Namespace) -> None:
     dimension = training_embeddings.shape[1]
 
     faiss.omp_set_num_threads(args.threads)
-    index = faiss.index_factory(
-        dimension,
-        index_config["factory"],
-        faiss.METRIC_INNER_PRODUCT,
-    )
-    index.hnsw.efConstruction = index_config["ef_construction"]
-    index.hnsw.efSearch = index_config["ef_search"]
+    index = configured_index(dimension, index_config, index_metric)
     index.train(training_embeddings)
     del training_embeddings
 
@@ -191,11 +246,12 @@ def build(args: argparse.Namespace) -> None:
 
     index_path = args.output_directory / "smiles.faiss"
     faiss.write_index(index, str(index_path))
+    index_storage = faiss.downcast_index(index.storage)
     checkpoint_manifest = json.loads(args.checkpoint_manifest.read_text())
     with args.molformer_lock.open("rb") as source:
         molformer_snapshot = tomllib.load(source)["snapshot"]
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "candidate_spec": {
             "checkpoint_file": args.candidate_spec.name,
             "sha256": sha256(args.candidate_spec),
@@ -238,13 +294,16 @@ def build(args: argparse.Namespace) -> None:
             "file": index_path.name,
             "bytes": index_path.stat().st_size,
             "sha256": sha256(index_path),
-            "factory": index_config["factory"],
-            "metric": index_config["metric"],
+            "type": type(index).__name__,
+            "metric": FAISS_METRIC_NAME[index.metric_type],
+            "hnsw_neighbors": index.hnsw.nb_neighbors(1),
+            "pq_subquantizers": index_storage.pq.M,
+            "pq_bits": index_storage.pq.nbits,
             "training_rows": training_row_count,
             "training_seed": index_config["training_seed"],
             "training_selection": "one seeded random row from each equal-width row stratum",
-            "ef_construction": index_config["ef_construction"],
-            "ef_search": index_config["ef_search"],
+            "ef_construction": index.hnsw.efConstruction,
+            "ef_search": index.hnsw.efSearch,
             "threads": args.threads,
             "rows": index.ntotal,
             "faiss_version": faiss.__version__,
