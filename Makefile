@@ -71,6 +71,11 @@ help:
 	'      CANDIDATE_GPU, CANDIDATE_CPUS, and CANDIDATE_MEMORY tune resources.' \
 	'      CANDIDATE_DTYPE selects float32 or bfloat16 forward compute.' \
 	'' \
+	'6. Qualify the candidate builder without publishing a production bundle' \
+	'  make candidates/qualification ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz' \
+	'      Build, reload, and search fixed nested real-data samples, then retain only' \
+	'      non-production evidence and a bounded full-build resource projection.' \
+	'' \
 	'Dependency maintenance' \
 		'' \
 		'  make checkpoint/manifest' \
@@ -238,4 +243,5 @@ include make/packages.mk
 include make/molformer.mk
 include make/tests.mk
 include make/candidates.mk
+include make/candidate-qualification.mk
 include make/fixtures.mk

@@ -1,4 +1,4 @@
-.PHONY: test/integration test/integration/bruker-reference
+.PHONY: test/integration test/integration/bruker-reference test/qualification-tools
 
 test/integration:
 	@if test "$(HOST_UID)" -eq 0; then
@@ -47,3 +47,21 @@ test/integration/bruker-reference:
 		--mount type=bind,src="$$tests_dir",dst=/tests,readonly \
 		--entrypoint python "$$cpu_packages_image" \
 		-m unittest discover -v -s /tests -p test_bruker_reference.py
+
+test/qualification-tools:
+	@if test "$(HOST_UID)" -eq 0; then
+		printf '%s\n' 'Cannot run qualification tool tests as host UID 0.' >&2
+		exit 2
+	fi
+	tests_dir=$$(realpath -e tests/qualification)
+	tools_dir=$$(realpath -e tools)
+	cpu_packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
+	$(DOCKER) run --rm --init --pull never --network none --read-only \
+		--cap-drop ALL --security-opt no-new-privileges:true \
+		--pids-limit 64 --cpus 2 --memory 2g --memory-swap 2g \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m \
+		--env PYTHONPATH=/tools --env PYTHONDONTWRITEBYTECODE=1 \
+		--mount type=bind,src="$$tools_dir",dst=/tools,readonly \
+		--mount type=bind,src="$$tests_dir",dst=/tests,readonly \
+		--entrypoint python "$$cpu_packages_image" \
+		-P -m unittest discover -v -s /tests -p 'test_*.py'
