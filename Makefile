@@ -81,6 +81,10 @@ help:
 	'      Stage pinned probe-only dependencies through WLAN, then require full TensorRT' \
 	'      coverage, real-data equivalence, tail correctness, and the necessary' \
 	'      embedding-time budget. This does not qualify the complete candidate build.' \
+	'  make tensorrt/diagnose ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz WLAN_INTERFACE=<name>' \
+	'      After a numerical rejection, compare an endpoint-bound diagnostic graph at' \
+	'      MolFormer layer, pooling, and projection boundaries. Its report is explicitly' \
+	'      non-qualifying and supplies a localization hypothesis, not a causal finding.' \
 	'' \
 	'Dependency maintenance' \
 		'' \

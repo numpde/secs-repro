@@ -1,16 +1,22 @@
 TENSORRT_GPU ?= 0
 TENSORRT_MEMORY ?= 40g
 override TENSORRT_DOWNLOAD_LOCK := $(REPOSITORY_ROOT)/tensorrt-probe.lock.json
-override TENSORRT_OUTPUT_ROOT := $(REPOSITORY_ROOT)/qualification/tensorrt-probe
+override TENSORRT_OUTPUT_ROOT = $(REPOSITORY_ROOT)/qualification/$(TENSORRT_OUTPUT_DIRECTORY)
 override TENSORRT_CACHE := $(REPOSITORY_ROOT)/cache/tensorrt-probe
 override TENSORRT_CANDIDATE_SPEC := $(abspath $(CHECKPOINT_DIRECTORY)/candidates.toml)
 override TENSORRT_CHECKPOINT_IMAGE_TAG := secs-repro/checkpoint-extractor:local
 
-.PHONY: tensorrt/probe
-tensorrt/probe: private export TENSORRT_ARCHIVE_INPUT := $(if $(filter command line,$(origin ARCHIVE)),$(value ARCHIVE))
-tensorrt/probe: private export TENSORRT_GPU_INPUT := $(value TENSORRT_GPU)
-tensorrt/probe: private export TENSORRT_MEMORY_INPUT := $(value TENSORRT_MEMORY)
-tensorrt/probe: checkpoint/image packages/gpu/image
+.PHONY: tensorrt/probe tensorrt/diagnose
+tensorrt/probe: private override TENSORRT_OUTPUT_DIRECTORY := tensorrt-probe
+tensorrt/probe: private override TENSORRT_REPORT_NAME := receipt.json
+tensorrt/probe: private override TENSORRT_DIAGNOSTIC_ARGUMENT :=
+tensorrt/diagnose: private override TENSORRT_OUTPUT_DIRECTORY := tensorrt-diagnostic
+tensorrt/diagnose: private override TENSORRT_REPORT_NAME := nonqualifying-probe-report.json
+tensorrt/diagnose: private override TENSORRT_DIAGNOSTIC_ARGUMENT := --diagnose-numerics
+tensorrt/probe tensorrt/diagnose: private export TENSORRT_ARCHIVE_INPUT := $(if $(filter command line,$(origin ARCHIVE)),$(value ARCHIVE))
+tensorrt/probe tensorrt/diagnose: private export TENSORRT_GPU_INPUT := $(value TENSORRT_GPU)
+tensorrt/probe tensorrt/diagnose: private export TENSORRT_MEMORY_INPUT := $(value TENSORRT_MEMORY)
+tensorrt/probe tensorrt/diagnose: checkpoint/image packages/gpu/image
 	@test "$$(id -u)" -ne 0 || { \
 		printf '%s\n' 'Run make tensorrt/probe as a non-root host user.' >&2; exit 2; }
 	@test -n "$${SECS_WLAN_INTERFACE_INPUT:-}" || { \
@@ -114,6 +120,7 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 		fi
 		checkout_valid=1
 		if { test -f "$$stage/output/receipt.json" || \
+			test -f "$$stage/output/nonqualifying-probe-report.json" || \
 			test -f "$$stage/output/base-reference.json"; } && \
 			! require_unchanged_checkout; then
 			checkout_valid=0
@@ -142,11 +149,19 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 			printf '%s\n' 'Could not create a private TensorRT publication directory.' >&2
 			return 1
 		fi
-		for artifact in run.log lane.status base-reference.json receipt.json wheelhouse.complete \
+		for artifact in run.log lane.status base-reference.json receipt.json \
+			nonqualifying-probe-report.json wheelhouse.complete \
 			gpu-contaminated gpu-monitor-failed checkout-provenance-failed \
 			cleanup-failed logger-failed; do
-			if { test "$$checkout_valid" -eq 0 || test "$$lane_status" -ne 0; } && \
-				{ test "$$artifact" = receipt.json || test "$$artifact" = base-reference.json; }; then
+			if test "$$checkout_valid" -eq 0 && \
+				{ test "$$artifact" = receipt.json || \
+					test "$$artifact" = base-reference.json || \
+					test "$$artifact" = nonqualifying-probe-report.json; }; then
+				continue
+			fi
+			if test "$$lane_status" -ne 0 && \
+				{ test "$$artifact" = receipt.json || \
+					test "$$artifact" = base-reference.json; }; then
 				continue
 			fi
 			if test -f "$$stage/output/$$artifact"; then
@@ -419,7 +434,7 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 			fi
 			if test -z "$$probe_cgroup"; then
 				candidate_init_pid="$$probe_init_pid"
-				if ! candidate_cgroup=$$(< "/proc/$$candidate_init_pid/cgroup") 2>/dev/null; then
+				if ! candidate_cgroup=$$(command cat -- "/proc/$$candidate_init_pid/cgroup" 2>/dev/null); then
 					read_probe_state || return
 					if test "$$probe_state" != running; then
 						test -e "$$stage/docker-client-finished" && return 0
@@ -446,7 +461,9 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 				monitor_failure 'nvidia-smi failed during GPU isolation monitoring.' || return
 			fi
 			for pid in $$gpu_pids; do
-				if gpu_cgroup=$$(< "/proc/$$pid/cgroup") 2>/dev/null; then
+				[[ "$$pid" =~ ^[1-9][0-9]*$$ ]] || \
+					monitor_failure "nvidia-smi returned an invalid compute PID: $$pid" || return
+				if gpu_cgroup=$$(command cat -- "/proc/$$pid/cgroup" 2>/dev/null); then
 					if test "$$gpu_cgroup" = "$$probe_cgroup"; then
 						owned_gpu_pids[$$pid]=1
 						continue
@@ -523,7 +540,9 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 					--mode base-reference --report /output/base-reference.json && \
 				env HF_HUB_CACHE=/derived-cache/hub HF_MODULES_CACHE=/modules/fixed \
 					python -P /opt/probe.py "$$@" \
-					--mode probe --report /output/receipt.json' \
+					--mode probe \
+					--report /output/$(TENSORRT_REPORT_NAME) \
+					$(TENSORRT_DIAGNOSTIC_ARGUMENT)' \
 			probe \
 				--source /scratch/filtered_pubchem.parquet \
 				--checkpoint-manifest /checkpoint/manifest.json \
@@ -574,6 +593,14 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 	monitor_status=0
 	wait "$$monitor_pid" || monitor_status=$$?
 	monitor_pid=
+	if test "$$monitor_status" -ne 0 && \
+		test ! -e "$$stage/output/gpu-contaminated" && \
+		test ! -e "$$stage/output/gpu-monitor-failed"; then
+		printf 'The GPU monitor exited unexpectedly with status %s.\n' \
+			"$$monitor_status" >&2
+		printf 'monitor_status=%s\n' "$$monitor_status" \
+			> "$$stage/output/gpu-monitor-failed" || true
+	fi
 	if test "$$extractor_status" -ne 0; then
 		probe_status="$$extractor_status"
 	fi
