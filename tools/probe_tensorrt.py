@@ -487,8 +487,9 @@ def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
         require_full_compilation=True,
         use_python_runtime=True,
         use_explicit_typing=True,
-        enable_autocast=True,
-        autocast_low_precision_type=torch.bfloat16,
+        # The exported graph already owns production's mixed-precision
+        # autocast. Leaving compiler autocast disabled prevents a second,
+        # independent policy from rewriting those recorded dtype boundaries.
         enabled_precisions={torch.float32},
         cache_built_engines=False,
         reuse_cached_engines=False,

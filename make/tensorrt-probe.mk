@@ -354,6 +354,8 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 	frontend_spectrum=$$(realpath -e -- tests/fixtures/frontend/F3697-1.json)
 	monitor_gpu() {
 		probe_id=
+		probe_cgroup=
+		declare -A owned_gpu_pids=()
 		monitor_failure() {
 			printf '%s\n' "$$1" >&2
 			touch "$$stage/output/gpu-monitor-failed" || true
@@ -365,7 +367,8 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 		}
 		read_probe_state() {
 			if ! inspection=$$(timeout --signal=TERM --kill-after=2s 5s \
-				$(DOCKER) inspect --format '{{.State.Running}}' "$$probe_id" 2>&1); then
+				$(DOCKER) inspect --format '{{.State.Running}} {{.State.Pid}}' \
+				"$$probe_id" 2>&1); then
 				case "$$inspection" in
 					*'No such object'*|*'No such container'*) probe_state=missing ;;
 					*) monitor_failure \
@@ -373,11 +376,25 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 				esac
 				return
 			fi
-			case "$$inspection" in
-				true) probe_state=running ;;
-				false) probe_state=stopped ;;
+			read -r running init_pid trailing <<< "$$inspection"
+			if test "$$running $$init_pid" != "$$inspection" || test -n "$$trailing"; then
+				monitor_failure \
+					"Docker returned a malformed probe process state: $$inspection" || return
+			fi
+			case "$$running" in
+				true)
+					[[ "$$init_pid" =~ ^[1-9][0-9]*$$ ]] || \
+						monitor_failure "Docker returned an invalid running PID: $$inspection" || return
+					probe_state=running
+					probe_init_pid="$$init_pid"
+					;;
+				false)
+					[[ "$$init_pid" =~ ^[0-9]+$$ ]] || \
+						monitor_failure "Docker returned an invalid stopped PID: $$inspection" || return
+					probe_state=stopped
+					;;
 				*) monitor_failure \
-					"Docker returned a malformed probe running state: $$inspection" || return ;;
+					"Docker returned an invalid probe process state: $$inspection" || return ;;
 			esac
 		}
 		while :; do
@@ -400,29 +417,58 @@ tensorrt/probe: checkpoint/image packages/gpu/image
 				sleep 0.1
 				continue
 			fi
-			if ! container_pids=$$(timeout --signal=TERM --kill-after=2s 5s \
-				$(DOCKER) top "$$probe_id" -eo pid | tail -n +2); then
+			if test -z "$$probe_cgroup"; then
+				candidate_init_pid="$$probe_init_pid"
+				if ! candidate_cgroup=$$(< "/proc/$$candidate_init_pid/cgroup") 2>/dev/null; then
+					read_probe_state || return
+					if test "$$probe_state" != running; then
+						test -e "$$stage/docker-client-finished" && return 0
+						sleep 0.1
+						continue
+					fi
+					monitor_failure 'The probe container cgroup could not be read.' || return
+				fi
 				read_probe_state || return
 				if test "$$probe_state" != running; then
 					test -e "$$stage/docker-client-finished" && return 0
 					sleep 0.1
 					continue
 				fi
-				monitor_failure 'Docker could not inspect the probe process set.' || return
+				test "$$probe_init_pid" = "$$candidate_init_pid" || \
+					monitor_failure 'The probe container init PID changed during cgroup admission.' || return
+				probe_cgroup="$$candidate_cgroup"
 			fi
+			test -n "$$probe_cgroup" || \
+				monitor_failure 'The probe container has an empty cgroup identity.' || return
 			if ! gpu_pids=$$(timeout --signal=TERM --kill-after=2s 5s \
 				nvidia-smi --id="$${TENSORRT_GPU_INPUT}" \
-				--query-compute-apps=pid --format=csv,noheader,nounits); then
+					--query-compute-apps=pid --format=csv,noheader,nounits); then
 				monitor_failure 'nvidia-smi failed during GPU isolation monitoring.' || return
 			fi
 			for pid in $$gpu_pids; do
-				if ! grep -qx "$$pid" <<< "$$container_pids"; then
+				if gpu_cgroup=$$(< "/proc/$$pid/cgroup") 2>/dev/null; then
+					if test "$$gpu_cgroup" = "$$probe_cgroup"; then
+						owned_gpu_pids[$$pid]=1
+						continue
+					fi
 					printf 'Foreign GPU process %s contaminated GPU 0 timing.\n' "$$pid" >&2
 					touch "$$stage/output/gpu-contaminated"
 					timeout --signal=TERM --kill-after=2s 5s \
 						$(DOCKER) stop --time 3 "$$probe_id" >/dev/null 2>&1 || true
 					return 2
 				fi
+				if test -e "/proc/$$pid"; then
+					monitor_failure \
+						"GPU process $$pid exists but its cgroup cannot prove ownership." || return
+				fi
+				# NVIDIA can briefly retain a process after /proc removes it. Only
+				# a PID previously bound to this cgroup is admitted as teardown;
+				# an unknown vanished PID leaves GPU ownership unproved.
+				if test -n "$${owned_gpu_pids[$$pid]:-}"; then
+					continue
+				fi
+				monitor_failure \
+					"GPU process $$pid vanished before its cgroup could prove ownership." || return
 			done
 			sleep 0.1
 		done
