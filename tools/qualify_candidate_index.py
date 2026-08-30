@@ -3,7 +3,7 @@
 
 This tool owns deterministic real-source sampling, serialized-bundle verification,
 and the bounded extrapolation recorded by the qualification lane. The production
-builder remains unchanged and authoritative for table and index construction.
+builder remains authoritative for table and index construction.
 """
 
 from __future__ import annotations
@@ -392,40 +392,36 @@ def gpu_summary(path: Path, started_at: datetime, finished_at: datetime) -> dict
 
 
 def verify_index(index, index_config: dict, expected_dimension: int, expected_rows: int) -> dict:
-    """Compare the reloaded index with the structure owned by the production factory string."""
+    """Compare the reloaded index with the configured HNSW-PQ retrieval contract."""
 
     require_equal("accept a candidate index with a different metric", index_config["metric"], "inner_product")
-    reference = faiss.index_factory(expected_dimension, index_config["factory"], faiss.METRIC_INNER_PRODUCT)
-    if type(index) is not type(reference):
-        raise ValueError(
-            f"Cannot verify candidate index: reloading produced {type(index).__name__}, "
-            f"but the configured factory produces {type(reference).__name__}."
-        )
+    require_equal("accept a candidate index with a different type", type(index), faiss.IndexHNSWPQ)
     require_equal("accept an index with a different dimension", index.d, expected_dimension)
     require_equal("accept an index with a different metric", index.metric_type, faiss.METRIC_INNER_PRODUCT)
     require_equal("accept an untrained index", index.is_trained, True)
     require_equal("accept an index with a different row count", index.ntotal, expected_rows)
     require_equal("accept an index with a different efConstruction", index.hnsw.efConstruction, index_config["ef_construction"])
     require_equal("accept an index with a different efSearch", index.hnsw.efSearch, index_config["ef_search"])
-    require_equal("accept an HNSW index with a different level-zero width", index.hnsw.nb_neighbors(0), reference.hnsw.nb_neighbors(0))
-    require_equal("accept an HNSW index with a different upper-level width", index.hnsw.nb_neighbors(1), reference.hnsw.nb_neighbors(1))
     storage = faiss.downcast_index(index.storage)
-    reference_storage = faiss.downcast_index(reference.storage)
-    if type(storage) is not type(reference_storage):
-        raise ValueError(
-            f"Cannot verify candidate index: reloaded HNSW storage is {type(storage).__name__}, "
-            f"but the configured factory produces {type(reference_storage).__name__}."
-        )
-    require_equal("accept a product quantizer with a different subquantizer count", storage.pq.M, reference_storage.pq.M)
-    require_equal("accept a product quantizer with a different code width", storage.pq.nbits, reference_storage.pq.nbits)
+    require_equal("accept candidate index storage with a different type", type(storage), faiss.IndexPQ)
+    require_equal("accept candidate index storage with a different metric", storage.metric_type, faiss.METRIC_INNER_PRODUCT)
+    require_equal("accept an HNSW index with a different neighbor count", index.hnsw.nb_neighbors(1), index_config["hnsw_neighbors"])
+    require_equal(
+        "accept an HNSW index with a different level-zero neighbor count",
+        index.hnsw.nb_neighbors(0),
+        2 * index_config["hnsw_neighbors"],
+    )
+    require_equal("accept a product quantizer with a different subquantizer count", storage.pq.M, index_config["pq_subquantizers"])
+    require_equal("accept a product quantizer with a different code width", storage.pq.nbits, index_config["pq_bits"])
     return {
         "type": type(index).__name__,
         "dimension": index.d,
         "rows": index.ntotal,
         "metric": "inner_product",
+        "hnsw_neighbors": index.hnsw.nb_neighbors(1),
+        "hnsw_level_zero_neighbors": index.hnsw.nb_neighbors(0),
         "pq_subquantizers": storage.pq.M,
         "pq_bits": storage.pq.nbits,
-        "hnsw_neighbors": index.hnsw.nb_neighbors(1),
         "ef_construction": index.hnsw.efConstruction,
         "ef_search": index.hnsw.efSearch,
     }
@@ -507,7 +503,7 @@ def verify_profile(args: argparse.Namespace) -> None:
     index_config = candidate_spec["index"]
     builder_manifest_path = args.bundle / "manifest.json"
     builder_manifest = read_json(builder_manifest_path)
-    require_equal("accept a builder manifest with a different schema", builder_manifest["schema_version"], 1)
+    require_equal("accept a builder manifest with a different schema", builder_manifest["schema_version"], 2)
     require_equal("accept a builder manifest from a different builder", builder_manifest["builder_sha256"], sha256(args.builder))
     require_equal("accept a builder manifest from a different package image", builder_manifest["package_image_id"], args.package_image_id)
     require_equal("accept a builder manifest with a different candidate spec", builder_manifest["candidate_spec"]["sha256"], sha256(args.candidate_spec))
@@ -519,15 +515,10 @@ def verify_profile(args: argparse.Namespace) -> None:
     require_equal("accept a builder manifest with a different compute dtype", builder_manifest["embedding"]["compute_dtype"], args.compute_dtype)
     require_equal("accept a builder manifest with a different storage dtype", builder_manifest["embedding"]["storage_dtype"], "float32")
     require_equal("accept a builder manifest with a different normalization", builder_manifest["embedding"]["normalization"], "l2")
-    require_equal("accept a builder manifest with a different index factory", builder_manifest["index"]["factory"], index_config["factory"])
-    require_equal("accept a builder manifest with a different metric", builder_manifest["index"]["metric"], index_config["metric"])
     require_equal("accept a builder manifest with a different training row count", builder_manifest["index"]["training_rows"], min(index_config["training_rows"], profile_rows))
     require_equal("accept a builder manifest with a different training seed", builder_manifest["index"]["training_seed"], index_config["training_seed"])
-    require_equal("accept a builder manifest with a different efConstruction", builder_manifest["index"]["ef_construction"], index_config["ef_construction"])
-    require_equal("accept a builder manifest with a different efSearch", builder_manifest["index"]["ef_search"], index_config["ef_search"])
     require_equal("accept a builder manifest with a different thread count", builder_manifest["index"]["threads"], args.threads)
     require_equal("accept a builder manifest with a different table row count", builder_manifest["table"]["rows"], profile_rows)
-    require_equal("accept a builder manifest with a different index row count", builder_manifest["index"]["rows"], profile_rows)
 
     checkpoint_manifest = read_json(args.checkpoint_manifest)
     require_equal("accept a builder manifest from a different checkpoint receipt", builder_manifest["checkpoint"]["manifest_sha256"], sha256(args.checkpoint_manifest))
@@ -553,6 +544,21 @@ def verify_profile(args: argparse.Namespace) -> None:
 
     reloaded_index = faiss.read_index(str(index_path))
     index_receipt = verify_index(reloaded_index, index_config, expected_dimension, profile_rows)
+    for fact in (
+        "type",
+        "metric",
+        "hnsw_neighbors",
+        "pq_subquantizers",
+        "pq_bits",
+        "ef_construction",
+        "ef_search",
+        "rows",
+    ):
+        require_equal(
+            f"accept a builder manifest that misstates the serialized index {fact}",
+            builder_manifest["index"][fact],
+            index_receipt[fact],
+        )
     search_receipt = verify_search(
         reloaded_index,
         table_path,
