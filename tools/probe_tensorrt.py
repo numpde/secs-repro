@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import nullcontext
+import gc
 import hashlib
 import importlib.metadata
 import json
@@ -34,6 +35,12 @@ PERFORMANCE_SAFETY_FACTOR = 1.1
 MIN_ROW_COSINE = 0.99999
 MAX_NORMALIZED_L2 = 0.005
 MAX_SCORE_DELTA = 0.0001
+NUMERICS_BOUNDARIES = (
+    "projection_layer_normalization",
+    "masked_average_pool",
+    "final_layer_normalization",
+    "last_encoder_layer",
+)
 
 
 def sha256(path: Path) -> str:
@@ -47,6 +54,14 @@ def sha256(path: Path) -> str:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+def exact_tensor_equal(first: torch.Tensor, second: torch.Tensor) -> bool:
+    if first.shape != second.shape or first.dtype != second.dtype:
+        return False
+    first_bytes = first.detach().reshape(-1).contiguous().view(torch.uint8).cpu()
+    second_bytes = second.detach().reshape(-1).contiguous().view(torch.uint8).cpu()
+    return bool(torch.equal(first_bytes, second_bytes))
 
 
 def arguments() -> argparse.Namespace:
@@ -217,9 +232,14 @@ class SmilesPath(nn.Module):
 
 
 class SmilesNumericsPath(nn.Module):
-    """Expose the model's real numerical boundaries without changing their order."""
+    """Expose one natural boundary alongside the unchanged final projection."""
 
-    def __init__(self, model: nn.Module, compute_dtype: torch.dtype) -> None:
+    def __init__(
+        self,
+        model: nn.Module,
+        compute_dtype: torch.dtype,
+        boundary: str | None,
+    ) -> None:
         super().__init__()
         self.backbone = model.dict_encoders["smiles"].encoder
         projection = model.dict_projection_heads["smiles"].projection_head
@@ -232,40 +252,46 @@ class SmilesNumericsPath(nn.Module):
         self.projection_normalization = projection[0]
         self.projection = projection[1]
         self.compute_dtype = compute_dtype
+        self.boundary = boundary
 
     def forward(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, ...]:
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         context = (
             torch.autocast(device_type="cuda", dtype=self.compute_dtype)
             if self.compute_dtype != torch.float32
             else nullcontext()
         )
         with context:
-            # output_hidden_states is the model's supported observation
-            # contract. It exposes the embedding and each encoder result while
-            # leaving the layer computations and their order unchanged.
+            needs_last_encoder_layer = self.boundary == "last_encoder_layer"
             backbone_outputs = self.backbone(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 output_attentions=False,
-                output_hidden_states=True,
+                output_hidden_states=needs_last_encoder_layer,
                 return_dict=False,
             )
             final_layer_normalization = backbone_outputs[0]
             pooled = backbone_outputs[1]
-            hidden_states = backbone_outputs[2]
             projection_normalization = self.projection_normalization(pooled)
             projected = self.projection(projection_normalization)
-        return (
-            *hidden_states,
-            final_layer_normalization,
-            pooled,
-            projection_normalization,
-            projected,
-        )
+            if self.boundary is None:
+                return projected
+            if self.boundary == "projection_layer_normalization":
+                boundary_output = projection_normalization
+            elif self.boundary == "masked_average_pool":
+                boundary_output = pooled
+            elif self.boundary == "final_layer_normalization":
+                boundary_output = final_layer_normalization
+            elif self.boundary == "last_encoder_layer":
+                boundary_output = backbone_outputs[2][-1]
+            else:
+                raise RuntimeError(
+                    f"Unsupported numerical diagnostic boundary: {self.boundary!r}."
+                )
+        return boundary_output, projected
 
 
 def tokenize(inference: SecsInference, smiles: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -551,7 +577,7 @@ def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
         eager_example = output_tensors(eager(*example))
         exported_example = output_tensors(exported.module()(*example))
     exported_example_equal = len(exported_example) == len(eager_example) and all(
-        torch.equal(exported_tensor, eager_tensor)
+        exact_tensor_equal(exported_tensor, eager_tensor)
         for exported_tensor, eager_tensor in zip(
             exported_example,
             eager_example,
@@ -633,6 +659,33 @@ def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
         "require_full_compilation": require_full_compilation,
         "requested_disable_tf32": disable_tf32,
         "graph": graph,
+    }, engine_module
+
+
+def unchanged_engine_layer_information(engine_module: nn.Module) -> dict:
+    raw_information = engine_module.get_layer_info()
+    try:
+        information = json.loads(raw_information)
+    except json.JSONDecodeError:
+        information = raw_information
+    serialized_engine = engine_module.serialized_engine
+    require(
+        isinstance(serialized_engine, (bytes, bytearray)),
+        "The rejected TensorRT engine does not expose its serialized identity.",
+    )
+    return {
+        "serialized_engine_sha256": hashlib.sha256(serialized_engine).hexdigest(),
+        "profiling_verbosity": str(engine_module.engine.profiling_verbosity),
+        "layers": int(engine_module.engine.num_layers),
+        "io_tensors": int(engine_module.engine.num_io_tensors),
+        "layer_information_sha256": hashlib.sha256(
+            raw_information.encode()
+        ).hexdigest(),
+        "layer_information": information,
+        "limitation": (
+            "This is read-only implementation metadata from the rejected engine. "
+            "It does not expose activation values or identify a numerical cause."
+        ),
     }
 
 
@@ -654,7 +707,7 @@ def tensor_difference(eager: torch.Tensor, accelerated: torch.Tensor) -> dict:
         "shape": list(eager.shape),
         "eager_dtype": str(eager.dtype),
         "tensorrt_dtype": str(accelerated.dtype),
-        "bitwise_equal": bool(torch.equal(eager, accelerated)),
+        "bitwise_equal": exact_tensor_equal(eager, accelerated),
         "finite": bool(
             torch.isfinite(eager_float).all()
             and torch.isfinite(accelerated_float).all()
@@ -677,111 +730,205 @@ def tensor_difference(eager: torch.Tensor, accelerated: torch.Tensor) -> dict:
 
 
 @torch.inference_mode()
+def run_numerics_variant(
+    eager: nn.Module,
+    compile_example: tuple[torch.Tensor, torch.Tensor],
+    selected_example: tuple[torch.Tensor, torch.Tensor],
+    original_eager: torch.Tensor,
+    original_accelerated: torch.Tensor,
+    boundary: str | None,
+) -> tuple[dict, torch.Tensor | None, torch.Tensor | None]:
+    result = {"boundary": boundary or "final_only_control", "status": "running"}
+    diagnostic_eager = SmilesNumericsPath(
+        eager.model,
+        eager.compute_dtype,
+        boundary,
+    ).eval()
+    eager_outputs = tuple(
+        tensor.detach().cpu()
+        for tensor in output_tensors(diagnostic_eager(*selected_example))
+    )
+    expected_outputs = 1 if boundary is None else 2
+    require(
+        len(eager_outputs) == expected_outputs,
+        f"The {result['boundary']} eager diagnostic returned {len(eager_outputs)} tensors.",
+    )
+    eager_final_equal = exact_tensor_equal(eager_outputs[-1].float(), original_eager)
+    result["eager_final_bitwise_equal_to_qualification_path"] = eager_final_equal
+    if not eager_final_equal:
+        result["endpoint_binding_passed"] = False
+        result["status"] = "endpoint_changed"
+        result["reason"] = (
+            "The diagnostic wrapper did not reproduce the eager qualification endpoint."
+        )
+        return result, None, None
+
+    print(f"Compiling numerical diagnostic: {result['boundary']}.", flush=True)
+    torch.cuda.empty_cache()
+    diagnostic_accelerated = None
+    engine_module = None
+    try:
+        diagnostic_accelerated, result["compilation"], engine_module = compile_path(
+            diagnostic_eager,
+            compile_example,
+        )
+        accelerated_outputs = tuple(
+            tensor.detach().cpu()
+            for tensor in output_tensors(diagnostic_accelerated(*selected_example))
+        )
+        require(
+            len(accelerated_outputs) == len(eager_outputs),
+            "The diagnostic engine returned the wrong number of tensors.",
+        )
+    finally:
+        diagnostic_accelerated = None
+        engine_module = None
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    accelerated_final = accelerated_outputs[-1].float()
+    accelerated_final_equal = exact_tensor_equal(
+        accelerated_final,
+        original_accelerated,
+    )
+    result["tensorrt_final_bitwise_equal_to_qualification_path"] = (
+        accelerated_final_equal
+    )
+    result["tensorrt_endpoint_sha256"] = tensor_sha256(accelerated_final)
+    result["tensorrt_endpoint_difference"] = tensor_difference(
+        original_accelerated,
+        accelerated_final,
+    )
+    # Adding an output can change TensorRT fusion or tactics. Exact endpoint
+    # equality admits a localization hypothesis; it does not prove that this
+    # rebuilt engine shares the rejected engine's unobserved internal values.
+    if not accelerated_final_equal:
+        result["endpoint_binding_passed"] = False
+        result["status"] = "endpoint_changed"
+        result["reason"] = (
+            "This rebuilt graph did not reproduce the rejected TensorRT endpoint."
+        )
+        return result, None, None
+
+    result["endpoint_binding_passed"] = True
+    result["status"] = "usable"
+    if boundary is None:
+        return result, None, None
+    return result, eager_outputs[0], accelerated_outputs[0]
+
+
+@torch.inference_mode()
 def diagnose_numerics(
     eager: nn.Module,
-    example: tuple[torch.Tensor, torch.Tensor],
+    compile_example: tuple[torch.Tensor, torch.Tensor],
+    selected_example: tuple[torch.Tensor, torch.Tensor],
     original_eager: torch.Tensor,
     original_accelerated: torch.Tensor,
     selected_row_within_batch: int,
     report: dict,
 ) -> None:
-    diagnostic_eager = SmilesNumericsPath(eager.model, eager.compute_dtype).eval()
-    eager_outputs = tuple(
-        tensor.detach().cpu() for tensor in output_tensors(diagnostic_eager(*example))
-    )
-    eager_final_equal = bool(torch.equal(eager_outputs[-1].float(), original_eager))
-    report["eager_final_bitwise_equal_to_qualification_path"] = eager_final_equal
-    if not eager_final_equal:
-        report["endpoint_binding_passed"] = False
-        report["usable_as_localization_hypothesis"] = False
-        report["status"] = "inconclusive"
-        report["reason"] = (
-            "The diagnostic wrapper did not reproduce the eager qualification endpoint."
+    try:
+        final_control, _, _ = run_numerics_variant(
+            eager,
+            compile_example,
+            selected_example,
+            original_eager,
+            original_accelerated,
+            None,
         )
-        return
-
-    print("Compiling the endpoint-bound numerical diagnostic graph.", flush=True)
-    torch.cuda.empty_cache()
-    diagnostic_accelerated, report["compilation"] = compile_path(
-        diagnostic_eager,
-        example,
-    )
-    accelerated_outputs = tuple(
-        tensor.detach().cpu()
-        for tensor in output_tensors(diagnostic_accelerated(*example))
-    )
-    require(
-        len(accelerated_outputs) == len(eager_outputs),
-        "The diagnostic engine returned the wrong number of boundary tensors.",
-    )
-    accelerated_final_equal = bool(
-        torch.equal(accelerated_outputs[-1].float(), original_accelerated)
-    )
-    report["tensorrt_final_bitwise_equal_to_qualification_path"] = (
-        accelerated_final_equal
-    )
-    # Exposing an intermediate as an engine output can change TensorRT fusion
-    # or tactics. Endpoint equality is required before these tensors can form a
-    # localization hypothesis, but it does not prove identical engine internals.
-    if not accelerated_final_equal:
-        report["endpoint_binding_passed"] = False
-        report["usable_as_localization_hypothesis"] = False
-        report["status"] = "inconclusive"
-        report["reason"] = (
-            "The diagnostic graph did not reproduce the rejected TensorRT endpoint, "
-            "so its intermediate tensors are not comparable."
-        )
-        return
-
-    encoder_layers = len(diagnostic_eager.backbone.encoder.layer)
-    boundary_names = (
-        ["embedding"]
-        + [f"encoder_layer_{index}" for index in range(1, encoder_layers + 1)]
-        + [
-            "final_layer_normalization",
-            "masked_average_pool",
-            "projection_layer_normalization",
-            "projection",
-        ]
-    )
-    require(
-        len(boundary_names) == len(eager_outputs),
-        "The diagnostic boundary names do not match the model outputs.",
-    )
-    report["boundaries"] = [
-        {
-            "name": name,
-            "whole_qualification_sample_batch": tensor_difference(
-                eager_output,
-                accelerated_output,
-            ),
-            "selected_sample_row": tensor_difference(
-                eager_output[selected_row_within_batch],
-                accelerated_output[selected_row_within_batch],
-            ),
+    except Exception as error:
+        final_control = {
+            "boundary": "final_only_control",
+            "status": "failed",
+            "failure": {
+                "type": type(error).__name__,
+                "message": str(error),
+            },
         }
-        for name, eager_output, accelerated_output in zip(
-            boundary_names,
-            eager_outputs,
-            accelerated_outputs,
-            strict=True,
+    report["final_only_control"] = final_control
+    if final_control["status"] != "usable":
+        report["status"] = "inconclusive"
+        report["usable_as_localization_hypothesis"] = False
+        report["reason"] = {
+            "endpoint_changed": (
+                "The direct diagnostic wrapper changed an endpoint before any boundary was exposed."
+            ),
+            "failed": "The final-only diagnostic control could not be executed.",
+        }.get(
+            final_control["status"],
+            "The final-only diagnostic control was not usable.",
         )
-    ]
-    report["earliest_observed_bitwise_divergence"] = next(
-        (
-            boundary["name"]
-            for boundary in report["boundaries"]
-            if not boundary["whole_qualification_sample_batch"]["bitwise_equal"]
-        ),
-        None,
-    )
-    report["endpoint_binding_passed"] = True
-    report["usable_as_localization_hypothesis"] = True
-    report["status"] = "completed"
+        return
+
+    report["boundary_probes"] = []
+    nearest_divergent_downstream_boundary = "projection"
+    for boundary in NUMERICS_BOUNDARIES:
+        try:
+            probe, eager_boundary, accelerated_boundary = run_numerics_variant(
+                eager,
+                compile_example,
+                selected_example,
+                original_eager,
+                original_accelerated,
+                boundary,
+            )
+        except Exception as error:
+            probe = {
+                "boundary": boundary,
+                "status": "failed",
+                "failure": {
+                    "type": type(error).__name__,
+                    "message": str(error),
+                },
+            }
+            eager_boundary = None
+            accelerated_boundary = None
+        report["boundary_probes"].append(probe)
+        if probe["status"] != "usable":
+            report["status"] = "blocked_at_boundary"
+            report["blocked_boundary"] = boundary
+            report["usable_as_localization_hypothesis"] = False
+            return
+        require(
+            eager_boundary is not None and accelerated_boundary is not None,
+            f"The usable {boundary} probe did not return its boundary tensors.",
+        )
+        probe["whole_qualification_sample_batch"] = tensor_difference(
+            eager_boundary,
+            accelerated_boundary,
+        )
+        probe["selected_sample_row"] = tensor_difference(
+            eager_boundary[selected_row_within_batch],
+            accelerated_boundary[selected_row_within_batch],
+        )
+        if probe["selected_sample_row"]["bitwise_equal"]:
+            report["status"] = "completed"
+            report["nearest_equal_upstream_boundary_for_selected_sample_row"] = (
+                boundary
+            )
+            report[
+                "nearest_observed_divergent_downstream_boundary_for_selected_sample_row"
+            ] = (
+                nearest_divergent_downstream_boundary
+            )
+            report["usable_as_localization_hypothesis"] = True
+            break
+        nearest_divergent_downstream_boundary = boundary
+    else:
+        report["status"] = "no_equal_boundary_for_selected_row_within_bound"
+        report["usable_as_localization_hypothesis"] = True
+        report["interpretation"] = (
+            "The selected row differed as far upstream as the last bounded probe. "
+            "Each result still comes from a separate endpoint-equivalent graph, not "
+            "from observing the rejected engine's internal values."
+        )
+        return
+
     report["interpretation"] = (
-        "This endpoint-equivalent diagnostic graph supplies a localization hypothesis. "
-        "Its earliest observed divergence is not proof of the rejected engine's "
-        "internal values or of a causal faulty layer."
+        "Each admitted boundary comes from a separate endpoint-equivalent graph. "
+        "For the selected worst sample row, the nearest equal upstream boundary "
+        "narrows a downstream reproducer; it does not prove the rejected engine's "
+        "internal values or identify a causal layer."
     )
 
 
@@ -922,7 +1069,10 @@ def run_probe(args: argparse.Namespace, report: dict) -> None:
         np.array_equal(wrapper_eager, production_eager),
         "The compile wrapper differs from SecsInference.embed_smiles.",
     )
-    accelerated, report["compilation"] = compile_path(eager, batches[0])
+    accelerated, report["compilation"], rejected_engine_module = compile_path(
+        eager,
+        batches[0],
+    )
     accelerated_reference = run_tokens(accelerated, batches)
     report["output"] = {
         "shape": list(accelerated_reference.shape),
@@ -968,17 +1118,49 @@ def run_probe(args: argparse.Namespace, report: dict) -> None:
         original_accelerated = torch.from_numpy(
             accelerated_reference[batch_start:batch_end].copy()
         )
+        require(
+            not exact_tensor_equal(
+                original_eager[row_within_batch],
+                original_accelerated[row_within_batch],
+            ),
+            "The selected worst row has no bitwise TensorRT endpoint divergence.",
+        )
         report["numerics_diagnostic"]["endpoint_binding"] = {
             "eager_sha256": tensor_sha256(original_eager),
             "rejected_tensorrt_sha256": tensor_sha256(original_accelerated),
         }
-        # The diagnostic graph needs the GPU memory owned by the rejected
-        # engine, but only its selected endpoint is needed to bind the result.
-        del accelerated
-        torch.cuda.empty_cache()
         try:
+            report["numerics_diagnostic"]["unchanged_engine_layer_information"] = (
+                unchanged_engine_layer_information(rejected_engine_module)
+            )
+            repeated_accelerated = output_tensor(accelerated(*example)).float().cpu()
+            repeatable = exact_tensor_equal(
+                repeated_accelerated,
+                original_accelerated,
+            )
+            report["numerics_diagnostic"]["rejected_engine_repeatability"] = {
+                "bitwise_equal_to_rejected_sample_slice": repeatable,
+                "repeated_sha256": tensor_sha256(repeated_accelerated),
+            }
+            # Subsequent graphs need the GPU memory owned by this engine. Its
+            # exact selected endpoint and read-only layer map are now retained.
+            del rejected_engine_module, accelerated
+            gc.collect()
+            torch.cuda.empty_cache()
+            if not repeatable:
+                report["numerics_diagnostic"]["status"] = "inconclusive"
+                report["numerics_diagnostic"][
+                    "usable_as_localization_hypothesis"
+                ] = False
+                report["numerics_diagnostic"]["reason"] = (
+                    "The rejected TensorRT engine did not repeat its selected endpoint."
+                )
+                raise RuntimeError(
+                    "TensorRT failed numerical qualification and its rejected endpoint was not repeatable."
+                )
             diagnose_numerics(
                 eager,
+                batches[0],
                 example,
                 original_eager,
                 original_accelerated,
@@ -987,8 +1169,8 @@ def run_probe(args: argparse.Namespace, report: dict) -> None:
             )
         except BaseException as error:
             diagnostic_report = report["numerics_diagnostic"]
-            diagnostic_report["status"] = "failed"
-            diagnostic_report.setdefault("endpoint_binding_passed", False)
+            if diagnostic_report["status"] == "running":
+                diagnostic_report["status"] = "failed"
             diagnostic_report["usable_as_localization_hypothesis"] = False
             diagnostic_report["failure"] = {
                 "type": type(error).__name__,
