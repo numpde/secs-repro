@@ -473,12 +473,15 @@ def loaded_native_libraries() -> list[dict]:
 
 def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
     import torch_tensorrt
+    from torch_tensorrt.dynamo.runtime import PythonTorchTensorRTModule
 
+    # Export once here so this program is the sole graph authority for
+    # compilation. The generic entry point owns export from a module;
+    # dynamo.compile consumes an existing ExportedProgram without retracing it.
     exported = torch.export.export(eager, example)
     started = time.perf_counter()
-    compiled = torch_tensorrt.compile(
+    compiled = torch_tensorrt.dynamo.compile(
         exported,
-        ir="dynamo",
         arg_inputs=example,
         min_block_size=1,
         require_full_compilation=True,
@@ -489,7 +492,6 @@ def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
         enabled_precisions={torch.float32},
         cache_built_engines=False,
         reuse_cached_engines=False,
-        pass_through_build_failures=True,
     )
     graph = str(compiled.graph)
     compute_node_objects = [
@@ -497,14 +499,22 @@ def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
         for node in compiled.graph.nodes
         if node.op in {"call_function", "call_module", "call_method"}
     ]
-    engine_node_objects = [
-        node for node in compute_node_objects if "execute_engine" in str(node.target)
-    ]
+    # Dynamo returns an outer dispatch graph whose accelerated child owns the
+    # TensorRT engine. Resolve the child instead of assuming the outer graph
+    # exposes the runtime's internal execute_engine implementation.
+    engine_node_objects = []
+    for node in compute_node_objects:
+        if node.op != "call_module":
+            continue
+        module = compiled.get_submodule(str(node.target))
+        if isinstance(module, PythonTorchTensorRTModule):
+            engine_node_objects.append(node)
     require(
         len(engine_node_objects) == 1,
         f"Expected one full-model TensorRT engine, got {compute_node_objects!r}.",
     )
     engine_node = engine_node_objects[0]
+    engine_module = compiled.get_submodule(str(engine_node.target))
     allowed_getitems = [
         node
         for node in compute_node_objects
@@ -522,9 +532,11 @@ def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
     return compiled, {
         "seconds": time.perf_counter() - started,
         "engine_nodes": len(engine_node_objects),
+        "engine_module_type": (
+            f"{type(engine_module).__module__}.{type(engine_module).__qualname__}"
+        ),
         "compute_nodes": compute_nodes,
         "require_full_compilation": True,
-        "pass_through_build_failures": True,
         "graph": graph,
     }
 
