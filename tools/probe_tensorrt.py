@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify one fixed-shape TensorRT path without changing production inference."""
+"""Qualify or diagnose one fixed-shape TensorRT path outside production inference."""
 
 from __future__ import annotations
 
@@ -52,6 +52,7 @@ def require(condition: bool, message: str) -> None:
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("base-reference", "probe"), required=True)
+    parser.add_argument("--diagnose-numerics", action="store_true")
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--checkpoint-manifest", type=Path, required=True)
     parser.add_argument("--candidate-spec", type=Path, required=True)
@@ -215,6 +216,58 @@ class SmilesPath(nn.Module):
             )
 
 
+class SmilesNumericsPath(nn.Module):
+    """Expose the model's real numerical boundaries without changing their order."""
+
+    def __init__(self, model: nn.Module, compute_dtype: torch.dtype) -> None:
+        super().__init__()
+        self.backbone = model.dict_encoders["smiles"].encoder
+        projection = model.dict_projection_heads["smiles"].projection_head
+        require(
+            len(projection) == 2
+            and isinstance(projection[0], nn.LayerNorm)
+            and isinstance(projection[1], nn.Linear),
+            f"The diagnostic does not understand this projection head: {projection!r}.",
+        )
+        self.projection_normalization = projection[0]
+        self.projection = projection[1]
+        self.compute_dtype = compute_dtype
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, ...]:
+        context = (
+            torch.autocast(device_type="cuda", dtype=self.compute_dtype)
+            if self.compute_dtype != torch.float32
+            else nullcontext()
+        )
+        with context:
+            # output_hidden_states is the model's supported observation
+            # contract. It exposes the embedding and each encoder result while
+            # leaving the layer computations and their order unchanged.
+            backbone_outputs = self.backbone(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_attentions=False,
+                output_hidden_states=True,
+                return_dict=False,
+            )
+            final_layer_normalization = backbone_outputs[0]
+            pooled = backbone_outputs[1]
+            hidden_states = backbone_outputs[2]
+            projection_normalization = self.projection_normalization(pooled)
+            projected = self.projection(projection_normalization)
+        return (
+            *hidden_states,
+            final_layer_normalization,
+            pooled,
+            projection_normalization,
+            projected,
+        )
+
+
 def tokenize(inference: SecsInference, smiles: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
     """Apply the exact tokenizer contract owned by the loaded production boundary."""
 
@@ -236,6 +289,20 @@ def output_tensor(output) -> torch.Tensor:
         return output
     require(isinstance(output, (tuple, list)) and len(output) == 1, f"Unexpected model output: {type(output)!r}.")
     return output[0]
+
+
+def output_tensors(output) -> tuple[torch.Tensor, ...]:
+    if isinstance(output, torch.Tensor):
+        return (output,)
+    require(isinstance(output, (tuple, list)), f"Unexpected model output: {type(output)!r}.")
+    tensors = tuple(tensor for item in output for tensor in output_tensors(item))
+    require(tensors, "The model returned no tensors.")
+    return tensors
+
+
+def tensor_sha256(tensor: torch.Tensor) -> str:
+    contiguous = tensor.detach().cpu().contiguous()
+    return hashlib.sha256(contiguous.numpy().tobytes()).hexdigest()
 
 
 @torch.inference_mode()
@@ -267,6 +334,7 @@ def correctness(
     result = {
         "minimum_row_cosine": float(row_cosines.min()),
         "maximum_normalized_l2": float(normalized_l2.max()),
+        "maximum_normalized_l2_row": int(np.argmax(normalized_l2)),
         "maximum_score_delta": float(np.max(np.abs(eager_scores - accelerated_scores))),
         "top_10_order_equal": bool(np.array_equal(eager_order[:10], accelerated_order[:10])),
         "top_100_membership_equal": bool(
@@ -480,13 +548,23 @@ def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
     # dynamo.compile consumes an existing ExportedProgram without retracing it.
     exported = torch.export.export(eager, example)
     with torch.inference_mode():
-        eager_example = output_tensor(eager(*example))
-        exported_example = output_tensor(exported.module()(*example))
-    exported_example_equal = bool(torch.equal(exported_example, eager_example))
+        eager_example = output_tensors(eager(*example))
+        exported_example = output_tensors(exported.module()(*example))
+    exported_example_equal = len(exported_example) == len(eager_example) and all(
+        torch.equal(exported_tensor, eager_tensor)
+        for exported_tensor, eager_tensor in zip(
+            exported_example,
+            eager_example,
+            strict=True,
+        )
+    )
     require(
         exported_example_equal,
         "The exported program differs from the eager compile example.",
     )
+    output_tensor_count = len(eager_example)
+    del eager_example, exported_example
+    torch.cuda.empty_cache()
     require_full_compilation = True
     # TensorRT otherwise permits TF32-rounded multiplicands in FP32 inner
     # products, a numerical relaxation the eager graph does not request.
@@ -550,11 +628,161 @@ def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
             f"{type(engine_module).__module__}.{type(engine_module).__qualname__}"
         ),
         "exported_example_bitwise_equal_to_eager": exported_example_equal,
+        "output_tensors": output_tensor_count,
         "compute_nodes": compute_nodes,
         "require_full_compilation": require_full_compilation,
         "requested_disable_tf32": disable_tf32,
         "graph": graph,
     }
+
+
+def tensor_difference(eager: torch.Tensor, accelerated: torch.Tensor) -> dict:
+    require(
+        eager.shape == accelerated.shape,
+        f"Diagnostic tensor shapes differ: {tuple(eager.shape)} != {tuple(accelerated.shape)}.",
+    )
+    eager_float = eager.float()
+    accelerated_float = accelerated.float()
+    difference = accelerated_float - eager_float
+    eager_norm = torch.linalg.vector_norm(eager_float)
+    accelerated_norm = torch.linalg.vector_norm(accelerated_float)
+    difference_norm = torch.linalg.vector_norm(difference)
+    eager_rms = torch.sqrt(torch.mean(torch.square(eager_float)))
+    difference_rms = torch.sqrt(torch.mean(torch.square(difference)))
+    cosine_denominator = float(eager_norm) * float(accelerated_norm)
+    return {
+        "shape": list(eager.shape),
+        "eager_dtype": str(eager.dtype),
+        "tensorrt_dtype": str(accelerated.dtype),
+        "bitwise_equal": bool(torch.equal(eager, accelerated)),
+        "finite": bool(
+            torch.isfinite(eager_float).all()
+            and torch.isfinite(accelerated_float).all()
+        ),
+        "maximum_absolute_error": float(torch.max(torch.abs(difference))),
+        "root_mean_square_error": float(difference_rms),
+        "root_mean_square_error_over_eager_root_mean_square": (
+            float(difference_rms / eager_rms) if float(eager_rms) > 0 else None
+        ),
+        "normalized_l2": float(difference_norm) / max(
+            float(eager_norm),
+            torch.finfo(torch.float32).tiny,
+        ),
+        "cosine": (
+            float(torch.sum(eager_float * accelerated_float)) / cosine_denominator
+            if cosine_denominator > 0
+            else None
+        ),
+    }
+
+
+@torch.inference_mode()
+def diagnose_numerics(
+    eager: nn.Module,
+    example: tuple[torch.Tensor, torch.Tensor],
+    original_eager: torch.Tensor,
+    original_accelerated: torch.Tensor,
+    selected_row_within_batch: int,
+    report: dict,
+) -> None:
+    diagnostic_eager = SmilesNumericsPath(eager.model, eager.compute_dtype).eval()
+    eager_outputs = tuple(
+        tensor.detach().cpu() for tensor in output_tensors(diagnostic_eager(*example))
+    )
+    eager_final_equal = bool(torch.equal(eager_outputs[-1].float(), original_eager))
+    report["eager_final_bitwise_equal_to_qualification_path"] = eager_final_equal
+    if not eager_final_equal:
+        report["endpoint_binding_passed"] = False
+        report["usable_as_localization_hypothesis"] = False
+        report["status"] = "inconclusive"
+        report["reason"] = (
+            "The diagnostic wrapper did not reproduce the eager qualification endpoint."
+        )
+        return
+
+    print("Compiling the endpoint-bound numerical diagnostic graph.", flush=True)
+    torch.cuda.empty_cache()
+    diagnostic_accelerated, report["compilation"] = compile_path(
+        diagnostic_eager,
+        example,
+    )
+    accelerated_outputs = tuple(
+        tensor.detach().cpu()
+        for tensor in output_tensors(diagnostic_accelerated(*example))
+    )
+    require(
+        len(accelerated_outputs) == len(eager_outputs),
+        "The diagnostic engine returned the wrong number of boundary tensors.",
+    )
+    accelerated_final_equal = bool(
+        torch.equal(accelerated_outputs[-1].float(), original_accelerated)
+    )
+    report["tensorrt_final_bitwise_equal_to_qualification_path"] = (
+        accelerated_final_equal
+    )
+    # Exposing an intermediate as an engine output can change TensorRT fusion
+    # or tactics. Endpoint equality is required before these tensors can form a
+    # localization hypothesis, but it does not prove identical engine internals.
+    if not accelerated_final_equal:
+        report["endpoint_binding_passed"] = False
+        report["usable_as_localization_hypothesis"] = False
+        report["status"] = "inconclusive"
+        report["reason"] = (
+            "The diagnostic graph did not reproduce the rejected TensorRT endpoint, "
+            "so its intermediate tensors are not comparable."
+        )
+        return
+
+    encoder_layers = len(diagnostic_eager.backbone.encoder.layer)
+    boundary_names = (
+        ["embedding"]
+        + [f"encoder_layer_{index}" for index in range(1, encoder_layers + 1)]
+        + [
+            "final_layer_normalization",
+            "masked_average_pool",
+            "projection_layer_normalization",
+            "projection",
+        ]
+    )
+    require(
+        len(boundary_names) == len(eager_outputs),
+        "The diagnostic boundary names do not match the model outputs.",
+    )
+    report["boundaries"] = [
+        {
+            "name": name,
+            "whole_qualification_sample_batch": tensor_difference(
+                eager_output,
+                accelerated_output,
+            ),
+            "selected_sample_row": tensor_difference(
+                eager_output[selected_row_within_batch],
+                accelerated_output[selected_row_within_batch],
+            ),
+        }
+        for name, eager_output, accelerated_output in zip(
+            boundary_names,
+            eager_outputs,
+            accelerated_outputs,
+            strict=True,
+        )
+    ]
+    report["earliest_observed_bitwise_divergence"] = next(
+        (
+            boundary["name"]
+            for boundary in report["boundaries"]
+            if not boundary["whole_qualification_sample_batch"]["bitwise_equal"]
+        ),
+        None,
+    )
+    report["endpoint_binding_passed"] = True
+    report["usable_as_localization_hypothesis"] = True
+    report["status"] = "completed"
+    report["interpretation"] = (
+        "This endpoint-equivalent diagnostic graph supplies a localization hypothesis. "
+        "Its earliest observed divergence is not proof of the rejected engine's "
+        "internal values or of a causal faulty layer."
+    )
 
 
 def expected_embedding_dimension(args: argparse.Namespace) -> int:
@@ -706,7 +934,74 @@ def run_probe(args: argparse.Namespace, report: dict) -> None:
         spectrum = np.asarray(json.load(source)["intensities"], dtype=np.float32)
     spectrum_embedding = inference.embed_spectrum(spectrum)
     report["correctness"] = correctness(production_eager, accelerated_reference, spectrum_embedding)
-    require(report["correctness"]["passed"], f"TensorRT changed model or ranking behavior: {report['correctness']!r}")
+    if args.diagnose_numerics:
+        require(
+            not report["correctness"]["passed"],
+            "The diagnostic target requires a rejected numerical result and can never qualify a candidate.",
+        )
+        worst_row = report["correctness"]["maximum_normalized_l2_row"]
+        batch_index, row_within_batch = divmod(worst_row, MODEL_BATCH_ROWS)
+        batch_start = batch_index * MODEL_BATCH_ROWS
+        example = batches[batch_index]
+        report["numerics_diagnostic"] = {
+            "qualifies": False,
+            "status": "running",
+            "selection": {
+                "criterion": "maximum normalized L2 over the qualification sample",
+                "sample_row": worst_row,
+                "normalized_l2": report["correctness"]["maximum_normalized_l2"],
+                "batch_index": batch_index,
+                "batch_sample_row_start": batch_start,
+                "batch_sample_row_end_exclusive": batch_start + MODEL_BATCH_ROWS,
+                "row_within_batch": row_within_batch,
+                "input_ids_sha256": tensor_sha256(example[0]),
+                "attention_mask_sha256": tensor_sha256(example[1]),
+            },
+        }
+        batch_end = batch_start + MODEL_BATCH_ROWS
+        # These exact slices produced the rejected correctness result. Binding
+        # diagnostics to them avoids substituting a fresh model rerun for the
+        # numerical event that selected this batch.
+        original_eager = torch.from_numpy(
+            production_eager[batch_start:batch_end].copy()
+        )
+        original_accelerated = torch.from_numpy(
+            accelerated_reference[batch_start:batch_end].copy()
+        )
+        report["numerics_diagnostic"]["endpoint_binding"] = {
+            "eager_sha256": tensor_sha256(original_eager),
+            "rejected_tensorrt_sha256": tensor_sha256(original_accelerated),
+        }
+        # The diagnostic graph needs the GPU memory owned by the rejected
+        # engine, but only its selected endpoint is needed to bind the result.
+        del accelerated
+        torch.cuda.empty_cache()
+        try:
+            diagnose_numerics(
+                eager,
+                example,
+                original_eager,
+                original_accelerated,
+                row_within_batch,
+                report["numerics_diagnostic"],
+            )
+        except BaseException as error:
+            diagnostic_report = report["numerics_diagnostic"]
+            diagnostic_report["status"] = "failed"
+            diagnostic_report.setdefault("endpoint_binding_passed", False)
+            diagnostic_report["usable_as_localization_hypothesis"] = False
+            diagnostic_report["failure"] = {
+                "type": type(error).__name__,
+                "message": str(error),
+            }
+            raise
+        raise RuntimeError(
+            "TensorRT failed numerical qualification; the separate diagnostic report cannot qualify it."
+        )
+    require(
+        report["correctness"]["passed"],
+        f"TensorRT changed model or ranking behavior: {report['correctness']!r}",
+    )
     report["tail"] = tail_proof(
         inference,
         eager,
@@ -818,8 +1113,13 @@ def run_probe(args: argparse.Namespace, report: dict) -> None:
 
 def main() -> None:
     args = arguments()
+    report_kind = (
+        "secs.tensorrt-numerics-diagnostic.v1"
+        if args.diagnose_numerics
+        else f"secs.tensorrt-{args.mode}.v1"
+    )
     report = {
-        "kind": f"secs.tensorrt-{args.mode}.v1",
+        "kind": report_kind,
         "status": "running",
         "package_image_id": args.package_image_id,
         "probe_sha256": sha256(Path(__file__)),
@@ -839,7 +1139,13 @@ def main() -> None:
             "frontend_spectrum_sha256": sha256(args.frontend_spectrum),
         },
     }
+    if args.diagnose_numerics:
+        report["qualifies"] = False
     try:
+        require(
+            not args.diagnose_numerics or args.mode == "probe",
+            "Numerical diagnosis is only valid for the fixed-model probe mode.",
+        )
         require(torch.cuda.device_count() == 1, "The probe container must expose exactly one GPU.")
         visible_gpu_uuid = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader"],
