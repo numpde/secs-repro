@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import tempfile
 import urllib.parse
 import urllib.request
 
@@ -32,6 +31,24 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(READ_BYTES), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def cached_artifact_is_admitted(output: Path, artifact: dict) -> bool:
+    path = output / artifact["name"]
+    try:
+        return (
+            not path.is_symlink()
+            and path.is_file()
+            and path.stat().st_size == artifact["bytes"]
+            and sha256(path) == artifact["sha256"]
+        )
+    except OSError:
+        return False
+
+
+def remove_owned_partials(lock: dict, output: Path) -> None:
+    for artifact in lock["artifacts"]:
+        (output / f".{artifact['name']}.partial").unlink(missing_ok=True)
 
 
 def load_lock(path: Path) -> dict:
@@ -66,8 +83,25 @@ def load_lock(path: Path) -> dict:
 
 
 def verify(lock: dict, output: Path) -> None:
+    expected_names = {artifact["name"] for artifact in lock["artifacts"]}
+    actual_names = {path.name for path in output.iterdir()}
+    if actual_names != expected_names:
+        raise ValueError(
+            "The TensorRT dependency cache does not exactly match the lock: "
+            f"found {sorted(actual_names)!r}, expected {sorted(expected_names)!r}."
+        )
     for artifact in lock["artifacts"]:
         path = output / artifact["name"]
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Staged {artifact['name']} is not a regular owned file.")
+        actual_bytes = path.stat().st_size
+        if actual_bytes != artifact["bytes"]:
+            raise ValueError(
+                f"Staged {artifact['name']} has {actual_bytes} bytes; "
+                f"expected {artifact['bytes']}."
+            )
+        if path.stat().st_mode & 0o044 == 0:
+            raise ValueError(f"Staged {artifact['name']} is not readable by the probe user.")
         actual = sha256(path)
         if actual != artifact["sha256"]:
             raise ValueError(
@@ -79,13 +113,22 @@ def verify(lock: dict, output: Path) -> None:
 def download(lock: dict, output: Path) -> None:
     opener = urllib.request.build_opener(HttpsOnlyRedirectHandler())
     for artifact in lock["artifacts"]:
+        destination = output / artifact["name"]
+        # One lock-keyed cache has one writer. A deterministic partial name is
+        # safe to remove on retry and makes SIGKILL recovery automatic instead
+        # of leaving an anonymous entry that poisons the closed inventory.
+        temporary_path = output / f".{artifact['name']}.partial"
+        temporary_path.unlink(missing_ok=True)
+        if cached_artifact_is_admitted(output, artifact):
+            destination.chmod(0o644)
+            print(f"Reusing admitted artifact {artifact['name']}.", flush=True)
+            continue
         print(f"Downloading locked artifact {artifact['name']}.", flush=True)
         request = urllib.request.Request(
             artifact["url"],
             headers={"User-Agent": "secs-repro/1"},
         )
-        with tempfile.NamedTemporaryFile(dir=output, delete=False) as temporary:
-            temporary_path = Path(temporary.name)
+        with temporary_path.open("xb") as temporary:
             try:
                 byte_count = 0
                 next_progress = PROGRESS_BYTES
@@ -122,7 +165,10 @@ def download(lock: dict, output: Path) -> None:
                         f"Downloaded {artifact['name']} has SHA-256 {actual}; "
                         f"expected {artifact['sha256']}."
                     )
-                temporary_path.replace(output / artifact["name"])
+                # These are public dependency bytes. The offline probe runs as
+                # an unprivileged image user and needs read-only access later.
+                temporary_path.chmod(0o644)
+                temporary_path.replace(destination)
                 print(
                     f"Admitted {artifact['name']} ({byte_count} bytes).",
                     flush=True,
@@ -136,17 +182,34 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--lock", type=Path, required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--verify-only", action="store_true")
-    parser.add_argument("--print-required-host-bytes", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--verify-only", action="store_true")
+    mode.add_argument("--print-required-cache-bytes", action="store_true")
+    mode.add_argument("--print-required-transient-bytes", action="store_true")
     args = parser.parse_args()
     lock = load_lock(args.lock)
-    if args.print_required_host_bytes:
-        # Downloads and the finished wheelhouse coexist until the one-shot run
-        # ends. Two extra GiB cover built meta wheels, logs, and filesystem slack.
-        print(2 * sum(artifact["bytes"] for artifact in lock["artifacts"]) + 2 * 1024**3)
+    if args.print_required_cache_bytes:
+        if args.output is None:
+            parser.error("--output is required with --print-required-cache-bytes")
+        # The launcher holds the cache lock, so exact owned retry debris can be
+        # removed before free space is measured without racing a downloader.
+        remove_owned_partials(lock, args.output)
+        # A missing or corrupt artifact needs its complete replacement beside
+        # any old bytes until atomic admission. A valid cache needs only slack.
+        replacement_bytes = sum(
+            artifact["bytes"]
+            for artifact in lock["artifacts"]
+            if not cached_artifact_is_admitted(args.output, artifact)
+        )
+        print(replacement_bytes + 256 * 1024**2)
+        return
+    if args.print_required_transient_bytes:
+        # The offline wheelhouse temporarily copies the admitted runtime wheels.
+        # One GiB covers built meta wheels, reports, logs, and filesystem slack.
+        print(sum(artifact["bytes"] for artifact in lock["artifacts"]) + 1024**3)
         return
     if args.output is None:
-        parser.error("--output is required unless --print-required-host-bytes is used")
+        parser.error("--output is required unless a required-bytes option is used")
     if not args.verify_only:
         download(lock, args.output)
     verify(lock, args.output)
