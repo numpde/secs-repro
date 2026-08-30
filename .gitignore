@@ -3,5 +3,6 @@
 /checkpoints/**/*.zst
 /wheelhouse/
 /cache/
+/qualification/
 /checkpoints/*/candidates/
 /checkpoints/*/.candidate-build.*/

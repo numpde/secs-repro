@@ -1,0 +1,22 @@
+[source]
+sha256 = "0420219249cebf832f381118874ad91cbddf322d82a713be34cc21bbac6859a0"
+
+[profiles.functional]
+source_modulus = 320
+# Row 170 is the scale profile's midpoint-nearest member in each 320-row window.
+# Equivalently, this keeps every sixteenth scale row starting at scale ordinal 8.
+# This sparse profile proves the full train, serialize, reload, and search path.
+source_remainder = 170
+
+[profiles.scale]
+source_modulus = 20
+# Select the midpoint of each 20-row source window instead of favoring its first row.
+# This source-spanning twentieth exposes HNSW growth and insertion slowdown
+# without pretending to complete the production build.
+source_remainder = 10
+
+[projection]
+# Linear extrapolation is only an admission aid. Keeping twenty percent unused
+# leaves explicit room for model error and late allocations or filesystem use.
+maximum_memory_fraction = 0.8
+maximum_disk_fraction = 0.8
