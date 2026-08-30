@@ -1,0 +1,70 @@
+{
+  "kind": "secs.tensorrt-probe-downloads.v1",
+  "artifacts": [
+    {
+      "name": "torch_tensorrt-2.10.0+cu130-cp312-cp312-manylinux_2_28_x86_64.whl",
+      "role": "runtime-wheel",
+      "bytes": 3685798,
+      "url": "https://download.pytorch.org/whl/cu130/torch_tensorrt-2.10.0%2Bcu130-cp312-cp312-manylinux_2_28_x86_64.whl",
+      "sha256": "a49d56b7723d36f336a6ce167c0ce7a61ca8df368fd7f3db1d82e48d04d0382d"
+    },
+    {
+      "name": "tensorrt_cu13_libs-10.14.1.48.post1-py2.py3-none-manylinux_2_28_x86_64.whl",
+      "role": "runtime-wheel",
+      "bytes": 3437501033,
+      "url": "https://pypi.nvidia.com/tensorrt-cu13-libs/tensorrt_cu13_libs-10.14.1.48.post1-py2.py3-none-manylinux_2_28_x86_64.whl",
+      "sha256": "f55d59e9f93ebe0967c4bc108fb4068e74cdbc50bef3e6c9936e92f21cf11352"
+    },
+    {
+      "name": "tensorrt_cu13_bindings-10.14.1.48.post1-cp312-none-manylinux_2_28_x86_64.whl",
+      "role": "runtime-wheel",
+      "bytes": 879890,
+      "url": "https://pypi.nvidia.com/tensorrt-cu13-bindings/tensorrt_cu13_bindings-10.14.1.48.post1-cp312-none-manylinux_2_28_x86_64.whl",
+      "sha256": "1a098123ddf9e69629d66320666efbb2e237db76cd4faf715b7377471b9f4275"
+    },
+    {
+      "name": "cuda_toolkit-13.0.2-py2.py3-none-any.whl",
+      "role": "runtime-wheel",
+      "bytes": 2364,
+      "url": "https://files.pythonhosted.org/packages/57/b2/453099f5f3b698d7d0eab38916aac44c7f76229f451709e2eb9db6615dcd/cuda_toolkit-13.0.2-py2.py3-none-any.whl",
+      "sha256": "b198824cf2f54003f50d64ada3a0f184b42ca0846c1c94192fa269ecd97a66eb"
+    },
+    {
+      "name": "nvidia_cuda_runtime_cu13-0.0.0a0-py2.py3-none-any.whl",
+      "role": "runtime-wheel",
+      "bytes": 1165,
+      "url": "https://files.pythonhosted.org/packages/14/2f/c9c617f8556e3b6e8c24880d91b8e7a7b242f32b85cf23602b029d705c05/nvidia_cuda_runtime_cu13-0.0.0a0-py2.py3-none-any.whl",
+      "sha256": "6e892fd541a03d75de4457a46a1064f587d8b71cd3765f27d9f6bc1979ad2c2b"
+    },
+    {
+      "name": "dllist-2.0.0-py3-none-any.whl",
+      "role": "runtime-wheel",
+      "bytes": 5721,
+      "url": "https://files.pythonhosted.org/packages/7b/07/a212ca4cfe56fa35c8315307e37df218e5946c726a792b5c7a795b245c10/dllist-2.0.0-py3-none-any.whl",
+      "sha256": "cd307b1a91bc46fae084f8c817d79be7e34951b149a2fd69004772e03573bfb3"
+    },
+    {
+      "name": "tensorrt-10.14.1.48.post1.tar.gz",
+      "role": "meta-source",
+      "bytes": 16725,
+      "url": "https://files.pythonhosted.org/packages/cd/d7/1455a247ecc3a85929cd3136e1ebcb0c2afbef3fb893cb47efbebec95034/tensorrt-10.14.1.48.post1.tar.gz",
+      "sha256": "5aed87c541fcef881f874fb5724eadbe291851fe2152c962b9cba57cafd4872b"
+    },
+    {
+      "name": "tensorrt_cu13-10.14.1.48.post1.tar.gz",
+      "role": "meta-source",
+      "bytes": 18328,
+      "url": "https://files.pythonhosted.org/packages/9f/c3/2905ffaf789b53d68c84930d081e14cb96b7516a5c13f8e66c5545a47464/tensorrt_cu13-10.14.1.48.post1.tar.gz",
+      "sha256": "f667aee4b4b908520820b824ada7b7168f29e2659aacee2d5ae42139c6cb884e"
+    },
+    {
+      "name": "modeling_molformer.py",
+      "role": "molformer-source",
+      "bytes": 39211,
+      "url": "https://raw.githubusercontent.com/numpde/fork-of-MoLFormer-XL-both-10pct/66f6ad38b01f876713ef4ceb33515e22015afc74/modeling_molformer.py",
+      "sha256": "a73ac7da3afa72aec61bc270ad6caa4b5240d166dd31bd8e590eb3e7ed4b28c1",
+      "repository": "https://github.com/numpde/fork-of-MoLFormer-XL-both-10pct",
+      "revision": "66f6ad38b01f876713ef4ceb33515e22015afc74"
+    }
+  ]
+}
