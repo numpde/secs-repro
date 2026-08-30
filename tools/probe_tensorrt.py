@@ -39,7 +39,6 @@ NUMERICS_BOUNDARIES = (
     "projection_layer_normalization",
     "masked_average_pool",
     "final_layer_normalization",
-    "last_encoder_layer",
 )
 
 
@@ -265,12 +264,11 @@ class SmilesNumericsPath(nn.Module):
             else nullcontext()
         )
         with context:
-            needs_last_encoder_layer = self.boundary == "last_encoder_layer"
             backbone_outputs = self.backbone(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 output_attentions=False,
-                output_hidden_states=needs_last_encoder_layer,
+                output_hidden_states=False,
                 return_dict=False,
             )
             final_layer_normalization = backbone_outputs[0]
@@ -285,13 +283,46 @@ class SmilesNumericsPath(nn.Module):
                 boundary_output = pooled
             elif self.boundary == "final_layer_normalization":
                 boundary_output = final_layer_normalization
-            elif self.boundary == "last_encoder_layer":
-                boundary_output = backbone_outputs[2][-1]
             else:
                 raise RuntimeError(
                     f"Unsupported numerical diagnostic boundary: {self.boundary!r}."
                 )
         return boundary_output, projected
+
+
+class SmilesDownstreamPath(nn.Module):
+    """Run the production pool and projection from a final-normalized state."""
+
+    def __init__(self, model: nn.Module, compute_dtype: torch.dtype) -> None:
+        super().__init__()
+        encoder = model.dict_encoders["smiles"].encoder
+        require(encoder.pooler is not None, "The MolFormer pooler is unavailable.")
+        self.pooler = encoder.pooler
+        projection = model.dict_projection_heads["smiles"].projection_head
+        require(
+            len(projection) == 2
+            and isinstance(projection[0], nn.LayerNorm)
+            and isinstance(projection[1], nn.Linear),
+            f"The diagnostic does not understand this projection head: {projection!r}.",
+        )
+        self.projection_normalization = projection[0]
+        self.projection = projection[1]
+        self.compute_dtype = compute_dtype
+
+    def forward(
+        self,
+        final_normalized_state: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        context = (
+            torch.autocast(device_type="cuda", dtype=self.compute_dtype)
+            if self.compute_dtype != torch.float32
+            else nullcontext()
+        )
+        with context:
+            pooled = self.pooler(final_normalized_state, attention_mask)
+            normalized = self.projection_normalization(pooled)
+            return self.projection(normalized)
 
 
 def tokenize(inference: SecsInference, smiles: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -327,7 +358,7 @@ def output_tensors(output) -> tuple[torch.Tensor, ...]:
 
 
 def tensor_sha256(tensor: torch.Tensor) -> str:
-    contiguous = tensor.detach().cpu().contiguous()
+    contiguous = tensor.detach().reshape(-1).contiguous().view(torch.uint8).cpu()
     return hashlib.sha256(contiguous.numpy().tobytes()).hexdigest()
 
 
@@ -662,19 +693,23 @@ def compile_path(eager: nn.Module, example: tuple[torch.Tensor, torch.Tensor]):
     }, engine_module
 
 
+def serialized_engine_sha256(engine_module: nn.Module) -> str:
+    serialized_engine = engine_module.serialized_engine
+    require(
+        isinstance(serialized_engine, (bytes, bytearray)),
+        "The TensorRT runtime does not expose its serialized engine identity.",
+    )
+    return hashlib.sha256(serialized_engine).hexdigest()
+
+
 def unchanged_engine_layer_information(engine_module: nn.Module) -> dict:
     raw_information = engine_module.get_layer_info()
     try:
         information = json.loads(raw_information)
     except json.JSONDecodeError:
         information = raw_information
-    serialized_engine = engine_module.serialized_engine
-    require(
-        isinstance(serialized_engine, (bytes, bytearray)),
-        "The rejected TensorRT engine does not expose its serialized identity.",
-    )
     return {
-        "serialized_engine_sha256": hashlib.sha256(serialized_engine).hexdigest(),
+        "serialized_engine_sha256": serialized_engine_sha256(engine_module),
         "profiling_verbosity": str(engine_module.engine.profiling_verbosity),
         "layers": int(engine_module.engine.num_layers),
         "io_tensors": int(engine_module.engine.num_io_tensors),
@@ -698,11 +733,21 @@ def tensor_difference(eager: torch.Tensor, accelerated: torch.Tensor) -> dict:
     accelerated_float = accelerated.float()
     difference = accelerated_float - eager_float
     eager_norm = torch.linalg.vector_norm(eager_float)
-    accelerated_norm = torch.linalg.vector_norm(accelerated_float)
     difference_norm = torch.linalg.vector_norm(difference)
     eager_rms = torch.sqrt(torch.mean(torch.square(eager_float)))
     difference_rms = torch.sqrt(torch.mean(torch.square(difference)))
-    cosine_denominator = float(eager_norm) * float(accelerated_norm)
+    eager_double = eager_float.double()
+    accelerated_double = accelerated_float.double()
+    cosine_denominator = float(torch.linalg.vector_norm(eager_double)) * float(
+        torch.linalg.vector_norm(accelerated_double)
+    )
+    cosine = (
+        float(torch.sum(eager_double * accelerated_double)) / cosine_denominator
+        if cosine_denominator > 0
+        else None
+    )
+    if cosine is not None:
+        cosine = max(-1.0, min(1.0, cosine))
     return {
         "shape": list(eager.shape),
         "eager_dtype": str(eager.dtype),
@@ -721,11 +766,19 @@ def tensor_difference(eager: torch.Tensor, accelerated: torch.Tensor) -> dict:
             float(eager_norm),
             torch.finfo(torch.float32).tiny,
         ),
-        "cosine": (
-            float(torch.sum(eager_float * accelerated_float)) / cosine_denominator
-            if cosine_denominator > 0
-            else None
-        ),
+        "cosine": cosine,
+    }
+
+
+def tensor_magnitude(tensor: torch.Tensor) -> dict:
+    values = tensor.float()
+    return {
+        "shape": list(tensor.shape),
+        "dtype": str(tensor.dtype),
+        "finite": bool(torch.isfinite(values).all()),
+        "maximum_absolute_value": float(torch.max(torch.abs(values))),
+        "root_mean_square": float(torch.sqrt(torch.mean(torch.square(values)))),
+        "l2": float(torch.linalg.vector_norm(values)),
     }
 
 
@@ -772,6 +825,7 @@ def run_numerics_variant(
             diagnostic_eager,
             compile_example,
         )
+        result["serialized_engine_sha256"] = serialized_engine_sha256(engine_module)
         accelerated_outputs = tuple(
             tensor.detach().cpu()
             for tensor in output_tensors(diagnostic_accelerated(*selected_example))
@@ -815,6 +869,211 @@ def run_numerics_variant(
     if boundary is None:
         return result, None, None
     return result, eager_outputs[0], accelerated_outputs[0]
+
+
+@torch.inference_mode()
+def run_downstream_factorization(
+    eager: nn.Module,
+    attention_mask: torch.Tensor,
+    eager_boundary: torch.Tensor,
+    accelerated_boundary: torch.Tensor,
+    original_eager: torch.Tensor,
+    original_accelerated: torch.Tensor,
+    selected_row_within_batch: int,
+    source_probe: dict,
+) -> dict:
+    result = {
+        "kind": "endpoint_bound_final_layer_normalization_2x2",
+        "status": "running",
+        "source_boundary_probe": {
+            "boundary": source_probe["boundary"],
+            "serialized_engine_sha256": source_probe["serialized_engine_sha256"],
+            "endpoint_binding_passed": source_probe["endpoint_binding_passed"],
+        },
+        "operands": {
+            "eager": {
+                "shape": list(eager_boundary.shape),
+                "dtype": str(eager_boundary.dtype),
+                "sha256": tensor_sha256(eager_boundary),
+            },
+            "tensorrt_diagnostic": {
+                "shape": list(accelerated_boundary.shape),
+                "dtype": str(accelerated_boundary.dtype),
+                "sha256": tensor_sha256(accelerated_boundary),
+            },
+        },
+    }
+    require(
+        eager_boundary.shape == accelerated_boundary.shape
+        and eager_boundary.dtype == accelerated_boundary.dtype,
+        "The final-LayerNorm operands do not share one static TensorRT input contract.",
+    )
+    require(
+        eager_boundary.shape[:2] == attention_mask.shape,
+        "The final-LayerNorm operands do not match the selected attention mask.",
+    )
+
+    device = attention_mask.device
+    eager_operand = eager_boundary.to(device)
+    accelerated_operand = accelerated_boundary.to(device)
+    downstream_eager = SmilesDownstreamPath(
+        eager.model,
+        eager.compute_dtype,
+    ).eval()
+    eager_on_eager = output_tensor(
+        downstream_eager(eager_operand, attention_mask)
+    ).float().cpu()
+    eager_on_accelerated = output_tensor(
+        downstream_eager(accelerated_operand, attention_mask)
+    ).float().cpu()
+    result["cells"] = {
+        "eager_downstream_on_eager_boundary": {
+            "sha256": tensor_sha256(eager_on_eager)
+        },
+        "eager_downstream_on_tensorrt_boundary": {
+            "sha256": tensor_sha256(eager_on_accelerated)
+        },
+    }
+    eager_anchor = exact_tensor_equal(eager_on_eager, original_eager)
+    result["eager_diagonal_bitwise_equal_to_eager_endpoint"] = eager_anchor
+    if not eager_anchor:
+        result["status"] = "inconclusive"
+        result["reason"] = (
+            "The separately invoked eager downstream did not reproduce the eager endpoint."
+        )
+        return result
+    result["eager_boundary_state_effect"] = {
+        "usable": True,
+        "whole_qualification_sample_batch": tensor_difference(
+            eager_on_eager,
+            eager_on_accelerated,
+        ),
+        "selected_sample_row": tensor_difference(
+            eager_on_eager[selected_row_within_batch],
+            eager_on_accelerated[selected_row_within_batch],
+        ),
+        "eager_downstream_on_tensorrt_boundary_bitwise_equal_to_rejected_endpoint": (
+            exact_tensor_equal(eager_on_accelerated, original_accelerated)
+        ),
+        "difference_from_rejected_endpoint": {
+            "whole_qualification_sample_batch": tensor_difference(
+                original_accelerated,
+                eager_on_accelerated,
+            ),
+            "selected_sample_row": tensor_difference(
+                original_accelerated[selected_row_within_batch],
+                eager_on_accelerated[selected_row_within_batch],
+            ),
+        },
+        "interpretation": (
+            "This is a bounded sufficiency test: it measures how the diagnostic "
+            "TensorRT boundary state propagates through the admitted eager downstream."
+        ),
+    }
+
+    downstream_accelerated = None
+    downstream_engine_module = None
+    try:
+        (
+            downstream_accelerated,
+            result["compilation"],
+            downstream_engine_module,
+        ) = compile_path(
+            downstream_eager,
+            (eager_operand, attention_mask),
+        )
+        result["serialized_engine_sha256"] = serialized_engine_sha256(
+            downstream_engine_module
+        )
+        accelerated_on_eager = output_tensor(
+            downstream_accelerated(eager_operand, attention_mask)
+        ).float().cpu()
+        accelerated_on_accelerated = output_tensor(
+            downstream_accelerated(accelerated_operand, attention_mask)
+        ).float().cpu()
+    finally:
+        downstream_accelerated = None
+        downstream_engine_module = None
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    result["cells"].update(
+        {
+            "tensorrt_downstream_on_eager_boundary": {
+                "sha256": tensor_sha256(accelerated_on_eager)
+            },
+            "tensorrt_downstream_on_tensorrt_boundary": {
+                "sha256": tensor_sha256(accelerated_on_accelerated)
+            },
+        }
+    )
+    tensorrt_anchor = exact_tensor_equal(
+        accelerated_on_accelerated,
+        original_accelerated,
+    )
+    result["tensorrt_diagonal_bitwise_equal_to_rejected_endpoint"] = (
+        tensorrt_anchor
+    )
+    if not tensorrt_anchor:
+        result["status"] = "inconclusive"
+        result["reason"] = (
+            "The separately compiled downstream did not reproduce the rejected "
+            "endpoint on the diagnostic TensorRT boundary."
+        )
+        result["tensorrt_diagonal_difference"] = tensor_difference(
+            original_accelerated,
+            accelerated_on_accelerated,
+        )
+        return result
+
+    result["tensorrt_downstream_on_eager_boundary_bitwise_equal_to_eager_endpoint"] = (
+        exact_tensor_equal(accelerated_on_eager, original_eager)
+    )
+
+    contrasts = {
+        "downstream_compiler_effect_on_eager_boundary": (
+            eager_on_eager,
+            accelerated_on_eager,
+        ),
+        "downstream_compiler_effect_on_tensorrt_boundary": (
+            eager_on_accelerated,
+            accelerated_on_accelerated,
+        ),
+        "total_rejected_effect": (
+            eager_on_eager,
+            accelerated_on_accelerated,
+        ),
+    }
+    result["contrasts"] = {
+        name: {
+            "whole_qualification_sample_batch": tensor_difference(first, second),
+            "selected_sample_row": tensor_difference(
+                first[selected_row_within_batch],
+                second[selected_row_within_batch],
+            ),
+        }
+        for name, (first, second) in contrasts.items()
+    }
+    interaction = (
+        accelerated_on_accelerated
+        - accelerated_on_eager
+        - eager_on_accelerated
+        + eager_on_eager
+    )
+    result["interaction"] = {
+        "whole_qualification_sample_batch": tensor_magnitude(interaction),
+        "selected_sample_row": tensor_magnitude(
+            interaction[selected_row_within_batch]
+        ),
+    }
+    result["status"] = "completed"
+    result["interpretation"] = (
+        "This exact two-factor reproducer measures conditional boundary-state, "
+        "downstream-compiler, and interaction effects. Its TensorRT state and "
+        "downstream engine come from separate endpoint-bound diagnostic graphs, so "
+        "the contrasts are not an additive causal decomposition of the rejected engine."
+    )
+    return result
 
 
 @torch.inference_mode()
@@ -914,15 +1173,44 @@ def diagnose_numerics(
             report["usable_as_localization_hypothesis"] = True
             break
         nearest_divergent_downstream_boundary = boundary
-    else:
-        report["status"] = "no_equal_boundary_for_selected_row_within_bound"
-        report["usable_as_localization_hypothesis"] = True
-        report["interpretation"] = (
-            "The selected row differed as far upstream as the last bounded probe. "
-            "Each result still comes from a separate endpoint-equivalent graph, not "
-            "from observing the rejected engine's internal values."
-        )
-        return
+        if boundary == "final_layer_normalization":
+            try:
+                factorization = run_downstream_factorization(
+                    eager,
+                    selected_example[1],
+                    eager_boundary,
+                    accelerated_boundary,
+                    original_eager,
+                    original_accelerated,
+                    selected_row_within_batch,
+                    probe,
+                )
+            except Exception as error:
+                factorization = {
+                    "kind": "endpoint_bound_final_layer_normalization_2x2",
+                    "status": "failed",
+                    "failure": {
+                        "type": type(error).__name__,
+                        "message": str(error),
+                    },
+                }
+            report["downstream_factorization"] = factorization
+            report["status"] = f"downstream_factorization_{factorization['status']}"
+            report["usable_as_localization_hypothesis"] = (
+                factorization["status"] == "completed"
+            )
+            report["interpretation"] = factorization.get(
+                "interpretation",
+                factorization.get(
+                    "reason",
+                    "The bounded downstream factorization could not be completed.",
+                ),
+            )
+            return
+    require(
+        report["status"] == "completed",
+        "The bounded boundary plan ended without a localization outcome.",
+    )
 
     report["interpretation"] = (
         "Each admitted boundary comes from a separate endpoint-equivalent graph. "
