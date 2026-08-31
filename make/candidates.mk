@@ -15,8 +15,7 @@ candidates: export CANDIDATE_CPUS_INPUT := $(CANDIDATE_CPUS)
 candidates: export CANDIDATE_MEMORY_INPUT := $(CANDIDATE_MEMORY)
 candidates: export CANDIDATE_DTYPE_INPUT := $(CANDIDATE_DTYPE)
 candidates: checkpoint/image packages/gpu/image
-	@set -eu -o pipefail; \
-	test "$$(id -u)" -ne 0 || { \
+	@test "$$(id -u)" -ne 0 || { \
 		printf '%s\n' 'Run make candidates as a non-root host user.' >&2; exit 2; \
 	}; \
 	test -z "$${ARCHIVE_INPUT}" || test -z "$${ARCHIVE_URL_INPUT}" || { \
