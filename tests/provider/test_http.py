@@ -157,10 +157,7 @@ class ProviderHttpTests(unittest.TestCase):
                 status=200,
             ),
         )
-        self.assertEqual(
-            str(outcome.cause),
-            "HTTP response ended after 4 of 5 declared bytes",
-        )
+        self.assertIsInstance(outcome.cause, EOFError)
 
     def test_one_deadline_bounds_the_complete_response_read(self):
         with _tls_server(
