@@ -60,6 +60,8 @@ help:
 	'      Compare nmrglue decoding of F3697/1 with the pinned frontend vector.' \
 	'  make test/integration/jcamp-reference' \
 	'      Compare processed JCAMP-DX decoding with its pinned frontend vector.' \
+	'  make test/provider' \
+	'      Verify hello composition, signing, receipt binding, and retry cadence offline.' \
 	'' \
 	'5. Build the GPU candidate bundle' \
 	'  make packages/base-images/pull packages/gpu/wheelhouse' \
@@ -80,6 +82,8 @@ help:
 	'' \
 	'Dependency maintenance' \
 		'' \
+		'  make provider/lock/write provider/wheelhouse provider/image' \
+		'      Lock, download, and build the small provider hello runtime independently.' \
 		'  make checkpoint/manifest' \
 		'      Recreate manifest.json only if its recorded specification and weight hashes still match.' \
 		'  make packages/base-images/pull packages/locks/write' \
@@ -242,6 +246,7 @@ checkpoint/manifest:
 	mv -f "$$manifest_stage/$(CHECKPOINT_MANIFEST_FILENAME)" "$(CHECKPOINT_MANIFEST)"
 
 include make/packages.mk
+include make/provider.mk
 include make/molformer.mk
 include make/tests.mk
 include make/candidates.mk

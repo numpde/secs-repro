@@ -1,0 +1,15 @@
+**
+!containers/
+containers/**
+!containers/provider/
+containers/provider/**
+!containers/provider/Dockerfile
+!requirements/
+requirements/**
+!requirements/provider.lock
+!src/
+src/**
+!src/secs_inference/
+!src/secs_inference/__init__.py
+!src/secs_inference/provider/
+!src/secs_inference/provider/**

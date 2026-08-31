@@ -1,0 +1,13 @@
+schema_id = "secs.provider.hello_config.v1"
+
+[api]
+origin = "https://api.example.test"
+topology = "web"
+connect_timeout_seconds = 5
+io_deadline_seconds = 30
+
+[hello]
+display_name = "SECS"
+provider_description = "Ranks and refines molecular-structure candidates from a molecular formula and one processed one-dimensional proton NMR spectrum."
+publication_interval_seconds = 3600
+retry_initial_seconds = 5
