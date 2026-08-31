@@ -11,18 +11,18 @@ RUN cd /opt/provider/wheelhouse \
     && python -m pip install --no-index --require-hashes \
         --find-links /opt/provider/wheelhouse \
         --no-cache-dir -r /opt/provider/requirements.lock \
-    && rm -rf /opt/provider/wheelhouse
+    && rm -rf /opt/provider/wheelhouse /opt/provider/requirements.lock
 
 COPY src/secs_inference/__init__.py /opt/secs_inference/__init__.py
 COPY src/secs_inference/provider/ /opt/secs_inference/provider/
-ENV PYTHONPATH=/opt
-RUN python -P -c 'import secs_inference.provider.main'
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/opt \
+    PYTHONSAFEPATH=1
+RUN python -c 'import secs_inference.provider.main'
 
 RUN useradd --no-create-home --uid 65532 provider
 ENV HOME=/tmp \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONSAFEPATH=1 \
     PYTHONUNBUFFERED=1
 USER 65532:65532
 WORKDIR /tmp
-ENTRYPOINT ["python", "-P", "-m", "secs_inference.provider.main"]
+ENTRYPOINT ["python", "-m", "secs_inference.provider.main"]

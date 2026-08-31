@@ -1,19 +1,21 @@
 from pathlib import Path
+from unittest.mock import patch
 import unittest
 
 from secs_inference.provider.analysis import (
     ADMISSIBLE_SPECTRUM_FORMATS,
-    ANALYSIS_KIND_REF,
     analysis_offering_description,
 )
 from secs_inference.provider.canonical_json import parse_canonical_json_bytes
 from secs_inference.provider.config import decode_provider_config
 from secs_inference.provider.hello import (
+    AnalysisOffering,
     HelloReceiptRejected,
     HelloReceiptRejection,
     parse_hello_receipt,
+    prepare_hello,
 )
-from secs_inference.provider.main import prepare_configured_hello
+from secs_inference.provider.main import prepare_configured_hello, run_provider
 
 
 CONFIG = Path(__file__).parents[2] / "config/provider.toml.example"
@@ -47,7 +49,7 @@ class ProviderHelloTests(unittest.TestCase):
             document["analysis_offerings"],
             [
                 {
-                    "analysis_kind_ref": ANALYSIS_KIND_REF,
+                    "analysis_kind_ref": "mol_from_1h_spectrum_formula",
                     "description": analysis_offering_description(),
                 }
             ],
@@ -61,6 +63,31 @@ class ProviderHelloTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             decode_provider_config(invalid)
+
+    def test_runtime_rejects_invalid_presentation_before_reading_the_credential(self):
+        invalid = CONFIG.read_bytes().replace(
+            b'display_name = "SECS"',
+            b'display_name = ""',
+        )
+
+        with (
+            patch(
+                "secs_inference.provider.main._read_regular_file",
+                side_effect=(invalid, AssertionError("credential was read")),
+            ) as read,
+            self.assertRaisesRegex(ValueError, "provider display name"),
+        ):
+            run_provider(CONFIG)
+
+        read.assert_called_once()
+
+    def test_hello_rejects_a_non_text_analysis_kind_at_its_boundary(self):
+        with self.assertRaisesRegex(TypeError, "analysis kind must be a string"):
+            prepare_hello(
+                display_name="Provider",
+                description="Description",
+                analysis_offerings=(AnalysisOffering(7, "Description"),),
+            )
 
     def test_receipt_from_another_provider_is_rejected(self):
         receipt = parse_hello_receipt(

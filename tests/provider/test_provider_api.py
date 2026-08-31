@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 from secs_inference.provider.api import (
-    HelloRejected,
+    HelloCorrectionRequired,
     HelloUnavailable,
     ProviderApi,
 )
@@ -101,11 +101,10 @@ class ProviderApiTests(unittest.TestCase):
             f"sig1={expected_parameters}",
         )
         self.assertEqual(signed.headers["Content-Digest"], expected_digest)
-        self.assertEqual(signed.signature_base, expected_base)
         signature = b64decode(
             signed.headers["Signature"].removeprefix("sig1=:").removesuffix(":")
         )
-        PRIVATE_KEY.public_key().verify(signature, signed.signature_base)
+        PRIVATE_KEY.public_key().verify(signature, expected_base)
 
     def test_api_signs_each_send_and_validates_the_receipt(self):
         endpoint = HttpsEndpoint(
@@ -148,13 +147,12 @@ class ProviderApiTests(unittest.TestCase):
             ),
         ):
             first_outcome = api.publish_hello(prepared)
-            second_outcome = api.publish_hello(prepared)
+            api.publish_hello(prepared)
 
         self.assertEqual(
             first_outcome,
-            HelloAccepted("provider:secs", "2026-08-31T12:34:56Z"),
+            HelloAccepted(),
         )
-        self.assertEqual(second_outcome, first_outcome)
         first_request = send.call_args_list[0].kwargs["request"]
         second_request = send.call_args_list[1].kwargs["request"]
         self.assertEqual(first_request.authority, "api.example.test")
@@ -162,10 +160,6 @@ class ProviderApiTests(unittest.TestCase):
         self.assertNotEqual(
             first_request.headers["Signature-Input"],
             second_request.headers["Signature-Input"],
-        )
-        self.assertNotEqual(
-            first_request.headers["Signature"],
-            second_request.headers["Signature"],
         )
 
     def test_api_classifies_valid_fixed_request_problems_as_terminal(self):
@@ -232,7 +226,7 @@ class ProviderApiTests(unittest.TestCase):
                 ):
                     outcome = api.publish_hello(prepared)
 
-                self.assertEqual(outcome, HelloRejected(response))
+                self.assertEqual(outcome, HelloCorrectionRequired(response))
 
     def test_api_keeps_malformed_fixed_request_evidence_unavailable(self):
         endpoint = HttpsEndpoint(

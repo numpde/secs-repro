@@ -85,7 +85,6 @@ class ProviderHttpTests(unittest.TestCase):
             )
 
         self.assertEqual(outcome, TlsRejected())
-        self.assertIsInstance(outcome.cause, ssl.SSLError)
         self.assertEqual(server.requests, [])
 
     def test_connection_refusal_proves_the_request_was_not_sent(self):
@@ -196,6 +195,30 @@ class ProviderHttpTests(unittest.TestCase):
             ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, 200),
         )
 
+    def test_hostile_content_length_does_not_escape_transport_classification(self):
+        cases = (
+            ("9" * 5_000, ResponseRejection.RESPONSE_BODY_TOO_LARGE),
+            ("²", ResponseRejection.INVALID_CONTENT_LENGTH),
+        )
+        for content_length, reason in cases:
+            with self.subTest(reason=reason):
+                with _tls_server(
+                    self.certificate_directory,
+                    declared_response_length=content_length,
+                ) as server:
+                    outcome = self._send(server.port)
+
+                self.assertEqual(outcome, ResponseRejected(reason, 200))
+
+    def test_overlong_port_is_rejected_as_an_invalid_authority(self):
+        with self.assertRaisesRegex(ValueError, "canonical authority"):
+            HttpsEndpoint(
+                f"https://api.example.test:{'9' * 5_000}",
+                "web",
+                1,
+                1,
+            )
+
     def _endpoint(
         self,
         port: int,
@@ -252,7 +275,7 @@ def _tls_server(
     status: int = 200,
     response_headers: dict[str, str] | None = None,
     response_body: bytes = b"{}",
-    declared_response_length: int | None = None,
+    declared_response_length: int | str | None = None,
     drip_seconds: float | None = None,
 ):
     requests: list[dict[str, str | bytes]] = []

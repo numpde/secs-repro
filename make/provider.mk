@@ -61,7 +61,9 @@ provider/image:
 		cat containers/provider/Dockerfile containers/provider/Dockerfile.dockerignore \
 			requirements/provider.lock "$(PROVIDER_WHEELHOUSE)/.complete"
 		sha256sum src/secs_inference/__init__.py
-		find src/secs_inference/provider -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+		find src/secs_inference/provider -type f \
+			! -path '*/__pycache__/*' ! -name '*.py[co]' -print0 \
+			| LC_ALL=C sort -z | xargs -0 sha256sum
 	} | sha256sum | cut -d' ' -f1 )
 	$(DOCKER) build --quiet --network none --pull=false \
 		--build-arg PYTHON_BASE="$(PYTHON_BASE)" \

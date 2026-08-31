@@ -57,8 +57,6 @@ class HelloPolicy:
     retry_initial_seconds: float
 
     def __post_init__(self) -> None:
-        _require_text(self.display_name, "hello display name", 128)
-        _require_text(self.provider_description, "hello provider description", 1_024)
         _require_positive_seconds(
             self.publication_interval_seconds,
             "hello publication interval",
@@ -153,14 +151,3 @@ def _require_fields(
 def _require_positive_seconds(value: object, name: str) -> None:
     if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
         raise ValueError(f"{name} must be positive finite seconds")
-
-
-def _require_text(value: object, name: str, maximum_characters: int) -> None:
-    if type(value) is not str:
-        raise TypeError(f"{name} must be text")
-    try:
-        value.encode("utf-8", errors="strict")
-    except UnicodeEncodeError as error:
-        raise ValueError(f"{name} must contain Unicode scalar text") from error
-    if not value or len(value) > maximum_characters or "\0" in value:
-        raise ValueError(f"{name} must be non-empty bounded text without NUL")

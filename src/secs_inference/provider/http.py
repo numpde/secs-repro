@@ -16,10 +16,10 @@ from secs_inference.provider.signing import (
     SignedRequest,
     is_canonical_https_authority,
 )
+from secs_inference.provider.hello import HELLO_PATH
 
 
 _VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,128}")
-_HELLO_PATH = "/provider/v1/hello"
 _HELLO_REQUEST_BODY_LIMIT = 524_288
 _HELLO_RESPONSE_BODY_LIMIT = 65_536
 _HELLO_STATUSES = frozenset(
@@ -72,18 +72,13 @@ class RequestUnavailable:
 class TlsRejected:
     """TLS identity or protocol verification failed before HTTP delivery."""
 
-    delivery: RequestDelivery = RequestDelivery.NOT_SENT
-    cause: BaseException | None = field(default=None, compare=False, repr=False)
-
 
 @dataclass(frozen=True, slots=True)
 class ResponseRejected:
     """The peer returned an HTTP response outside the pinned hello envelope."""
 
     reason: ResponseRejection
-    status: int | None
-    delivery: RequestDelivery = RequestDelivery.RESPONSE_RECEIVED
-    cause: BaseException | None = field(default=None, compare=False, repr=False)
+    status: int
 
 
 HttpOutcome = HttpResponse | RequestUnavailable | TlsRejected | ResponseRejected
@@ -173,8 +168,8 @@ def send_hello_request(
     try:
         try:
             connection.connect()
-        except (ssl.SSLCertVerificationError, ssl.SSLError) as error:
-            return TlsRejected(cause=error)
+        except (ssl.SSLCertVerificationError, ssl.SSLError):
+            return TlsRejected()
         except (OSError, TimeoutError) as error:
             return RequestUnavailable(RequestDelivery.NOT_SENT, error)
 
@@ -222,7 +217,7 @@ def send_hello_request(
 def _validate_hello_request(endpoint: HttpsEndpoint, request: SignedRequest) -> None:
     if request.authority != endpoint.authority:
         raise ValueError("Signed request authority does not match Provider API origin")
-    if request.method != "POST" or request.path != _HELLO_PATH or request.query:
+    if request.method != "POST" or request.path != HELLO_PATH or request.query:
         raise ValueError("Signed request target does not match provider hello")
     if request.body is None or len(request.body) > _HELLO_REQUEST_BODY_LIMIT:
         raise ValueError("Signed request body does not match provider hello")
@@ -269,11 +264,18 @@ def _read_response(
         return ResponseRejected(ResponseRejection.DUPLICATE_REQUEST_ID, status)
 
     lengths = _header_values(headers, "Content-Length")
-    if len(lengths) > 1 or (lengths and not lengths[0].isdigit()):
+    if len(lengths) > 1 or (
+        lengths and (not lengths[0].isascii() or not lengths[0].isdigit())
+    ):
         return ResponseRejected(ResponseRejection.INVALID_CONTENT_LENGTH, status)
-    if lengths and int(lengths[0]) > _HELLO_RESPONSE_BODY_LIMIT:
-        return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status)
-    declared_length = int(lengths[0]) if lengths else None
+    declared_length = None
+    if lengths:
+        significant_length = lengths[0].lstrip("0") or "0"
+        if len(significant_length) > len(str(_HELLO_RESPONSE_BODY_LIMIT)):
+            return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status)
+        declared_length = int(significant_length)
+        if declared_length > _HELLO_RESPONSE_BODY_LIMIT:
+            return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status)
     body_parts: list[bytes] = []
     body_length = 0
     try:
