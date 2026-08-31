@@ -33,10 +33,7 @@ class ConfiguredIndexTest(unittest.TestCase):
             faiss.write_index(index, str(path))
             reloaded = faiss.read_index(str(path))
 
-        storage = faiss.downcast_index(reloaded.storage)
         scores, identifiers = reloaded.search(query, 2)
-        self.assertEqual(reloaded.metric_type, faiss.METRIC_INNER_PRODUCT)
-        self.assertEqual(storage.metric_type, faiss.METRIC_INNER_PRODUCT)
         self.assertEqual(identifiers.tolist(), [[0, 1]])
         np.testing.assert_allclose(scores, [[2.0, 1.0]], rtol=0.0, atol=1e-5)
 

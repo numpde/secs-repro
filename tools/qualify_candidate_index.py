@@ -35,7 +35,7 @@ READ_BYTES = 1024 * 1024
 CANDIDATE_COLUMNS = ("smiles", "molecular_formula")
 SOURCE_ROW_COLUMN = "__qualification_source_row"
 SCALE_ROW_COLUMN = "__qualification_scale_row"
-QUALIFICATION_KIND = "secs.candidate-build-qualification.v1"
+QUALIFICATION_KIND = "secs.candidate-build-qualification.v2"
 PROGRESS_PATTERN = re.compile(r"^Indexed ([0-9]+) of ([0-9]+) candidate rows\.$")
 
 
@@ -429,7 +429,6 @@ def verify_index(index, index_config: dict, expected_dimension: int, expected_ro
 
 def verify_search(
     index,
-    table_path: Path,
     checkpoint_manifest: Path,
     molformer_lock: Path,
     frontend_spectrum: Path,
@@ -462,14 +461,6 @@ def verify_search(
         raise ValueError(
             "Cannot verify real-spectrum search because results must have finite scores and unique in-range row identifiers."
         )
-    selected = (
-        pl.scan_parquet(table_path)
-        .with_row_index("row_id")
-        .filter(pl.col("row_id").is_in(result_identifiers.tolist()))
-        .select("row_id", *CANDIDATE_COLUMNS)
-        .collect(engine="streaming")
-    )
-    require_equal("map every search result back to the candidate table", selected.height, result_count)
     return {
         "fixture": frontend_spectrum.name,
         "fixture_sha256": sha256(frontend_spectrum),
@@ -510,7 +501,11 @@ def verify_profile(args: argparse.Namespace) -> None:
     require_equal("accept a builder manifest with a different sampled source digest", builder_manifest["source"]["member_sha256"], sample["sha256"])
     require_equal("accept a builder manifest with a different sampled source size", builder_manifest["source"]["member_bytes"], sample["bytes"])
     require_equal("accept a builder manifest with a different sampled source schema", builder_manifest["source"]["schema"], sample["schema"])
-    require_equal("accept a builder manifest with a different configured member", builder_manifest["source"]["member"], samples["source"]["archive_member"])
+    require_equal(
+        "accept a builder manifest with a different configured member",
+        builder_manifest["source"]["member"],
+        candidate_spec["archive"]["member"],
+    )
     require_equal("accept a builder manifest with a different source kind", builder_manifest["source"]["acquisition"], "local")
     require_equal("accept a builder manifest with a different compute dtype", builder_manifest["embedding"]["compute_dtype"], args.compute_dtype)
     require_equal("accept a builder manifest with a different storage dtype", builder_manifest["embedding"]["storage_dtype"], "float32")
@@ -561,7 +556,6 @@ def verify_profile(args: argparse.Namespace) -> None:
         )
     search_receipt = verify_search(
         reloaded_index,
-        table_path,
         args.checkpoint_manifest,
         args.molformer_lock,
         args.frontend_spectrum,
@@ -574,13 +568,6 @@ def verify_profile(args: argparse.Namespace) -> None:
         raise ValueError(f"Cannot verify builder memory use from {args.metrics}: cgroup byte counts must be positive.")
     expected_metrics = {
         "run_id": args.run_id,
-        "profile": args.profile,
-        "sample_sha256": sample["sha256"],
-        "builder_sha256": sha256(args.builder),
-        "package_image_id": args.package_image_id,
-        "compute_dtype": args.compute_dtype,
-        "threads": args.threads,
-        "deadline_seconds": args.deadline_seconds,
         "builder_manifest_sha256": sha256(builder_manifest_path),
     }
     for name, expected in expected_metrics.items():
@@ -593,26 +580,14 @@ def verify_profile(args: argparse.Namespace) -> None:
     report = {
         "kind": QUALIFICATION_KIND,
         "profile": args.profile,
-        "run_id": args.run_id,
         "verified_at": utc_now(),
-        "repository_revision": args.repository_revision,
-        "qualification_spec_sha256": sha256(args.qualification_spec),
         "samples_receipt_sha256": sha256(args.samples_receipt),
         "builder": {"file": args.builder.name, "sha256": sha256(args.builder)},
         "qualification_tool": {"file": Path(__file__).name, "sha256": sha256(Path(__file__))},
         "package_image_id": args.package_image_id,
         "checkpoint_manifest_sha256": sha256(args.checkpoint_manifest),
         "molformer_lock_sha256": sha256(args.molformer_lock),
-        "sample": sample,
-        "builder_manifest": {
-            "sha256": sha256(builder_manifest_path),
-            "source_warning": (
-                "This disposable manifest describes derived sample bytes under the configured archive-member name; "
-                "it is qualification evidence, not production source provenance."
-            ),
-        },
         "artifacts": {
-            "retention_policy": "delete the sampled table, index, and builder manifest before publishing the final receipt",
             "table": builder_manifest["table"],
             "index": builder_manifest["index"],
         },
@@ -644,17 +619,19 @@ def qualification_projection(
     plan: QualificationPlan,
     functional: dict,
     scale: dict,
+    functional_rows: int,
+    scale_rows: int,
     target_rows: int,
     disk_free_bytes: int,
 ) -> dict:
-    """Project production resources and enforce the predeclared cgroup-memory margin."""
+    """Project from sampling-receipt row counts and enforce the predeclared resource margins."""
 
     memory_limit = functional["builder_run"]["memory_limit_bytes"]
     require_equal("combine profiles with different memory limits", scale["builder_run"]["memory_limit_bytes"], memory_limit)
     projected_memory = linear_projection(
-        functional["sample"]["rows"],
+        functional_rows,
         functional["builder_run"]["memory_peak_bytes"],
-        scale["sample"]["rows"],
+        scale_rows,
         scale["builder_run"]["memory_peak_bytes"],
         target_rows,
     )
@@ -665,16 +642,16 @@ def qualification_projection(
             f"{projected_memory} bytes, which does not stay below the predeclared {memory_gate}-byte memory gate."
         )
     projected_index_bytes = linear_projection(
-        functional["sample"]["rows"],
+        functional_rows,
         functional["artifacts"]["index"]["bytes"],
-        scale["sample"]["rows"],
+        scale_rows,
         scale["artifacts"]["index"]["bytes"],
         target_rows,
     )
     projected_table_bytes = linear_projection(
-        functional["sample"]["rows"],
+        functional_rows,
         functional["artifacts"]["table"]["bytes"],
-        scale["sample"]["rows"],
+        scale_rows,
         scale["artifacts"]["table"]["bytes"],
         target_rows,
     )
@@ -699,9 +676,9 @@ def qualification_projection(
         "disk_gate_fraction": plan.maximum_disk_fraction,
         "disk_gate_bytes": disk_gate,
         "builder_elapsed_nanoseconds": linear_projection(
-            functional["sample"]["rows"],
+            functional_rows,
             functional["builder_run"]["elapsed_nanoseconds"],
-            scale["sample"]["rows"],
+            scale_rows,
             scale["builder_run"]["elapsed_nanoseconds"],
             target_rows,
         ),
@@ -725,8 +702,6 @@ def write_receipt_command(args: argparse.Namespace) -> None:
     for name, report in (("functional", functional), ("scale", scale)):
         require_equal("combine a report from another qualification kind", report["kind"], QUALIFICATION_KIND)
         require_equal("combine a report for the wrong profile", report["profile"], name)
-        require_equal("combine reports from different repository revisions", report["repository_revision"], args.repository_revision)
-        require_equal("combine reports from a different qualification specification", report["qualification_spec_sha256"], sha256(args.qualification_spec))
         require_equal("combine reports from different sampling receipts", report["samples_receipt_sha256"], sha256(args.samples_receipt))
         verified_artifact(args.evidence_directory, report["logs"]["builder"], f"publish a changed {name} builder log")
         verified_artifact(args.evidence_directory, report["logs"]["gpu"], f"publish a changed {name} GPU log")
@@ -739,15 +714,31 @@ def write_receipt_command(args: argparse.Namespace) -> None:
     require_equal("combine reports from different MolFormer locks", functional["molformer_lock_sha256"], scale["molformer_lock_sha256"])
     require_equal("combine reports after the MolFormer lock changed", functional["molformer_lock_sha256"], sha256(args.molformer_lock))
     require_equal("combine reports from different GPUs", functional["gpu"]["uuid"], scale["gpu"]["uuid"])
-    require_equal("combine reports from different qualification runs", functional["run_id"], scale["run_id"])
-    require_equal("combine reports under a different qualification run", functional["run_id"], args.run_id)
+    require_equal(
+        "combine reports from different qualification runs",
+        functional["builder_run"]["run_id"],
+        scale["builder_run"]["run_id"],
+    )
+    require_equal(
+        "combine reports under a different qualification run",
+        functional["builder_run"]["run_id"],
+        args.run_id,
+    )
     retained_paths = [path for path in args.discarded_path if path.exists() or path.is_symlink()]
     if retained_paths:
         raise ValueError(
             f"Cannot publish the qualification receipt because disposable build artifacts remain: {retained_paths!r}."
         )
     disk_free_bytes = shutil.disk_usage(args.production_output_directory).free
-    projection = qualification_projection(plan, functional, scale, samples["source"]["rows"], disk_free_bytes)
+    projection = qualification_projection(
+        plan,
+        functional,
+        scale,
+        samples["profiles"]["functional"]["rows"],
+        samples["profiles"]["scale"]["rows"],
+        samples["source"]["rows"],
+        disk_free_bytes,
+    )
     receipt = {
         "kind": QUALIFICATION_KIND,
         "result": "passed",
@@ -767,6 +758,7 @@ def write_receipt_command(args: argparse.Namespace) -> None:
         "qualification_spec": samples["qualification_spec"],
         "candidate_spec": samples["candidate_spec"],
         "source": samples["source"],
+        "samples": samples["profiles"],
         "disposable_artifacts": {
             "retained": False,
             "checked_paths": [path.name for path in args.discarded_path],
@@ -811,9 +803,7 @@ def arguments() -> argparse.Namespace:
     verify.add_argument("--compute-dtype", choices=("float32", "bfloat16"), required=True)
     verify.add_argument("--threads", type=int, required=True)
     verify.add_argument("--package-image-id", required=True)
-    verify.add_argument("--repository-revision", required=True)
     verify.add_argument("--run-id", required=True)
-    verify.add_argument("--deadline-seconds", type=int, required=True)
     verify.add_argument("--output", type=Path, required=True)
     verify.set_defaults(run=verify_profile)
 

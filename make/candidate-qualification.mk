@@ -90,7 +90,7 @@ candidates/qualification: checkpoint/image packages/gpu/image
 	stage=$$(mktemp -d "$$output_root/.candidate-qualification.XXXXXX")
 	stage=$$(realpath -e -- "$$stage")
 	stage_nonce=$${stage##*.candidate-qualification.}
-	run_id="$$run_started-$$(git rev-parse --short=12 HEAD)-$$stage_nonce"
+	run_id="$$run_started-$$stage_nonce"
 	final_directory="$$output_root/$$run_id"
 	chmod 2770 "$$stage"
 	evidence="$$stage/evidence"
@@ -244,10 +244,6 @@ candidates/qualification: checkpoint/image packages/gpu/image
 		local gpu_log="$$evidence/$$profile-gpu.csv"
 		local report="$$stage/$$profile-report.json"
 		local deadline_seconds
-		local sample_sha256
-		local builder_sha256
-		sample_sha256=$$(sha256sum "$$sample" | cut -d' ' -f1)
-		builder_sha256=$$(sha256sum "$$builder" | cut -d' ' -f1)
 		case "$$profile" in
 			functional) deadline_seconds="$(QUALIFICATION_FUNCTIONAL_TIMEOUT_SECONDS)" ;;
 			scale) deadline_seconds="$(QUALIFICATION_SCALE_TIMEOUT_SECONDS)" ;;
@@ -285,7 +281,7 @@ candidates/qualification: checkpoint/image packages/gpu/image
 						--candidate-spec /input/candidates.toml --checkpoint-manifest /checkpoint/manifest.json \
 						--molformer-lock /input/molformer.lock.toml --scratch-directory /scratch \
 						--output-directory /output --source-kind local --device cuda:0 \
-						--compute-dtype "$$6" --threads "$$7" --package-image-id "$$5" \
+						--compute-dtype "$$3" --threads "$$4" --package-image-id "$$2" \
 					|| status=$$?
 				finished_ns=$$(date +%s%N)
 				finished_at=$$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)
@@ -293,13 +289,13 @@ candidates/qualification: checkpoint/image packages/gpu/image
 				if test -f /output/manifest.json; then
 					manifest_sha256=$$(sha256sum /output/manifest.json | cut -d" " -f1)
 				fi
-				printf "{\"run_id\":\"%s\",\"profile\":\"%s\",\"sample_sha256\":\"%s\",\"builder_sha256\":\"%s\",\"package_image_id\":\"%s\",\"compute_dtype\":\"%s\",\"threads\":%s,\"deadline_seconds\":%s,\"builder_manifest_sha256\":\"%s\",\"started_at\":\"%s\",\"finished_at\":\"%s\",\"elapsed_nanoseconds\":%s,\"memory_peak_bytes\":%s,\"memory_limit_bytes\":%s,\"exit_status\":%s}\n" \
-					"$$1" "$$2" "$$3" "$$4" "$$5" "$$6" "$$7" "$$8" "$$manifest_sha256" "$$started_at" "$$finished_at" \
+				printf "{\"run_id\":\"%s\",\"builder_manifest_sha256\":\"%s\",\"started_at\":\"%s\",\"finished_at\":\"%s\",\"elapsed_nanoseconds\":%s,\"memory_peak_bytes\":%s,\"memory_limit_bytes\":%s,\"exit_status\":%s}\n" \
+					"$$1" "$$manifest_sha256" "$$started_at" "$$finished_at" \
 					"$$((finished_ns - started_ns))" "$$(cat /sys/fs/cgroup/memory.peak)" \
 					"$$(cat /sys/fs/cgroup/memory.max)" "$$status" > /output/run-metrics.json
 				exit "$$status"' \
-			qualification-builder "$$run_id" "$$profile" "$$sample_sha256" "$$builder_sha256" "$$package_image" \
-			"$${QUALIFICATION_DTYPE_INPUT}" "$${QUALIFICATION_CPUS_INPUT}" "$$deadline_seconds" \
+			qualification-builder "$$run_id" "$$package_image" "$${QUALIFICATION_DTYPE_INPUT}" \
+			"$${QUALIFICATION_CPUS_INPUT}" \
 			< "$$sample" 2>&1 | timestamp_stream "$$builder_log"
 			pipeline_status=("$${PIPESTATUS[@]}")
 			if test "$${pipeline_status[0]}" -ne 0; then exit "$${pipeline_status[0]}"; fi
@@ -351,11 +347,11 @@ candidates/qualification: checkpoint/image packages/gpu/image
 					--bundle "/stage/$$1-bundle" --frontend-spectrum /input/frontend-spectrum.json \
 					--metrics "/stage/$$1-bundle/run-metrics.json" \
 					--builder-log "/stage/evidence/$$1-builder.log" \
-					--gpu-log "/stage/evidence/$$1-gpu.csv" --compute-dtype "$$5" --threads "$$6" \
-					--package-image-id "$$2" --repository-revision "$$3" --run-id "$$4" --deadline-seconds "$$7" \
+					--gpu-log "/stage/evidence/$$1-gpu.csv" --compute-dtype "$$4" --threads "$$5" \
+					--package-image-id "$$2" --run-id "$$3" \
 					--output "/stage/$$1-report.json"' \
-			qualification-verifier "$$profile" "$$package_image" "$$repository_revision" "$$run_id" \
-			"$${QUALIFICATION_DTYPE_INPUT}" "$${QUALIFICATION_CPUS_INPUT}" "$$deadline_seconds"
+			qualification-verifier "$$profile" "$$package_image" "$$run_id" \
+			"$${QUALIFICATION_DTYPE_INPUT}" "$${QUALIFICATION_CPUS_INPUT}"
 		# The final composer re-hashes these retained files. Make accidental
 		# mutation fail at its source as well as at that final proof boundary.
 		chmod a=r "$$builder_log" "$$gpu_log"

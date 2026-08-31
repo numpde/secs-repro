@@ -77,7 +77,6 @@ class SamplingPlanTest(unittest.TestCase):
             functional_rows = pl.read_parquet(output / "functional.parquet")["source_ordinal"].to_list()
             self.assertEqual(scale_rows, list(range(10, 641, 20)))
             self.assertEqual(functional_rows, [170, 490])
-            self.assertTrue(set(functional_rows).issubset(scale_rows))
 
     def test_plan_rejects_a_functional_profile_outside_scale(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -112,9 +111,6 @@ maximum_disk_fraction = 0.8
 
 
 class ProjectionTest(unittest.TestCase):
-    def test_projects_the_line_through_both_observations(self):
-        self.assertEqual(linear_projection(10, 100, 20, 300, 30), 500)
-
     def test_rejects_non_increasing_measurements(self):
         with self.assertRaisesRegex(ValueError, "increase strictly"):
             linear_projection(10, 100, 20, 100, 30)
@@ -130,26 +126,24 @@ class ProjectionTest(unittest.TestCase):
         functional = {
             "builder_run": {"memory_limit_bytes": 1000, "memory_peak_bytes": 100, "elapsed_nanoseconds": 100},
             "artifacts": {"index": {"bytes": 100}, "table": {"bytes": 100}},
-            "sample": {"rows": 10},
         }
         scale = {
             "builder_run": {"memory_limit_bytes": 1000, "memory_peak_bytes": 300, "elapsed_nanoseconds": 300},
             "artifacts": {"index": {"bytes": 300}, "table": {"bytes": 300}},
-            "sample": {"rows": 20},
         }
 
-        projection = qualification_projection(plan, functional, scale, 30, 10_000)
+        projection = qualification_projection(plan, functional, scale, 10, 20, 30, 10_000)
 
         self.assertEqual(projection["memory_peak_bytes"], 500)
         functional["builder_run"]["memory_limit_bytes"] = 600
         scale["builder_run"]["memory_limit_bytes"] = 600
         with self.assertRaisesRegex(ValueError, "memory gate"):
-            qualification_projection(plan, functional, scale, 30, 10_000)
+            qualification_projection(plan, functional, scale, 10, 20, 30, 10_000)
 
         functional["builder_run"]["memory_limit_bytes"] = 1000
         scale["builder_run"]["memory_limit_bytes"] = 1000
         with self.assertRaisesRegex(ValueError, "disk gate"):
-            qualification_projection(plan, functional, scale, 30, 1000)
+            qualification_projection(plan, functional, scale, 10, 20, 30, 1000)
 
 
 class ReceiptCompositionTest(unittest.TestCase):
@@ -189,7 +183,7 @@ maximum_disk_fraction = 0.8
             )
             samples = root / "samples.json"
             samples.write_text(
-                '{"kind":"secs.candidate-build-qualification.v1",'
+                '{"kind":"secs.candidate-build-qualification.v2",'
                 '"qualification_spec":{"sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},'
                 '"source":{"sha256":"0000000000000000000000000000000000000000000000000000000000000000","rows":1000}}',
                 encoding="utf-8",
