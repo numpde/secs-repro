@@ -40,11 +40,11 @@ def parse_canonical_json_bytes(raw: bytes) -> JsonValue:
             parse_float=_reject_fractional_number,
             parse_constant=_reject_non_finite_number,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, _RejectedJsonToken) as error:
+    except (UnicodeDecodeError, ValueError, RecursionError) as error:
         raise CanonicalJsonError("input is not unambiguous UTF-8 JSON") from error
     try:
         rendered = canonical_json_bytes(value)
-    except (TypeError, ValueError, UnicodeEncodeError) as error:
+    except (TypeError, ValueError, UnicodeEncodeError, RecursionError) as error:
         raise CanonicalJsonError("input contains an unsupported JSON value") from error
     if rendered != raw:
         raise CanonicalJsonError("input is not in canonical JSON form")
