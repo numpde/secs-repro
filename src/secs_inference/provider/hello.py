@@ -100,13 +100,11 @@ def prepare_hello(
 
     _require_bounded_text(display_name, "provider display name", 128)
     _require_bounded_text(description, "provider description", 1_024)
-    if type(analysis_offerings) is not tuple or len(analysis_offerings) > 64:
-        raise ValueError("Provider hello requires a tuple of at most 64 offerings")
+    if len(analysis_offerings) > 64:
+        raise ValueError("Provider hello supports at most 64 offerings")
     offerings: list[JsonValue] = []
     refs: set[str] = set()
     for offering in analysis_offerings:
-        if type(offering) is not AnalysisOffering:
-            raise TypeError("Provider hello offerings must be exact offering facts")
         if type(offering.analysis_kind_ref) is not str:
             raise TypeError("analysis kind must be a string")
         if (
