@@ -139,7 +139,7 @@ class ProviderApiTests(unittest.TestCase):
             ) as send,
             patch(
                 "secs_inference.provider.api.time",
-                side_effect=(1_700_000_000, 1_700_000_001),
+                return_value=1_700_000_000,
             ),
             patch(
                 "secs_inference.provider.api.token_bytes",
