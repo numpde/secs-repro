@@ -5,7 +5,7 @@ import torch
 from secs.elucidation.candidates import CandidateSource
 from secs.elucidation.components import spectral_objective
 from secs.elucidation.optimizers.base import MoleculeOptimizer, OptimizerResult
-from secs.utils.elucidation import get_atom_counts_from_formula
+from secs.utils.elucidation import build_formula_string, get_atom_counts_from_formula
 
 from secs_inference.model import FloatArray, SecsInference
 
@@ -37,12 +37,15 @@ class SecsElucidator:
         self._initial_population_size = initial_population_size
 
     def elucidate(self, spectrum: Sequence[float] | FloatArray, formula: str) -> OptimizerResult:
+        """Elucidate from a complete formula, rejecting it before model work."""
+
         target_atom_counts = get_atom_counts_from_formula(formula)
+        canonical_formula = build_formula_string(target_atom_counts)
         spectrum_embedding = torch.from_numpy(self._inference.embed_spectrum(spectrum))
 
         initial_population = self._candidate_source.propose(
             spectrum_embedding,
-            formula,
+            canonical_formula,
             self._initial_population_size,
         )
 
