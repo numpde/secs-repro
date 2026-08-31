@@ -1,4 +1,4 @@
-"""Measure one Job-input response against the identity advertised by the feed."""
+"""Admit one Job input under the feed's interpretation and byte identity."""
 
 from __future__ import annotations
 
@@ -9,12 +9,13 @@ from hashlib import sha256
 import json
 
 
+JOB_SPECIFICATION_SCHEMA_ID = "nmr.job.specification.text.v1"
 JOB_INPUT_READ_RESPONSE_SCHEMA_ID = "nmr.provider.job_input.read.response.v1"
 MAX_JOB_INPUT_READ_RESPONSE_BYTES = 131_072
 
 
 class JobInputError(ValueError):
-    """The API response cannot be identified as the selected Job input."""
+    """The selected Job input cannot be admitted as specification text."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(f"Cannot read the selected Job input because {reason}.")
@@ -22,9 +23,10 @@ class JobInputError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class SelectedJobInput:
-    """The selected feed item's input identity."""
+    """The selected feed item's input identity and interpretation."""
 
     job_ref: str
+    input_schema_id: str
     input_fingerprint: str
     input_byte_length: int
 
@@ -42,8 +44,10 @@ def parse_job_input_read_response(
     *,
     selected: SelectedJobInput,
 ) -> JobSpecification:
-    """Return text only when the measured bytes match the selected feed item."""
+    """Return text only under the selected schema and measured byte identity."""
 
+    if selected.input_schema_id != JOB_SPECIFICATION_SCHEMA_ID:
+        raise JobInputError("the Job feed declares an unsupported input schema")
     if len(response_bytes) > MAX_JOB_INPUT_READ_RESPONSE_BYTES:
         raise JobInputError("the API response is too large")
     try:
@@ -64,8 +68,8 @@ def parse_job_input_read_response(
         exact_input = b64decode(encoded, validate=True)
     except (Base64Error, ValueError):
         raise JobInputError("its Base64 encoding is invalid") from None
-    # The feed owns input identity. Response copies and alternate JSON/Base64
-    # spellings cannot change which decoded bytes are admitted here.
+    # The feed owns input identity and interpretation. Response copies and
+    # alternate JSON/Base64 spellings cannot change the bytes admitted here.
     if len(exact_input) != selected.input_byte_length:
         raise JobInputError("its byte length differs from the Job feed")
     measured = "sha256:" + sha256(exact_input).hexdigest()

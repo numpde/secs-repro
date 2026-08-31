@@ -6,6 +6,7 @@ import json
 import unittest
 
 from secs_inference.provider.job_input import (
+    JOB_SPECIFICATION_SCHEMA_ID,
     JobSpecification,
     JobInputError,
     MAX_JOB_INPUT_READ_RESPONSE_BYTES,
@@ -17,6 +18,7 @@ from secs_inference.provider.job_input import (
 def _selected(exact: bytes) -> SelectedJobInput:
     return SelectedJobInput(
         job_ref="job:selected",
+        input_schema_id=JOB_SPECIFICATION_SCHEMA_ID,
         input_fingerprint="sha256:" + sha256(exact).hexdigest(),
         input_byte_length=len(exact),
     )
@@ -69,6 +71,24 @@ class JobInputTests(unittest.TestCase):
         for response in responses:
             with self.subTest(response=response):
                 self.assert_rejected(response, selected)
+
+    def test_the_feed_owns_how_input_bytes_are_interpreted(self) -> None:
+        exact = b"Formula C2H6O"
+        unsupported = SelectedJobInput(
+            job_ref="job:selected",
+            input_schema_id="nmr.job.binary.v1",
+            input_fingerprint="sha256:" + sha256(exact).hexdigest(),
+            input_byte_length=len(exact),
+        )
+
+        self.assert_rejected(_response(exact), unsupported)
+        self.assertEqual(
+            parse_job_input_read_response(
+                _response(exact, input_schema_id="nmr.job.binary.v1"),
+                selected=_selected(exact),
+            ),
+            JobSpecification("job:selected", exact.decode()),
+        )
 
     def test_rejects_unreadable_response_or_input_text(self) -> None:
         exact = b"Formula C2H6O"
