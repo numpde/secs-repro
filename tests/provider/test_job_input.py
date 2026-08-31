@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from base64 import b64encode
+from dataclasses import replace
 from hashlib import sha256
 import json
 import unittest
@@ -74,11 +75,9 @@ class JobInputTests(unittest.TestCase):
 
     def test_the_feed_owns_how_input_bytes_are_interpreted(self) -> None:
         exact = b"Formula C2H6O"
-        unsupported = SelectedJobInput(
-            job_ref="job:selected",
+        unsupported = replace(
+            _selected(exact),
             input_schema_id="nmr.job.binary.v1",
-            input_fingerprint="sha256:" + sha256(exact).hexdigest(),
-            input_byte_length=len(exact),
         )
 
         self.assert_rejected(_response(exact), unsupported)
