@@ -21,8 +21,6 @@ import urllib.request
 
 READ_BYTES = 1024 * 1024
 PROGRESS_BYTES = 512 * 1024 * 1024
-class ExtractionRejected(RuntimeError):
-    """The input cannot produce the expected archive member."""
 
 
 class HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -31,7 +29,7 @@ class HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, file_pointer, code, message, headers, new_url):
         target = urllib.parse.urljoin(request.full_url, new_url)
         if urllib.parse.urlsplit(target).scheme != "https":
-            raise ExtractionRejected(f"redirect target is not HTTPS: {target}")
+            raise ValueError(f"redirect target is not HTTPS: {target}")
         return super().redirect_request(
             request, file_pointer, code, message, headers, target
         )
@@ -82,7 +80,7 @@ def open_url(url: str):
 
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" or not parsed.hostname:
-        raise ExtractionRejected("archive URL must be an absolute HTTPS URL")
+        raise ValueError("archive URL must be an absolute HTTPS URL")
     request = urllib.request.Request(url, headers={"User-Agent": "secs-repro/1"})
     response = urllib.request.build_opener(HttpsOnlyRedirectHandler()).open(
         request, timeout=60
@@ -125,11 +123,11 @@ def stage_member(
             if name != member_name:
                 continue
             if temp_path is not None:
-                raise ExtractionRejected(
+                raise ValueError(
                     f"archive contains more than one member named {member_name!r}"
                 )
             if not member.isfile():
-                raise ExtractionRejected(f"archive member is not a regular file: {member.name}")
+                raise ValueError(f"archive member is not a regular file: {member.name}")
             with tempfile.NamedTemporaryFile(
                 mode="w+b",
                 prefix="archive-member.",
@@ -140,7 +138,7 @@ def stage_member(
                 copy_member(archive, member, destination)
                 destination.flush()
         if temp_path is None:
-            raise ExtractionRejected(f"archive has no member named {member_name!r}")
+            raise ValueError(f"archive has no member named {member_name!r}")
         return temp_path
     except BaseException:
         if temp_path is not None:
@@ -157,7 +155,7 @@ def verify_archive(reader: MeasuredReader, expected_md5: str) -> None:
         pass
     actual_md5 = reader.digest.hexdigest()
     if actual_md5 != expected_md5.lower():
-        raise ExtractionRejected(
+        raise ValueError(
             f"archive MD5 is {actual_md5}; expected {expected_md5.lower()}"
         )
 
