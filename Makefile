@@ -58,6 +58,8 @@ help:
 		'      Rank SMILES and run one GA generation without network access.' \
 	'  make test/integration/bruker-reference' \
 	'      Compare nmrglue decoding of F3697/1 with the pinned frontend vector.' \
+	'  make test/integration/jcamp-reference' \
+	'      Compare processed JCAMP-DX decoding with its pinned frontend vector.' \
 	'' \
 	'5. Build the GPU candidate bundle' \
 	'  make packages/base-images/pull packages/gpu/wheelhouse' \
@@ -83,7 +85,7 @@ help:
 		'  make packages/base-images/pull packages/locks/write' \
 		'      Regenerate the CPU and GPU dependency locks after dependency intent changes.' \
 		'  make fixtures/frontend-reference/base-image/pull fixtures/frontend-reference/write' \
-		'      Recreate the F3697/1 SECS vector with the pinned frontend in an offline container.' \
+		'      Recreate the Bruker and processed JCAMP-DX SECS vectors with the pinned frontend.' \
 		'' \
 		'Optional package images' \
 		'' \

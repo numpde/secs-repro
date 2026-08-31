@@ -1,8 +1,10 @@
 override FRONTEND_REFERENCE_NODE_IMAGE := docker.io/library/node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf
 override FRONTEND_REFERENCE_REVISION := 5ab78f61e9fb679f3f0b9823be5217ae250e213f
 FRONTEND_REFERENCE_REPOSITORY ?= $(abspath ../fork-of-elucidation.cheminfo.org)
-override FRONTEND_REFERENCE_INPUT := tests/fixtures/bruker/F3697/1
-override FRONTEND_REFERENCE_OUTPUT := tests/fixtures/frontend/F3697-1.json
+override FRONTEND_BRUKER_REFERENCE_INPUT := tests/fixtures/bruker/F3697/1
+override FRONTEND_BRUKER_REFERENCE_OUTPUT := tests/fixtures/frontend/F3697-1.json
+override FRONTEND_JCAMP_REFERENCE_INPUT := tests/fixtures/jcamp/4-chlorobenzylamine
+override FRONTEND_JCAMP_REFERENCE_OUTPUT := tests/fixtures/frontend/4-chlorobenzylamine.json
 override FRONTEND_REFERENCE_IMAGE_TAG := secs-repro/frontend-reference
 
 .PHONY: fixtures/frontend-reference/base-image/pull
@@ -35,21 +37,31 @@ fixtures/frontend-reference/write:
 		printf '%s\n' 'Cannot write frontend fixtures as host UID 0.' >&2
 		exit 2
 	fi
-	output_directory=$$(realpath -e -- "$(dir $(FRONTEND_REFERENCE_OUTPUT))")
+	output_directory=$$(realpath -e -- "$(dir $(FRONTEND_BRUKER_REFERENCE_OUTPUT))")
 	stage=$$(mktemp -d --tmpdir="$$output_directory" .frontend-reference.XXXXXXXX)
 	trap 'rm -rf "$$stage"' EXIT
 	stage=$$(realpath -e -- "$$stage")
 	image=$$($(MAKE) --no-print-directory fixtures/frontend-reference/image)
-	$(DOCKER) run --rm --init --pull never --network none --read-only \
+	reference_container=(--rm --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 64 --cpus 2 --memory 2g --memory-swap 2g \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
-		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(FRONTEND_REFERENCE_INPUT),dst=/input,readonly" \
-		--mount "type=bind,src=$$stage,dst=/output" \
+		--mount "type=bind,src=$$stage,dst=/output")
+	$(DOCKER) run "$${reference_container[@]}" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(FRONTEND_BRUKER_REFERENCE_INPUT),dst=/input,readonly" \
 		"$$image" \
 		--input /input \
-		--output "/output/$(notdir $(FRONTEND_REFERENCE_OUTPUT))" \
+		--output "/output/$(notdir $(FRONTEND_BRUKER_REFERENCE_OUTPUT))" \
 		--path-prefix F3697/1 \
 		--frontend-revision "$(FRONTEND_REFERENCE_REVISION)"
-	mv -f "$$stage/$(notdir $(FRONTEND_REFERENCE_OUTPUT))" "$(FRONTEND_REFERENCE_OUTPUT)"
+	$(DOCKER) run "$${reference_container[@]}" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(FRONTEND_JCAMP_REFERENCE_INPUT),dst=/input,readonly" \
+		"$$image" \
+		--input /input \
+		--output "/output/$(notdir $(FRONTEND_JCAMP_REFERENCE_OUTPUT))" \
+		--path-prefix 4-chlorobenzylamine \
+		--frontend-revision "$(FRONTEND_REFERENCE_REVISION)"
+	# Both conversions must succeed before either pinned reference is published.
+	mv -f "$$stage/$(notdir $(FRONTEND_BRUKER_REFERENCE_OUTPUT))" "$(FRONTEND_BRUKER_REFERENCE_OUTPUT)"
+	mv -f "$$stage/$(notdir $(FRONTEND_JCAMP_REFERENCE_OUTPUT))" "$(FRONTEND_JCAMP_REFERENCE_OUTPUT)"
