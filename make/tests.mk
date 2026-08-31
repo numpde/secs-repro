@@ -1,4 +1,5 @@
-.PHONY: test/integration test/integration/bruker-reference test/qualification-tools
+.PHONY: test/integration test/integration/bruker-reference
+.PHONY: test/integration/jcamp-reference test/qualification-tools
 
 test/integration:
 	@if test "$(HOST_UID)" -eq 0; then
@@ -30,9 +31,11 @@ test/integration:
 		--entrypoint /bin/sh "$$cpu_packages_image" \
 		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && python -m unittest discover -v -s /tests -p "test_*.py"'
 
-test/integration/bruker-reference:
+test/integration/bruker-reference: private REFERENCE_TEST_PATTERN := test_bruker_reference.py
+test/integration/jcamp-reference: private REFERENCE_TEST_PATTERN := test_jcamp_reference.py
+test/integration/bruker-reference test/integration/jcamp-reference:
 	@if test "$(HOST_UID)" -eq 0; then
-		printf '%s\n' 'Cannot run the Bruker integration test as host UID 0.' >&2
+		printf '%s\n' 'Cannot run a spectrum reference test as host UID 0.' >&2
 		exit 2
 	fi
 	tests_dir=$$(realpath -e tests/integration)
@@ -46,7 +49,7 @@ test/integration/bruker-reference:
 		--mount type=bind,src="$$fixtures_dir",dst=/fixtures,readonly \
 		--mount type=bind,src="$$tests_dir",dst=/tests,readonly \
 		--entrypoint python "$$cpu_packages_image" \
-		-m unittest discover -v -s /tests -p test_bruker_reference.py
+		-m unittest discover -v -s /tests -p "$(REFERENCE_TEST_PATTERN)"
 
 test/qualification-tools:
 	@if test "$(HOST_UID)" -eq 0; then
