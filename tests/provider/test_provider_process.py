@@ -1,3 +1,4 @@
+import http.client
 from threading import Event
 from unittest.mock import patch
 import unittest
@@ -5,7 +6,7 @@ import unittest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from secs_inference.provider.api import (
-    HelloRejected,
+    HelloCorrectionRequired,
     HelloUnavailable,
     ProviderApi,
 )
@@ -54,10 +55,7 @@ class ProviderProcessTests(unittest.TestCase):
         with patch.object(
             ProviderApi,
             "publish_hello",
-            return_value=HelloAccepted(
-                "provider:secs",
-                "2026-08-31T12:34:56Z",
-            ),
+            return_value=HelloAccepted(),
         ) as publish:
             publish_hello_until_stopped(
                 api=self.api,
@@ -72,7 +70,10 @@ class ProviderProcessTests(unittest.TestCase):
     def test_unavailability_backs_off_and_success_restores_refresh_cadence(self):
         stop = StopAfterWaits(3)
         unavailable = HelloUnavailable(
-            RequestUnavailable(RequestDelivery.NOT_SENT)
+            RequestUnavailable(
+                RequestDelivery.POSSIBLE,
+                http.client.BadStatusLine("peer-controlled-marker"),
+            )
         )
 
         with (
@@ -82,10 +83,7 @@ class ProviderProcessTests(unittest.TestCase):
                 side_effect=(
                     unavailable,
                     unavailable,
-                    HelloAccepted(
-                        "provider:secs",
-                        "2026-08-31T12:34:56Z",
-                    ),
+                    HelloAccepted(),
                 ),
             ) as publish,
             self.assertLogs(
@@ -107,11 +105,15 @@ class ProviderProcessTests(unittest.TestCase):
             ["WARNING", "INFO"],
         )
         self.assertIn("unavailable", logs.output[0])
+        self.assertIn("BadStatusLine", logs.output[0])
+        self.assertNotIn("peer-controlled-marker", logs.output[0])
         self.assertIn("recovered", logs.output[1])
 
     def test_fixed_request_rejection_stops_without_retry(self):
         stop = StopAfterWaits(1)
-        rejected = HelloRejected(HttpResponse(400, "request-test", b"{}"))
+        rejected = HelloCorrectionRequired(
+            HttpResponse(400, "request-test", b"{}")
+        )
 
         with (
             patch.object(

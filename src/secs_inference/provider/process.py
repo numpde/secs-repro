@@ -5,7 +5,11 @@ from __future__ import annotations
 import logging
 from threading import Event
 
-from secs_inference.provider.api import HelloRejected, HelloUnavailable, ProviderApi
+from secs_inference.provider.api import (
+    HelloCorrectionRequired,
+    HelloUnavailable,
+    ProviderApi,
+)
 from secs_inference.provider.config import HelloPolicy
 from secs_inference.provider.hello import (
     HelloAccepted,
@@ -13,6 +17,7 @@ from secs_inference.provider.hello import (
     PreparedHello,
 )
 from secs_inference.provider.http import (
+    HttpOutcome,
     HttpResponse,
     RequestUnavailable,
     ResponseRejected,
@@ -45,15 +50,13 @@ def publish_hello_until_stopped(
             outage_active = False
             retry_seconds = min(policy.retry_initial_seconds, _MAX_RETRY_SECONDS)
             wait_seconds = policy.publication_interval_seconds
-        elif type(outcome) is HelloRejected:
+        elif type(outcome) is HelloCorrectionRequired:
             raise RuntimeError(
                 "The Provider API rejected the hello request. Correct the "
                 "provider configuration or code before restarting: "
                 f"{_evidence_message(outcome.response)}"
             )
         else:
-            if type(outcome) is not HelloUnavailable:
-                raise AssertionError("Provider API returned unknown hello evidence")
             if not outage_active:
                 # Remote deployment and authorization can recover without a
                 # local restart, so rejection evidence follows retry policy too.
@@ -69,7 +72,7 @@ def publish_hello_until_stopped(
         stop.wait(wait_seconds)
 
 
-def _evidence_message(evidence: object) -> str:
+def _evidence_message(evidence: HttpOutcome | HelloReceiptRejected) -> str:
     """Describe failure evidence without logging remote response bodies."""
 
     if type(evidence) is HttpResponse:
@@ -94,8 +97,5 @@ def _evidence_message(evidence: object) -> str:
         delivery = evidence.delivery.value.replace("_", " ")
         if evidence.cause is None:
             return f"request delivery was {delivery}"
-        return (
-            f"request delivery was {delivery}; "
-            f"{type(evidence.cause).__name__}: {evidence.cause}"
-        )
+        return f"request delivery was {delivery}; {type(evidence.cause).__name__}"
     raise AssertionError("Remote provider evidence has no operator description")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 import json
@@ -73,10 +73,7 @@ class PreparedHello:
 
 @dataclass(frozen=True, slots=True)
 class HelloAccepted:
-    """API acceptance bound to the provider identity that was published."""
-
-    provider_ref: str
-    accepted_at: str
+    """The API accepted the identity-bound hello snapshot."""
 
 
 class HelloReceiptRejection(Enum):
@@ -91,7 +88,6 @@ class HelloReceiptRejected:
     """A successful HTTP response that cannot prove hello acceptance."""
 
     reason: HelloReceiptRejection
-    cause: BaseException | None = field(default=None, compare=False, repr=False)
 
 
 def prepare_hello(
@@ -111,6 +107,8 @@ def prepare_hello(
     for offering in analysis_offerings:
         if type(offering) is not AnalysisOffering:
             raise TypeError("Provider hello offerings must be exact offering facts")
+        if type(offering.analysis_kind_ref) is not str:
+            raise TypeError("analysis kind must be a string")
         if (
             len(offering.analysis_kind_ref) > 128
             or _ANALYSIS_KIND.fullmatch(offering.analysis_kind_ref) is None
@@ -154,8 +152,8 @@ def parse_hello_receipt(
 
     try:
         document = _decode_response_object(raw)
-    except (UnicodeDecodeError, TypeError, ValueError, RecursionError) as error:
-        return HelloReceiptRejected(HelloReceiptRejection.INVALID_JSON, error)
+    except (UnicodeDecodeError, TypeError, ValueError, RecursionError):
+        return HelloReceiptRejected(HelloReceiptRejection.INVALID_JSON)
     if set(document) != {"schema_id", "provider_ref", "accepted_at"}:
         return HelloReceiptRejected(HelloReceiptRejection.INVALID_SHAPE)
     if document["schema_id"] != HELLO_RESPONSE_SCHEMA_ID:
@@ -173,19 +171,18 @@ def parse_hello_receipt(
         return HelloReceiptRejected(HelloReceiptRejection.INVALID_FIELD)
     if provider_ref != expected_provider_ref:
         return HelloReceiptRejected(HelloReceiptRejection.RESPONSE_DRIFT)
-    return HelloAccepted(provider_ref, accepted_at)
+    return HelloAccepted()
 
 
 def is_fixed_hello_problem(
     raw: bytes,
     *,
     status: int,
-    transport_request_id: str | None,
 ) -> bool:
     """Return whether a problem proves that the fixed hello request must change."""
 
     profile = _FIXED_PROBLEM_PROFILES.get(status)
-    if profile is None or transport_request_id is None:
+    if profile is None:
         return False
     try:
         document = _decode_response_object(raw)
@@ -212,8 +209,6 @@ def is_fixed_hello_problem(
     request_id = document["request_id"]
     code = document["code"]
     detail = document["detail"]
-    # The API carries transport and problem-body correlation IDs independently.
-    # Both must be admitted, but the released contract does not require equality.
     return (
         type(instance) is str
         and 1 <= len(instance) <= 404

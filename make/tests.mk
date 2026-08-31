@@ -58,7 +58,6 @@ test/provider:
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777 \
-		--env PYTHONDONTWRITEBYTECODE=1 \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/config/provider.toml.example",dst=/workspace/config/provider.toml.example,readonly \
 		--mount type=bind,src="$$tests_dir",dst=/workspace/tests/provider,readonly \
 		--entrypoint python "$$provider_image" \

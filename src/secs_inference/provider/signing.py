@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from base64 import b64encode, urlsafe_b64encode
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from hashlib import sha256
 import re
 from types import MappingProxyType
@@ -33,7 +33,6 @@ class SignedRequest:
     query: str
     body: bytes | None
     headers: Mapping[str, str]
-    signature_base: bytes = field(repr=False)
 
     @property
     def raw_target(self) -> str:
@@ -111,7 +110,6 @@ def sign_request(
         query=query,
         body=body,
         headers=MappingProxyType(headers),
-        signature_base=signature_base,
     )
 
 
@@ -206,6 +204,7 @@ def is_canonical_https_authority(value: str) -> bool:
     elif (
         not port.isascii()
         or not port.isdigit()
+        or len(port) > 5
         or (len(port) > 1 and port.startswith("0"))
     ):
         return False

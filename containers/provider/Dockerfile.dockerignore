@@ -13,3 +13,5 @@ src/**
 !src/secs_inference/__init__.py
 !src/secs_inference/provider/
 !src/secs_inference/provider/**
+**/__pycache__
+**/*.py[co]

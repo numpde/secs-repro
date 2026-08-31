@@ -31,7 +31,7 @@ class HelloUnavailable:
 
 
 @dataclass(frozen=True, slots=True)
-class HelloRejected:
+class HelloCorrectionRequired:
     """The API rejected fixed hello facts that require a new process input."""
 
     response: HttpResponse = field(repr=False)
@@ -49,7 +49,7 @@ class ProviderApi:
     def publish_hello(
         self,
         prepared: PreparedHello,
-    ) -> HelloAccepted | HelloRejected | HelloUnavailable:
+    ) -> HelloAccepted | HelloCorrectionRequired | HelloUnavailable:
         """Sign, send, and validate one complete provider hello snapshot."""
 
         signed = sign_request(
@@ -64,21 +64,19 @@ class ProviderApi:
             nonce=token_bytes(16),
         )
         outcome = send_hello_request(endpoint=self.endpoint, request=signed)
-        if (
-            type(outcome) is HttpResponse
-            and is_fixed_hello_problem(
-                outcome.body,
-                status=outcome.status,
-                transport_request_id=outcome.request_id,
-            )
-        ):
-            return HelloRejected(outcome)
-        if type(outcome) is not HttpResponse or outcome.status != 200:
+        if type(outcome) is not HttpResponse:
             return HelloUnavailable(outcome)
-        receipt = parse_hello_receipt(
+        if outcome.status == 200:
+            receipt = parse_hello_receipt(
+                outcome.body,
+                expected_provider_ref=self.provider_ref,
+            )
+            if type(receipt) is HelloAccepted:
+                return receipt
+            return HelloUnavailable(receipt)
+        if is_fixed_hello_problem(
             outcome.body,
-            expected_provider_ref=self.provider_ref,
-        )
-        if type(receipt) is HelloAccepted:
-            return receipt
-        return HelloUnavailable(receipt)
+            status=outcome.status,
+        ):
+            return HelloCorrectionRequired(outcome)
+        return HelloUnavailable(outcome)

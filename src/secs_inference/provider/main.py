@@ -59,15 +59,16 @@ def run_provider(config_path: Path = CONFIG_PATH) -> None:
     """
 
     config = decode_provider_config(_read_regular_file(config_path, _CONFIG_MAX_BYTES))
+    prepared = prepare_configured_hello(config)
+    endpoint = config.endpoint.materialize()
     credential = parse_provider_credential(
         _read_regular_file(
             CREDENTIAL_PATH,
             PROVIDER_SIGNING_CREDENTIAL_MAX_BYTES,
         )
     )
-    prepared = prepare_configured_hello(config)
     api = ProviderApi(
-        endpoint=config.endpoint.materialize(),
+        endpoint=endpoint,
         provider_ref=credential.provider_ref,
         credential_ref=credential.credential_ref,
         private_key=credential.private_key,
