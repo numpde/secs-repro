@@ -1,4 +1,4 @@
-.PHONY: test/integration test/integration/bruker-reference
+.PHONY: test/integration test/integration/bruker-reference test/provider
 .PHONY: test/integration/jcamp-reference test/qualification-tools
 
 test/integration:
@@ -50,6 +50,19 @@ test/integration/bruker-reference test/integration/jcamp-reference:
 		--mount type=bind,src="$$tests_dir",dst=/tests,readonly \
 		--entrypoint python "$$cpu_packages_image" \
 		-m unittest discover -v -s /tests -p "$(REFERENCE_TEST_PATTERN)"
+
+test/provider:
+	@tests_dir=$$(realpath -e tests/provider)
+	provider_image=$$($(MAKE) --no-print-directory provider/image)
+	$(DOCKER) run --rm --init --pull never --network none --read-only \
+		--cap-drop ALL --security-opt no-new-privileges:true \
+		--pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777 \
+		--env PYTHONDONTWRITEBYTECODE=1 \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/config/provider.toml.example",dst=/workspace/config/provider.toml.example,readonly \
+		--mount type=bind,src="$$tests_dir",dst=/workspace/tests/provider,readonly \
+		--entrypoint python "$$provider_image" \
+		-m unittest discover -v -s /workspace/tests/provider -p 'test_*.py'
 
 test/qualification-tools:
 	@if test "$(HOST_UID)" -eq 0; then
