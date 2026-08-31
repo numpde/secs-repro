@@ -5,10 +5,6 @@ readonly wlan_interface="${SECS_WLAN_INTERFACE_INPUT:-}"
 if [[ -z "$wlan_interface" ]]; then
     exec docker "$@"
 fi
-if [[ ! -d "/sys/class/net/$wlan_interface" ]]; then
-    printf 'WLAN interface does not exist: %s\n' "$wlan_interface" >&2
-    exit 2
-fi
 
 arguments=("$@")
 subcommand_index=-1

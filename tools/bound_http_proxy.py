@@ -125,6 +125,8 @@ def main() -> None:
     parser.add_argument("--ready-file", type=Path, required=True)
     args = parser.parse_args()
 
+    if not args.interface or "/" in args.interface or args.interface in (".", ".."):
+        raise SystemExit("network interface must be a single non-empty interface name")
     if not (Path("/sys/class/net") / args.interface).is_dir():
         raise SystemExit(f"network interface does not exist: {args.interface}")
 
