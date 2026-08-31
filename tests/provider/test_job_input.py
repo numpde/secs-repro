@@ -94,6 +94,11 @@ class JobInputTests(unittest.TestCase):
         exact = b"Formula C2H6O"
         selected = _selected(exact)
         self.assert_rejected(b"not JSON", selected)
+        for hostile_json in (
+            b"[" * 10_000 + b"]" * 10_000,
+            b"1" + b"0" * 5_000,
+        ):
+            self.assert_rejected(hostile_json, selected)
         self.assert_rejected(
             _response(exact, schema_id="nmr.provider.other_response.v1"),
             selected,
