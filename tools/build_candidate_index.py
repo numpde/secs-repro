@@ -251,7 +251,7 @@ def build(args: argparse.Namespace) -> None:
     with args.molformer_lock.open("rb") as source:
         molformer_snapshot = tomllib.load(source)["snapshot"]
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "candidate_spec": {
             "checkpoint_file": args.candidate_spec.name,
             "sha256": sha256(args.candidate_spec),
@@ -287,7 +287,7 @@ def build(args: argparse.Namespace) -> None:
         "embedding": {
             "dimension": dimension,
             "compute_dtype": args.compute_dtype,
-            "storage_dtype": "float32",
+            "index_input_dtype": "float32",
             "normalization": "l2",
         },
         "index": {
@@ -299,6 +299,7 @@ def build(args: argparse.Namespace) -> None:
             "hnsw_neighbors": index.hnsw.nb_neighbors(1),
             "pq_subquantizers": index_storage.pq.M,
             "pq_bits": index_storage.pq.nbits,
+            "pq_code_bytes_per_vector": index_storage.code_size,
             "training_rows": training_row_count,
             "training_seed": index_config["training_seed"],
             "training_selection": "one seeded random row from each equal-width row stratum",
