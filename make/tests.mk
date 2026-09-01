@@ -79,7 +79,7 @@ test/integration/challenges: packages/gpu/image
 		--mount type=bind,src="$$fixtures_dir",dst=/fixtures,readonly \
 		--mount type=bind,src="$$test_file",dst=/tests/test_published_challenges.py,readonly \
 		--entrypoint python "$$package_image" \
-		-P -m unittest -v /tests/test_published_challenges.py
+		-P -m unittest discover -v -s /tests -p test_published_challenges.py
 
 test/provider:
 	@tests_dir=$$(realpath -e tests/provider)
