@@ -1,0 +1,71 @@
+{
+  "builder_sha256": "b85be19063c75d39341d80eff5794bc211f821ae9fcbbea8e4b2b8fdd4e309cd",
+  "candidate_spec": {
+    "checkpoint_file": "candidates.toml",
+    "sha256": "b60d5858669304d188828a511a966e716dce41a05d0f1143fbd0da35c080494b"
+  },
+  "checkpoint": {
+    "manifest_sha256": "4d0998eede26990b6d15c1addf23999435dadb6f32e83ac2598e0c94317507d6",
+    "spec_sha256": "dd743de22789240e8777029cbb82cb34c8bebf8dd3f6c1395f0f9ce582a99e71",
+    "weights_sha256": "745d2c0ff7d289a27aa65f90a4ee79b053c73e2c16ea52bf8eebb59202dcb795"
+  },
+  "embedding": {
+    "compute_dtype": "bfloat16",
+    "dimension": 1024,
+    "normalization": "l2",
+    "index_input_dtype": "float32"
+  },
+  "index": {
+    "bytes": 23724229547,
+    "ef_construction": 256,
+    "ef_search": 128000,
+    "faiss_version": "1.13.2",
+    "file": "smiles.faiss",
+    "hnsw_neighbors": 32,
+    "metric": "inner_product",
+    "pq_bits": 8,
+    "pq_subquantizers": 16,
+    "rows": 82335768,
+    "sha256": "008ef71330fb5f38af9d969c39410f4021267dc94f8269a9e98277c0621878c8",
+    "threads": 8,
+    "training_rows": 100000,
+    "training_seed": 0,
+    "training_selection": "one seeded random row from each equal-width row stratum",
+    "type": "IndexHNSWPQ",
+    "pq_code_bytes_per_vector": 16
+  },
+  "molformer": {
+    "lock_sha256": "78adf3aa107147e55d90d3fa97f5dbd941de9d2901e0320d8c44946ddd198cd2",
+    "repository": "ibm-research/MoLFormer-XL-both-10pct",
+    "revision": "7b12d946c181a37f6012b9dc3b002275de070314"
+  },
+  "package_image_id": "sha256:6c5c6d0e32d162fcea848f9fde0e54dadc10589a79a8a287cd8c1bfc63266ee1",
+  "polars_version": "1.44.1",
+  "schema_version": 3,
+  "source": {
+    "acquisition": "local",
+    "archive_md5": "5ca6bed3fb7e70630020f55796fd26ab",
+    "configured_archive_url": "https://zenodo.org/records/14638782/files/zenodo_secs_v3.tar.gz?download=1",
+    "member": "MoleculeBindZenodo/app-cpu/filtered_pubchem.parquet",
+    "member_bytes": 1016631051,
+    "member_sha256": "0420219249cebf832f381118874ad91cbddf322d82a713be34cc21bbac6859a0",
+    "schema": {
+      "molecular_formula": "String",
+      "smiles": "String"
+    }
+  },
+  "table": {
+    "bytes": 1038500477,
+    "file": "candidates.parquet",
+    "rows": 82335768,
+    "schema": {
+      "molecular_formula": "String",
+      "smiles": "String"
+    },
+    "sha256": "b3ead1bbd61efc84698259c6c659fd1f76aabaf958967c908c7abff6f6752677"
+  },
+  "manifest_migration": {
+    "source_sha256": "f37acc77d6c09a456776784468e0020acaf1600d06995f300818ada75d3e7ddc",
+    "qualification_receipt_sha256": "6ff1e3984490bf021afde47ef0d73a31aa7e0d7590052c0b781cb0a35d6fc73f"
+  }
+}

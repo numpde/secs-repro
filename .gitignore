@@ -4,7 +4,8 @@
 /wheelhouse/
 /cache/
 /qualification/
-/checkpoints/*/candidates/
+/checkpoints/*/candidates/*
+!/checkpoints/*/candidates/manifest.json
 /checkpoints/*/.candidate-build.*/
 /.idea/
 __pycache__/
