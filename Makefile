@@ -61,7 +61,8 @@ help:
 	'  make test/integration/jcamp-reference' \
 	'      Compare processed JCAMP-DX decoding with its pinned frontend vector.' \
 	'  make test/integration/challenges' \
-	'      Run all 20 published challenges against one shared GPU model and full index load.' \
+	'      Reproduce artifact-bound ScoreOnly ranks for all 20 published spectra.' \
+	'      One GPU model and full index load are shared across the cases.' \
 	'  make test/provider' \
 	'      Verify hello composition, signing, receipt binding, and retry cadence offline.' \
 	'' \

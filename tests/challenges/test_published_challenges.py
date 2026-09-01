@@ -1,3 +1,5 @@
+"""Regress published spectra against one artifact-bound ScoreOnly runtime."""
+
 import hashlib
 import json
 from pathlib import Path
@@ -17,21 +19,21 @@ from secs_inference.model import SecsInference
 FIXTURES = Path("/fixtures/challenges")
 
 
-def canonical_smiles(smiles: str) -> str:
+def canonical_smiles_without_stereochemistry(smiles: str) -> str:
     molecule = Chem.MolFromSmiles(smiles)
     if molecule is None:
         raise ValueError(f"Cannot canonicalize challenge SMILES {smiles!r}.")
     return Chem.MolToSmiles(molecule, isomericSmiles=False)
 
 
-def exact_formula_rank(
+def rank_expected_structure(
     population: list[tuple[str, float]],
     formula: str,
     expected_smiles: str,
 ) -> int | None:
-    """Return the rank shown after the frontend removes other formulas."""
+    """Rank the expected structure by exact formula, ignoring stereochemistry."""
 
-    expected = canonical_smiles(expected_smiles)
+    expected = canonical_smiles_without_stereochemistry(expected_smiles)
     matching_formula = (
         smiles
         for smiles, _score in population
@@ -41,23 +43,26 @@ def exact_formula_rank(
         (
             rank
             for rank, smiles in enumerate(matching_formula, start=1)
-            if canonical_smiles(smiles) == expected
+            if canonical_smiles_without_stereochemistry(smiles) == expected
         ),
         None,
     )
 
 
 class PublishedChallengeTest(unittest.TestCase):
+    """Share one model and full candidate index across all challenge cases."""
+
     @classmethod
     def setUpClass(cls) -> None:
         fixture_set = json.loads((FIXTURES / "cases.json").read_bytes())
-        candidate_manifest = Path(
-            "/checkpoint/candidates/manifest.json"
-        ).read_bytes()
-        candidate_manifest_sha256 = hashlib.sha256(candidate_manifest).hexdigest()
-        if candidate_manifest_sha256 != fixture_set["candidate_manifest_sha256"]:
+        required_manifest_sha256 = fixture_set["candidate_manifest_sha256"]
+        candidate_manifest = Path("/checkpoint/candidates/manifest.json")
+        actual_manifest_sha256 = hashlib.sha256(candidate_manifest.read_bytes()).hexdigest()
+        if actual_manifest_sha256 != required_manifest_sha256:
             raise RuntimeError(
-                "Published challenge baselines belong to a different candidate bundle."
+                "Cannot run the published challenge baselines with candidate "
+                f"manifest SHA-256 {actual_manifest_sha256}; cases.json requires "
+                f"{required_manifest_sha256}."
             )
 
         faiss.omp_set_num_threads(8)
@@ -92,7 +97,7 @@ class PublishedChallengeTest(unittest.TestCase):
                 spectrum = np.asarray(spectrum_document["y"], dtype=np.float32)
 
                 result = self.elucidator.elucidate(spectrum, case["formula"])
-                rank = exact_formula_rank(
+                rank = rank_expected_structure(
                     result.population,
                     case["formula"],
                     case["expected_smiles"],
