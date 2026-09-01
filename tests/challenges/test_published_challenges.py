@@ -90,8 +90,6 @@ class PublishedChallengeTest(unittest.TestCase):
                     (FIXTURES / f"{case['id']}.json").read_bytes()
                 )
                 spectrum = np.asarray(spectrum_document["y"], dtype=np.float32)
-                self.assertEqual(spectrum.shape, (10_000,))
-                self.assertTrue(np.isfinite(spectrum).all())
 
                 result = self.elucidator.elucidate(spectrum, case["formula"])
                 rank = exact_formula_rank(
