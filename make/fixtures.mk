@@ -5,6 +5,8 @@ override FRONTEND_BRUKER_REFERENCE_INPUT := tests/fixtures/bruker/F3697/1
 override FRONTEND_BRUKER_REFERENCE_OUTPUT := tests/fixtures/frontend/F3697-1.json
 override FRONTEND_JCAMP_REFERENCE_INPUT := tests/fixtures/jcamp/4-chlorobenzylamine
 override FRONTEND_JCAMP_REFERENCE_OUTPUT := tests/fixtures/frontend/4-chlorobenzylamine.json
+override FRONTEND_NTUPLES_REFERENCE_INPUT := tests/fixtures/jcamp/ethylvinylether
+override FRONTEND_NTUPLES_REFERENCE_OUTPUT := tests/fixtures/frontend/ethylvinylether.json
 override FRONTEND_REFERENCE_IMAGE_TAG := secs-repro/frontend-reference
 
 .PHONY: fixtures/frontend-reference/base-image/pull
@@ -62,6 +64,14 @@ fixtures/frontend-reference/write:
 		--output "/output/$(notdir $(FRONTEND_JCAMP_REFERENCE_OUTPUT))" \
 		--path-prefix 4-chlorobenzylamine \
 		--frontend-revision "$(FRONTEND_REFERENCE_REVISION)"
-	# Both conversions must succeed before either pinned reference is published.
+	$(DOCKER) run "$${reference_container[@]}" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(FRONTEND_NTUPLES_REFERENCE_INPUT),dst=/input,readonly" \
+		"$$image" \
+		--input /input \
+		--output "/output/$(notdir $(FRONTEND_NTUPLES_REFERENCE_OUTPUT))" \
+		--path-prefix ethylvinylether \
+		--frontend-revision "$(FRONTEND_REFERENCE_REVISION)"
+	# Every conversion must succeed before any pinned reference is published.
 	mv -f "$$stage/$(notdir $(FRONTEND_BRUKER_REFERENCE_OUTPUT))" "$(FRONTEND_BRUKER_REFERENCE_OUTPUT)"
 	mv -f "$$stage/$(notdir $(FRONTEND_JCAMP_REFERENCE_OUTPUT))" "$(FRONTEND_JCAMP_REFERENCE_OUTPUT)"
+	mv -f "$$stage/$(notdir $(FRONTEND_NTUPLES_REFERENCE_OUTPUT))" "$(FRONTEND_NTUPLES_REFERENCE_OUTPUT)"
