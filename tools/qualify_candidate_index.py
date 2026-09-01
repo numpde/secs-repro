@@ -422,6 +422,7 @@ def verify_index(index, index_config: dict, expected_dimension: int, expected_ro
         "hnsw_level_zero_neighbors": index.hnsw.nb_neighbors(0),
         "pq_subquantizers": storage.pq.M,
         "pq_bits": storage.pq.nbits,
+        "pq_code_bytes_per_vector": storage.code_size,
         "ef_construction": index.hnsw.efConstruction,
         "ef_search": index.hnsw.efSearch,
     }
@@ -494,7 +495,7 @@ def verify_profile(args: argparse.Namespace) -> None:
     index_config = candidate_spec["index"]
     builder_manifest_path = args.bundle / "manifest.json"
     builder_manifest = read_json(builder_manifest_path)
-    require_equal("accept a builder manifest with a different schema", builder_manifest["schema_version"], 2)
+    require_equal("accept a builder manifest with a different schema", builder_manifest["schema_version"], 3)
     require_equal("accept a builder manifest from a different builder", builder_manifest["builder_sha256"], sha256(args.builder))
     require_equal("accept a builder manifest from a different package image", builder_manifest["package_image_id"], args.package_image_id)
     require_equal("accept a builder manifest with a different candidate spec", builder_manifest["candidate_spec"]["sha256"], sha256(args.candidate_spec))
@@ -508,7 +509,11 @@ def verify_profile(args: argparse.Namespace) -> None:
     )
     require_equal("accept a builder manifest with a different source kind", builder_manifest["source"]["acquisition"], "local")
     require_equal("accept a builder manifest with a different compute dtype", builder_manifest["embedding"]["compute_dtype"], args.compute_dtype)
-    require_equal("accept a builder manifest with a different storage dtype", builder_manifest["embedding"]["storage_dtype"], "float32")
+    require_equal(
+        "accept a builder manifest with a different index input dtype",
+        builder_manifest["embedding"]["index_input_dtype"],
+        "float32",
+    )
     require_equal("accept a builder manifest with a different normalization", builder_manifest["embedding"]["normalization"], "l2")
     require_equal("accept a builder manifest with a different training row count", builder_manifest["index"]["training_rows"], min(index_config["training_rows"], profile_rows))
     require_equal("accept a builder manifest with a different training seed", builder_manifest["index"]["training_seed"], index_config["training_seed"])
@@ -545,6 +550,7 @@ def verify_profile(args: argparse.Namespace) -> None:
         "hnsw_neighbors",
         "pq_subquantizers",
         "pq_bits",
+        "pq_code_bytes_per_vector",
         "ef_construction",
         "ef_search",
         "rows",
