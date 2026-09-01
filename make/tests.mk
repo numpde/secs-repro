@@ -52,22 +52,26 @@ test/integration/bruker-reference test/integration/jcamp-reference:
 		--entrypoint python "$$cpu_packages_image" \
 		-m unittest discover -v -s /tests -p "$(REFERENCE_TEST_PATTERN)"
 
+test/integration/challenges: private export CANDIDATE_GPU_INPUT := $(value CANDIDATE_GPU)
 test/integration/challenges: packages/gpu/image
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot run the published challenge tests as host UID 0.' >&2
 		exit 2
 	fi
+	[[ "$${CANDIDATE_GPU_INPUT}" =~ ^[0-9]+$$ ]] || {
+		printf '%s\n' 'CANDIDATE_GPU must name one GPU by its nonnegative integer index.' >&2
+		exit 2
+	}
 	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")
 	checkpoint_dir=$$(realpath -e "$(CHECKPOINT_DIRECTORY)")
-	test -r "$$checkpoint_dir/candidates/smiles.faiss"
-	test -r "$$checkpoint_dir/candidates/candidates.parquet"
 	test_file=$$(realpath -e tests/challenges/test_published_challenges.py)
-	fixtures_dir=$$(realpath -e tests/fixtures)
+	fixtures_dir=$$(realpath -e tests/fixtures/challenges)
 	package_image=$$($(DOCKER) image inspect --format '{{.Id}}' "$(call packages_image_tag,gpu)")
+	# The pinned full bundle peaked at 42.3 GiB; 64 GiB leaves operating headroom.
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 256 --cpus 8 \
-		--memory 64g --memory-swap 64g --gpus "device=$(CANDIDATE_GPU)" \
+		--memory 64g --memory-swap 64g --gpus "device=$${CANDIDATE_GPU_INPUT}" \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777 \
 		--tmpfs /modules:rw,nosuid,nodev,noexec,size=16m,mode=1777 \
 		--env HF_HUB_CACHE=/cache/hub --env HF_HUB_OFFLINE=1 \
@@ -76,7 +80,7 @@ test/integration/challenges: packages/gpu/image
 		--mount type=bind,src="$(MOLFORMER_LOCK)",dst=/input/molformer.lock.toml,readonly \
 		--mount type=bind,src="$$cache_dir",dst=/cache,readonly \
 		--mount type=bind,src="$$checkpoint_dir",dst=/checkpoint,readonly \
-		--mount type=bind,src="$$fixtures_dir",dst=/fixtures,readonly \
+		--mount type=bind,src="$$fixtures_dir",dst=/fixtures/challenges,readonly \
 		--mount type=bind,src="$$test_file",dst=/tests/test_published_challenges.py,readonly \
 		--entrypoint python "$$package_image" \
 		-P -m unittest discover -v -s /tests -p test_published_challenges.py
