@@ -10,6 +10,10 @@ ADMISSIBLE_SPECTRUM_FORMATS = (
         "a JCAMP-DX file containing one processed 1H NMR AFFN XYDATA "
         "block with a ppm axis"
     ),
+    (
+        "a JCAMP-DX file containing one processed 1H NMR NTUPLES "
+        "real/imaginary pair with a ppm axis or a referenced Hz axis"
+    ),
 )
 
 
