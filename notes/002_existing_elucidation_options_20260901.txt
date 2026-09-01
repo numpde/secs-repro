@@ -1,0 +1,154 @@
+Existing SECS elucidation options
+=================================
+
+Date: 2026-09-01
+Status: current implementation inventory
+
+
+Purpose
+-------
+
+Record the candidate-retrieval and optimization choices that already exist in
+the SECS code used by this repository.  These are Python composition options,
+not options currently offered by the provider API or deployment configuration.
+
+An elucidation run combines one candidate source with one optimizer:
+
+    processed 1H spectrum + molecular formula
+                       |
+                       v
+                candidate source
+                       |
+                       v
+              starting SMILES list
+                       |
+                       v
+                   optimizer
+                       |
+                       v
+              ranked SMILES and scores
+
+
+Candidate sources
+-----------------
+
+``FaissCandidateSource``
+    Searches a local FAISS index using the spectrum embedding.  By default it
+    examines the 100,000 neighbours returned by the approximate index, keeps
+    rows whose stored formula belongs to SECS's fixed formula neighbourhood,
+    and preserves that returned order.  A caller can change the search depth
+    independently of the requested number of returned candidates.
+
+    If no row has an allowed formula, it returns no candidates.  It does not
+    fall back to unrelated neighbours.
+
+    ``from_files`` loads the FAISS index and the complete Parquet table into
+    memory.  The table and index must have the same number of rows, because a
+    FAISS row number identifies the SMILES and formula at the same Parquet row.
+
+    This is the only source exercised here against the completed
+    82,335,768-row candidate bundle.
+
+``StaticCandidateSource``
+    Returns a caller-supplied SMILES list, truncated to the requested count.
+    It does not use the spectrum or formula to select that list.
+
+    This source is useful for deterministic tests and replaying a known
+    starting population.  It is not a database search.
+
+``HttpCandidateSource``
+    Sends the normalized spectrum embedding, formula, and requested candidate
+    count to an HTTP service, then uses the returned ``smiles`` list.
+
+    The external service owns its retrieval policy.  This repository has not
+    qualified or deployed that service, so this class is an integration option
+    in the SECS code rather than a supported deployment path here.
+
+
+Optimizers
+----------
+
+``GraphGAOptimizer``
+    Scores the starting population, then generates molecules through graph
+    crossover and mutation.  It returns the surviving population and every
+    molecule scored during the run.
+
+    Its code defaults are:
+
+    * population size: 512;
+    * offspring per generation: 1,024;
+    * generations: 10;
+    * graph-mutation fraction: 0.3;
+    * random seed: 42.
+
+    The SECS optimizer resolver selects Graph GA by default.  This is a library
+    default, not a released provider setting.  The FAISS-plus-Graph-GA
+    completed-bundle proof used a deliberately small population of 8, 8
+    offspring, and one generation; it did not qualify the larger defaults for
+    production latency or concurrency.  It also did not test the provider end
+    to end or establish scientific recovery accuracy.
+
+``ScoreOnlyOptimizer``
+    Scores and ranks the starting population without crossover, mutation, or
+    new molecules.  Its result reports zero generations.
+
+    This provides a retrieval baseline: it ranks retrieved candidates with the
+    same combined spectral, formula, and validity objective, but without adding
+    GA-generated candidates.
+
+
+Formula behavior
+----------------
+
+The supplied formula is parsed as one complete molecular formula before model
+or candidate work begins.  FAISS retrieval does not restrict candidates to
+that exact formula.  It admits the canonical formula plus a fixed set of nearby
+formulas produced by hard-coded atom-count changes.  This is an implementation
+heuristic, not a selectable mode or a claim that the neighbourhood is
+scientifically validated.
+
+The scoring objective compares every SMILES with the exact supplied formula,
+but a mismatch is a score penalty rather than a hard rejection.  Graph GA may
+therefore retain or generate a molecule with a different formula when its other
+scores compensate for that penalty.
+
+The three candidate sources do not provide a selectable exact-formula mode:
+
+* FAISS uses the fixed nearby-formula policy.
+* Static retrieval uses exactly the list supplied by its caller.
+* HTTP retrieval leaves formula handling to the external service.
+
+
+Results
+-------
+
+Both optimizers return an ``OptimizerResult`` containing:
+
+* ``population``: the final surviving ``(SMILES, score)`` pairs, best first;
+* ``all_scored``: every distinct SMILES string scored, best first;
+* ``n_evaluated``: the number of distinct SMILES strings scored;
+* ``generations``: the optimizer's reported generation count.  The current
+  objective derives it from scoring batches, so it can overcount if an
+  optimizer scores more than once per generation.
+
+These are candidate rankings, not validated molecular-structure assignments.
+
+
+What Python callers can compose today
+-------------------------------------
+
+A Python caller can pair any candidate source with either optimizer.  The
+current provider only advertises the analysis through its hello message; it
+does not yet read Jobs, run elucidation, or expose a candidate-source or
+optimizer selection.
+
+The available combinations therefore support development decisions today:
+
+* local candidate search followed by Graph GA;
+* local candidate search scored without generation;
+* deterministic starting populations for tests or replay;
+* an external retrieval service when a separately qualified service exists.
+
+Turning any of these into a provider option requires a deliberate input or
+deployment contract.  The existence of a Python class alone does not make it a
+supported user-facing mode.
