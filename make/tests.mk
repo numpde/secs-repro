@@ -52,7 +52,7 @@ test/integration/bruker-reference test/integration/jcamp-reference:
 		--entrypoint python "$$cpu_packages_image" \
 		-m unittest discover -v -s /tests -p "$(REFERENCE_TEST_PATTERN)"
 
-test/integration/challenges: private export CANDIDATE_GPU_INPUT := $(value CANDIDATE_GPU)
+test/integration/challenges: private export CANDIDATE_GPU_INPUT = $(value CANDIDATE_GPU)
 test/integration/challenges: packages/gpu/image
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot run the published challenge tests as host UID 0.' >&2
