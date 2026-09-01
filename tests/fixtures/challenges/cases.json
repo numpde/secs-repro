@@ -1,0 +1,145 @@
+{
+  "candidate_manifest_sha256": "788060eebee99a93e220a25b2cd614e2583b6bde687b06b31e8ab894c08d5d37",
+  "cases": [
+    {
+      "id": "b3c639e990175544e8def8f916987ba4",
+      "formula": "C9H6N4",
+      "expected_smiles": "c1ccc2c(c1)ccc1nnnn12",
+      "published_rank": null,
+      "score_only_rank": null
+    },
+    {
+      "id": "0bf9c543d129f4c296eb44651d6165c4",
+      "formula": "C7H8ClN",
+      "expected_smiles": "NCc1ccc(Cl)cc1",
+      "published_rank": 3,
+      "score_only_rank": 2
+    },
+    {
+      "id": "900f5f8675ad027da0a91c591eee7ee5",
+      "formula": "C12H10N2O",
+      "expected_smiles": "Nc1ccccc1C(=O)c1ccncc1",
+      "published_rank": null,
+      "score_only_rank": null
+    },
+    {
+      "id": "e90b15c4bde04899d2baf04645eb1a1c",
+      "formula": "C9H7N5O",
+      "expected_smiles": "COc1nc2ccccc2n2nnnc12",
+      "published_rank": null,
+      "score_only_rank": 3
+    },
+    {
+      "id": "bf6df91fc6a5ff58ed4469e378757fd6",
+      "formula": "C10H15N5",
+      "expected_smiles": "CCCCc1cn(-c2cc(C)[nH]n2)nn1",
+      "published_rank": null,
+      "score_only_rank": 1
+    },
+    {
+      "id": "32ffec2faabea4b007289912a1cf22d5",
+      "formula": "C6H8N2O2",
+      "expected_smiles": "CCOC(=O)C=CC=[N+]=[N-]",
+      "published_rank": null,
+      "score_only_rank": null
+    },
+    {
+      "id": "e15ef616e1820e330d3970bb1ac8596d",
+      "formula": "C9H12O3",
+      "expected_smiles": "COC(OC)c1cccc(O)c1",
+      "published_rank": null,
+      "score_only_rank": null
+    },
+    {
+      "id": "b9a4a0ae9188fa9760f7f445280f2297",
+      "formula": "C10H6",
+      "expected_smiles": "C#Cc1ccc(C#C)cc1",
+      "published_rank": 1,
+      "score_only_rank": 1
+    },
+    {
+      "id": "514a8d771db1041cc0759ff0c0c9dbe8",
+      "formula": "C10H6O4",
+      "expected_smiles": "O=C(C(=O)c1ccco1)c1ccco1",
+      "published_rank": 2,
+      "score_only_rank": 4
+    },
+    {
+      "id": "2b277b5eaa2a28423deb8839e4f69feb",
+      "formula": "C6H8O3",
+      "expected_smiles": "COC(=O)C=CC(C)=O",
+      "published_rank": 1,
+      "score_only_rank": 1
+    },
+    {
+      "id": "78cb5c18efc8e41bafce3edcde8537b1",
+      "formula": "C9H8N2",
+      "expected_smiles": "Cc1cnc2ccccc2n1",
+      "published_rank": 1,
+      "score_only_rank": null
+    },
+    {
+      "id": "0a85c42dfc1bf28c7906a5dc55c1d367",
+      "formula": "C9H18O2",
+      "expected_smiles": "COCCCCC1CCCO1",
+      "published_rank": 2,
+      "score_only_rank": null
+    },
+    {
+      "id": "0ae6abacd632ca14b87c1a96a7f30e47",
+      "formula": "C9H6O2",
+      "expected_smiles": "C#Cc1ccc(C(=O)O)cc1",
+      "published_rank": 1,
+      "score_only_rank": null
+    },
+    {
+      "id": "06df7fcf4e541ab3be067c81347b0f18",
+      "formula": "C13H22O2",
+      "expected_smiles": "CCCCCCCCC(O)c1ccco1",
+      "published_rank": null,
+      "score_only_rank": null
+    },
+    {
+      "id": "fecec5119ada7a75817b754f432851ab",
+      "formula": "C12H7Cl2N",
+      "expected_smiles": "Clc1ccc2[nH]c3ccc(Cl)cc3c2c1",
+      "published_rank": null,
+      "score_only_rank": 1
+    },
+    {
+      "id": "c21b2e29e763e861d55dbfa97ab4b253",
+      "formula": "C11H10N2O2",
+      "expected_smiles": "COC(=O)c1ccc2cccc(N)c2n1",
+      "published_rank": null,
+      "score_only_rank": null
+    },
+    {
+      "id": "7058efd729a998caaf21b9389cdcc4a2",
+      "formula": "C8H11NO",
+      "expected_smiles": "COc1ccc(N)cc1C",
+      "published_rank": 7,
+      "score_only_rank": 7
+    },
+    {
+      "id": "6d48798b607ac486fb41c1e756001c39",
+      "formula": "C9H14N2O",
+      "expected_smiles": "CC1=NC2CCCCC2NC1=O",
+      "published_rank": null,
+      "score_only_rank": null
+    },
+    {
+      "id": "d306c553ce6b0733cf1f852a05e7c5b1",
+      "formula": "C12H16O3",
+      "expected_smiles": "COc1ccc(CC(=O)OC(C)C)cc1",
+      "published_rank": 1,
+      "score_only_rank": 1
+    },
+    {
+      "id": "614eecf2cab07c07aaaf2fbefb5335cb",
+      "formula": "C12H15NO",
+      "expected_smiles": "c1cc2c(cc1OCC1CC1)NCC2",
+      "published_rank": 1,
+      "score_only_rank": 3
+    }
+  ]
+}
