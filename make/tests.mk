@@ -1,4 +1,5 @@
-.PHONY: test/integration test/integration/bruker-reference test/provider
+.PHONY: test/integration test/integration/challenges
+.PHONY: test/integration/bruker-reference test/provider
 .PHONY: test/integration/jcamp-reference test/qualification-tools
 
 test/integration:
@@ -50,6 +51,35 @@ test/integration/bruker-reference test/integration/jcamp-reference:
 		--mount type=bind,src="$$tests_dir",dst=/tests,readonly \
 		--entrypoint python "$$cpu_packages_image" \
 		-m unittest discover -v -s /tests -p "$(REFERENCE_TEST_PATTERN)"
+
+test/integration/challenges: packages/gpu/image
+	@if test "$(HOST_UID)" -eq 0; then
+		printf '%s\n' 'Cannot run the published challenge tests as host UID 0.' >&2
+		exit 2
+	fi
+	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")
+	checkpoint_dir=$$(realpath -e "$(CHECKPOINT_DIRECTORY)")
+	test -r "$$checkpoint_dir/candidates/smiles.faiss"
+	test -r "$$checkpoint_dir/candidates/candidates.parquet"
+	test_file=$$(realpath -e tests/challenges/test_published_challenges.py)
+	fixtures_dir=$$(realpath -e tests/fixtures)
+	package_image=$$($(DOCKER) image inspect --format '{{.Id}}' "$(call packages_image_tag,gpu)")
+	$(DOCKER) run --rm --init --pull never --network none --read-only \
+		--cap-drop ALL --security-opt no-new-privileges:true \
+		--pids-limit 256 --cpus 8 \
+		--memory 64g --memory-swap 64g --gpus "device=$(CANDIDATE_GPU)" \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777 \
+		--tmpfs /modules:rw,nosuid,nodev,noexec,size=16m,mode=1777 \
+		--env HF_HUB_CACHE=/cache/hub --env HF_HUB_OFFLINE=1 \
+		--env TRANSFORMERS_OFFLINE=1 --env HF_MODULES_CACHE=/modules \
+		--env PYTHONDONTWRITEBYTECODE=1 \
+		--mount type=bind,src="$(MOLFORMER_LOCK)",dst=/input/molformer.lock.toml,readonly \
+		--mount type=bind,src="$$cache_dir",dst=/cache,readonly \
+		--mount type=bind,src="$$checkpoint_dir",dst=/checkpoint,readonly \
+		--mount type=bind,src="$$fixtures_dir",dst=/fixtures,readonly \
+		--mount type=bind,src="$$test_file",dst=/tests/test_published_challenges.py,readonly \
+		--entrypoint python "$$package_image" \
+		-P -m unittest -v /tests/test_published_challenges.py
 
 test/provider:
 	@tests_dir=$$(realpath -e tests/provider)

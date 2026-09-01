@@ -60,6 +60,8 @@ help:
 	'      Compare nmrglue decoding of F3697/1 with the pinned frontend vector.' \
 	'  make test/integration/jcamp-reference' \
 	'      Compare processed JCAMP-DX decoding with its pinned frontend vector.' \
+	'  make test/integration/challenges' \
+	'      Run all 20 published challenges against one shared GPU model and full index load.' \
 	'  make test/provider' \
 	'      Verify hello composition, signing, receipt binding, and retry cadence offline.' \
 	'' \
@@ -98,8 +100,7 @@ help:
 		'  make packages/base-images/pull packages/gpu/wheelhouse packages/gpu/image' \
 		'      Pull the base images, download the larger CUDA-enabled package set, and build' \
 		'      the GPU package image offline.' \
-		'' \
-		'No GPU integration test is currently provided.'
+		''
 
 checkpoint/image:
 	@$(DOCKER) build --quiet --network none --pull=false \
