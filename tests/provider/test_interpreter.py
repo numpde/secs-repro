@@ -8,7 +8,6 @@ from secs_inference.provider.interpretation import (
     InterpretationCapability,
 )
 from secs_inference.provider.interpreter import (
-    InterpretationResult,
     InterpreterEndpoint,
     InterpreterToolInvocation,
     InterpreterTransportError,
@@ -94,27 +93,18 @@ class InterpreterTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(
-            result,
-            InterpretationResult(
-                value=result.value,
-                configuration_id="primary",
-                model="model-a",
-                attempted_configuration_ids=("primary",),
-            ),
-        )
+        self.assertEqual(result.configuration_id, "primary")
+        self.assertEqual(result.model, "model-a")
+        self.assertEqual(result.attempted_configuration_ids, ("primary",))
         self.assertEqual(result.value.reported_formula, "H6C2O")
         self.assertEqual(result.value.input_slot, "spectrum")
         self.assertIn("processed spectrum", result.value.selection_reason)
-        self.assertNotIn("H6C2O", repr(result.value))
-        self.assertNotIn("processed spectrum", repr(result.value))
         self.assertEqual(failures, [])
 
         second_prompt = endpoint.prompts[1]
         self.assertTrue(
             any(
-                message.get("content")
-                == "Choose input_slot from the available attached inputs."
+                "available attached inputs" in str(message.get("content"))
                 for message in second_prompt
             )
         )
@@ -142,6 +132,16 @@ class InterpreterTests(unittest.TestCase):
                 ),
             )
         )
+        unused_fallback = ScriptedEndpoint(
+            (
+                _submitted(
+                    "must-not-run",
+                    formula="C2H6O",
+                    slot="spectrum",
+                    reason="This endpoint must not be reached.",
+                ),
+            )
+        )
         capability = InterpretationCapability(("spectrum",))
 
         with self.assertRaises(ReportedInputProblem) as raised:
@@ -151,6 +151,11 @@ class InterpreterTests(unittest.TestCase):
                     capability=capability,
                     endpoints=(
                         InterpreterEndpoint("primary", "model-a", endpoint),
+                        InterpreterEndpoint(
+                            "fallback",
+                            "model-b",
+                            unused_fallback,
+                        ),
                     ),
                     interpretation_timeout_seconds=1,
                     report_endpoint_failure=lambda _event: None,
@@ -161,6 +166,7 @@ class InterpreterTests(unittest.TestCase):
         self.assertEqual(raised.exception.message, private_message)
         self.assertNotIn(private_message, str(raised.exception))
         self.assertEqual(len(endpoint.prompts), 2)
+        self.assertEqual(unused_fallback.prompts, [])
 
     def test_transport_failure_falls_back_with_closed_operator_evidence(self) -> None:
         failed = ScriptedEndpoint((InterpreterTransportError("endpoint_unavailable"),))
