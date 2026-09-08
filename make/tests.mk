@@ -94,6 +94,7 @@ test/provider:
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777 \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/config/provider.toml.example",dst=/workspace/config/provider.toml.example,readonly \
 		--mount type=bind,src="$$tests_dir",dst=/workspace/tests/provider,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/contracts",dst=/workspace/contracts,readonly \
 		--entrypoint python "$$provider_image" \
 		-m unittest discover -v -s /workspace/tests/provider -p 'test_*.py'
 
