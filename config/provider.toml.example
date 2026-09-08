@@ -1,4 +1,4 @@
-schema_id = "secs.provider.hello_config.v1"
+schema_id = "secs.provider.config.v1"
 
 [api]
 origin = "https://api.example.test"
@@ -11,3 +11,16 @@ display_name = "SECS"
 provider_description = "Ranks and refines molecular-structure candidates from a molecular formula and one processed one-dimensional proton NMR spectrum."
 publication_interval_seconds = 3600
 retry_initial_seconds = 5
+
+# Omit this table to publish hello without accepting Jobs.
+[execution]
+interpreter_url = "https://model.example.test/v1/chat/completions"
+interpreter_model = "replace-with-deployment-model"
+upload_store_origin = "https://uploads.example.test"
+work_seconds = 1800
+interpretation_seconds = 120
+worker_startup_seconds = 600
+poll_seconds = 5
+max_turns = 12
+max_upload_bytes = 134217728
+max_total_bytes = 268435456

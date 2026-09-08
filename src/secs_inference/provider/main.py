@@ -1,4 +1,4 @@
-"""Production composition for the provider hello process."""
+"""Load fixed provider inputs, then compose hello and optional Job execution."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from secs_inference.provider.api import ProviderApi
 from secs_inference.provider.config import (
     CONFIG_PATH,
     CREDENTIAL_PATH,
+    INTERPRETER_KEY_PATH,
     ProviderConfig,
     decode_provider_config,
 )
@@ -31,6 +32,9 @@ from secs_inference.provider.hello import (
     prepare_hello,
 )
 from secs_inference.provider.process import publish_hello_until_stopped
+from secs_inference.provider.chat import ChatEndpoint
+from secs_inference.provider.upload_download import UploadStore
+from secs_inference.provider.runtime import run_services
 
 
 _CONFIG_MAX_BYTES = 65_536
@@ -52,7 +56,7 @@ def prepare_configured_hello(config: ProviderConfig) -> PreparedHello:
 
 
 def run_provider(config_path: Path = CONFIG_PATH) -> None:
-    """Load hello inputs once, publish immediately, and resend until stopped.
+    """Load deployment inputs once; changes take effect after a restart.
 
     Configuration, credentials, TLS trust, and presentation remain fixed for
     the process lifetime. A deployment change takes effect after a restart.
@@ -73,18 +77,28 @@ def run_provider(config_path: Path = CONFIG_PATH) -> None:
         credential_ref=credential.credential_ref,
         private_key=credential.private_key,
     )
+    chat = upload_store = None
+    if config.execution is not None:
+        execution = config.execution
+        key = _read_regular_file(INTERPRETER_KEY_PATH, 16_384)
+        if not key.isascii():
+            raise ValueError("Interpreter API key must contain only header-safe ASCII characters")
+        chat = ChatEndpoint(execution.interpreter_url, execution.interpreter_model,
+                            key.decode("ascii").rstrip("\r\n"),
+                            Path("/run/config/provider/interpreter-ca.crt") if execution.interpreter_use_private_ca else None)
+        upload_store = UploadStore(execution.upload_store_origin, execution.max_upload_bytes,
+                                   ca_file=Path("/run/config/provider/upload-store-ca.crt") if execution.upload_store_use_private_ca else None)
     stop = Event()
     previous_handlers = {
         signal_number: signal.signal(signal_number, lambda *_args: stop.set())
         for signal_number in (signal.SIGINT, signal.SIGTERM)
     }
     try:
-        publish_hello_until_stopped(
-            api=api,
-            prepared=prepared,
-            policy=config.hello,
-            stop=stop,
-        )
+        if config.execution is None:
+            publish_hello_until_stopped(api=api, prepared=prepared, policy=config.hello, stop=stop)
+        else:
+            run_services(api=api, prepared=prepared, config=config,
+                         chat=chat, upload_store=upload_store, stop=stop)
     finally:
         for signal_number, handler in previous_handlers.items():
             signal.signal(signal_number, handler)
@@ -93,34 +107,41 @@ def run_provider(config_path: Path = CONFIG_PATH) -> None:
 def _read_regular_file(path: Path, maximum_bytes: int) -> bytes:
     """Read one bounded regular file without following a final-path symlink."""
 
+    failure = f"Cannot read provider startup input {path}"
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            status = os.fstat(descriptor)
+            if not stat.S_ISREG(status.st_mode):
+                raise ValueError(f"{failure}: it is not a regular file")
+            if status.st_size > maximum_bytes:
+                raise ValueError(f"{failure}: its {status.st_size} bytes exceed the {maximum_bytes}-byte limit")
+            content = os.read(descriptor, maximum_bytes + 1)
+            if len(content) != status.st_size:
+                raise ValueError(f"{failure}: the file changed while it was read")
+            return content
+        finally:
+            os.close(descriptor)
     except OSError as error:
-        raise ValueError(f"Cannot read provider startup input {path}") from error
-    try:
-        status = os.fstat(descriptor)
-        if not stat.S_ISREG(status.st_mode) or status.st_size > maximum_bytes:
-            raise ValueError("Provider startup input must be a bounded regular file")
-        content = os.read(descriptor, maximum_bytes + 1)
-        if len(content) != status.st_size:
-            raise ValueError("Provider startup input changed while it was read")
-        return content
-    finally:
-        os.close(descriptor)
+        reason = os.strerror(error.errno) if error.errno is not None else type(error).__name__
+        raise ValueError(f"{failure}: {reason}") from error
 
 
 def main() -> int:
-    """Run the hello process and turn a terminal failure into a nonzero exit."""
+    """Turn a terminal failure into a nonzero exit without remote error text."""
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
         run_provider()
     except Exception as error:
-        print("Provider hello could not start or has stopped.", file=os.sys.stderr)
-        traceback.print_exception(error, file=os.sys.stderr)
+        print(f"Provider stopped ({type(error).__name__}).", file=os.sys.stderr)
+        # Startup and runtime boundaries supply safe outer diagnostics. Hidden
+        # parser/transport causes may contain source bytes or credentials.
+        traceback.print_exception(error, chain=False, file=os.sys.stderr)
         print(
-            "Hello publication is stopped. Fix the error above, then restart "
-            "the provider.",
+            "Job admission and hello publication are stopped. If Attempt state or "
+            "diagnostics were retained, they are in /state/journal; correct the failure "
+            "before restarting. Do not delete a pending result to force a retry.",
             file=os.sys.stderr,
         )
         return 1
