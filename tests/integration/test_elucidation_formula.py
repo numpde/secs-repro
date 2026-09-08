@@ -5,7 +5,8 @@ import unittest
 import numpy as np
 
 from secs.elucidation.optimizers.base import OptimizerResult
-from secs_inference.elucidation import SecsElucidator
+from secs_inference.elucidation import FormulaError, SecsElucidator
+from unittest.mock import patch
 
 
 class _Inference:
@@ -61,11 +62,19 @@ class ElucidationFormulaTests(unittest.TestCase):
             initial_population_size=32,
         )
 
-        with self.assertRaises(ValueError):
+        with self.assertRaises(FormulaError):
             elucidator.elucidate([0.0], "C2H6O followed by prose")
 
         self.assertEqual(inference.spectrum_calls, 0)
         self.assertEqual(candidates.formulas, [])
+
+    def test_model_fault_is_not_a_formula_rejection(self):
+        inference = _Inference()
+        elucidator = SecsElucidator(inference, _Candidates(), _Optimizer(), initial_population_size=32)
+        with patch.object(inference, "embed_spectrum", side_effect=ValueError("model bug")):
+            with self.assertRaisesRegex(ValueError, "model bug") as caught:
+                elucidator.elucidate([0.0], "C2H6O")
+        self.assertNotIsInstance(caught.exception, FormulaError)
 
 
 if __name__ == "__main__":
