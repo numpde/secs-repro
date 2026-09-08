@@ -81,6 +81,7 @@ test/integration/challenges: packages/gpu/image
 		--mount type=bind,src="$$cache_dir",dst=/cache,readonly \
 		--mount type=bind,src="$$checkpoint_dir",dst=/checkpoint,readonly \
 		--mount type=bind,src="$$fixtures_dir",dst=/fixtures/challenges,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/fixtures/bruker/F3697/1/pdata/1",dst=/fixtures/bruker/F3697/1/pdata/1,readonly \
 		--mount type=bind,src="$$test_file",dst=/tests/test_published_challenges.py,readonly \
 		--entrypoint python "$$package_image" \
 		-P -m unittest discover -v -s /tests -p test_published_challenges.py

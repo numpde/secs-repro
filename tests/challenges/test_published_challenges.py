@@ -1,4 +1,4 @@
-"""Regress published spectra against one artifact-bound ScoreOnly runtime."""
+"""Exercise scoring and one GA generation with a shared full-index GPU runtime."""
 
 import hashlib
 import json
@@ -10,10 +10,13 @@ import numpy as np
 from rdkit import Chem
 import torch
 
-from secs.elucidation import FaissCandidateSource, ScoreOnlyOptimizer
+from secs.elucidation import FaissCandidateSource, GraphGAOptimizer, ScoreOnlyOptimizer
+from secs.elucidation.caching import TrajectoryCallback
 from secs.utils.elucidation import smiles_to_molecular_formula
 from secs_inference.elucidation import SecsElucidator
 from secs_inference.model import SecsInference
+from secs_inference.spectra.bruker import read_bruker_pdata
+from secs_inference.spectra.secs import prepare_secs_spectrum
 
 
 FIXTURES = Path("/fixtures/challenges")
@@ -66,25 +69,55 @@ class PublishedChallengeTest(unittest.TestCase):
             )
 
         faiss.omp_set_num_threads(8)
-        inference = SecsInference.load(
+        cls.inference = SecsInference.load(
             "/checkpoint/manifest.json",
             molformer_lock="/input/molformer.lock.toml",
             device="cuda:0",
             compute_dtype=torch.bfloat16,
             smiles_batch_size=256,
         )
-        candidate_source = FaissCandidateSource.from_files(
+        cls.candidate_source = FaissCandidateSource.from_files(
             "/checkpoint/candidates/smiles.faiss",
             "/checkpoint/candidates/candidates.parquet",
             n_neighbours=100_000,
         )
         cls.elucidator = SecsElucidator(
-            inference,
-            candidate_source,
+            cls.inference,
+            cls.candidate_source,
             ScoreOnlyOptimizer(),
             initial_population_size=512,
         )
         cls.cases = fixture_set["cases"]
+
+    def test_bruker_full_index_runs_one_graph_ga_generation(self) -> None:
+        """Require new molecules to be scored, not recovery of a known answer."""
+        source = read_bruker_pdata(Path("/fixtures/bruker/F3697/1/pdata/1"))
+        spectrum = prepare_secs_spectrum(source)
+        trajectory = TrajectoryCallback()
+        # Keep refinement small: this proves offspring scoring, not search quality.
+        elucidator = SecsElucidator(
+            self.inference,
+            self.candidate_source,
+            GraphGAOptimizer(
+                population_size=32,
+                offspring_size=32,
+                max_generations=1,
+                seed=42,
+                callbacks=[trajectory],
+            ),
+            initial_population_size=32,
+        )
+
+        # The title identifies strychnine; PubChem CID 441071 gives C21H22N2O2.
+        # https://pubchem.ncbi.nlm.nih.gov/compound/441071
+        result = elucidator.elucidate(spectrum, "C21H22N2O2")
+
+        self.assertEqual(result.generations, 1)
+        self.assertTrue(result.population)
+        self.assertGreater(result.n_evaluated, trajectory.history[0]["n_evaluated"])
+        self.assertTrue(all(np.isfinite(score) for _, score in result.all_scored))
+        scores = [score for _, score in result.population]
+        self.assertEqual(scores, sorted(scores, reverse=True))
 
     def test_full_index_score_only_baseline(self) -> None:
         self.assertEqual(len(self.cases), 20)
