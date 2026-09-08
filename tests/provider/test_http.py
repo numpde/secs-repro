@@ -9,7 +9,7 @@ import socket
 import ssl
 from tempfile import TemporaryDirectory
 from threading import Thread
-from time import sleep
+from time import monotonic, sleep
 import unittest
 
 from cryptography import x509
@@ -212,6 +212,18 @@ class ProviderHttpTests(unittest.TestCase):
         )
         self.assertIsInstance(outcome.cause, EOFError)
 
+    def test_slow_headers_cannot_extend_the_exchange_deadline(self):
+        with _tls_server(self.certificate_directory, header_drip_seconds=0.02) as server:
+            endpoint = self._endpoint(server.port, io_deadline_seconds=0.12)
+            started = monotonic()
+            outcome = send_hello_request(
+                endpoint=endpoint,
+                request=_signed_hello(endpoint.authority, b"{}"),
+            )
+            elapsed = monotonic() - started
+        self.assertIsInstance(outcome, RequestUnavailable)
+        self.assertLess(elapsed, 0.8)
+
     def test_one_deadline_bounds_the_complete_response_read(self):
         with _tls_server(
             self.certificate_directory,
@@ -327,6 +339,7 @@ def _tls_server(
     response_body: bytes = b"{}",
     declared_response_length: int | str | None = None,
     drip_seconds: float | None = None,
+    header_drip_seconds: float | None = None,
 ):
     requests: list[dict[str, str | bytes]] = []
     headers = (
@@ -348,6 +361,8 @@ def _tls_server(
                     "content-length": self.headers.get("Content-Length"),
                     "content-type": self.headers.get("Content-Type"),
                     "content-digest": self.headers.get("Content-Digest"),
+                    "authorization": self.headers.get("Authorization"),
+                    "headers": dict(self.headers),
                     "body": self.rfile.read(length),
                 }
             )
@@ -363,7 +378,13 @@ def _tls_server(
                 ),
             )
             self.send_header("Connection", "close")
-            self.end_headers()
+            if header_drip_seconds is None:
+                self.end_headers()
+            else:
+                for byte in b"".join(self._headers_buffer) + b"\r\n":
+                    self.wfile.write(bytes((byte,)))
+                    self.wfile.flush()
+                    sleep(header_drip_seconds)
             if drip_seconds is None:
                 self.wfile.write(response_body)
             else:

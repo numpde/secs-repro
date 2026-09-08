@@ -18,6 +18,7 @@ from secs_inference.provider.signing import (
     is_canonical_https_authority,
 )
 from secs_inference.provider.operations import Operation
+from secs_inference.provider.socket_deadline import socket_deadline
 
 
 _VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,128}")
@@ -193,39 +194,50 @@ def send_provider_request(
                 RequestDelivery.NOT_SENT,
                 RuntimeError("HTTPS connection exposed no transport socket"),
             )
+        outcome = None
         try:
-            _set_remaining_socket_timeout(transport_socket, deadline)
-            # The signature covers the raw target and Host value. Supply both
-            # explicitly so http.client cannot derive a different wire value.
-            connection.putrequest(
-                request.method,
-                request.raw_target,
-                skip_host=True,
-                skip_accept_encoding=True,
-            )
-            for name, value in request.headers.items():
-                connection.putheader(name, value)
-            # Bodyless capability POSTs forbid even Content-Length: 0.
-            if request.body is not None:
-                connection.putheader("Content-Length", str(len(request.body)))
-            connection.endheaders(request.body)
-            _set_remaining_socket_timeout(transport_socket, deadline)
-            response = connection.getresponse()
-        except (OSError, TimeoutError, http.client.HTTPException) as error:
-            return RequestUnavailable(RequestDelivery.POSSIBLE, error)
-
-        try:
-            return _read_response(
-                transport_socket=transport_socket,
-                response=response,
-                expected_topology=endpoint.expected_topology,
-                deadline=deadline,
-                operation=operation,
-            )
-        finally:
-            response.close()
+            with socket_deadline(transport_socket, deadline):
+                outcome = _exchange(connection, transport_socket, request, endpoint, deadline, operation)
+            return outcome
+        except TimeoutError as error:
+            status = None if outcome is None else getattr(outcome, "status", None)
+            delivery = RequestDelivery.POSSIBLE if status is None else RequestDelivery.RESPONSE_RECEIVED
+            return RequestUnavailable(delivery, error, status)
     finally:
         connection.close()
+
+
+def _exchange(
+    connection: http.client.HTTPSConnection, transport_socket: socket.socket,
+    request: SignedRequest, endpoint: HttpsEndpoint, deadline: float,
+    operation: Operation,
+) -> HttpOutcome:
+    """Preserve delivery evidence while the socket owner enforces the deadline."""
+    try:
+        _set_remaining_socket_timeout(transport_socket, deadline)
+        # The signature covers the raw target and Host value. Supply both
+        # explicitly so http.client cannot derive a different wire value.
+        connection.putrequest(
+            request.method, request.raw_target,
+            skip_host=True, skip_accept_encoding=True,
+        )
+        for name, value in request.headers.items():
+            connection.putheader(name, value)
+        # Bodyless capability POSTs forbid even Content-Length: 0.
+        if request.body is not None:
+            connection.putheader("Content-Length", str(len(request.body)))
+        connection.endheaders(request.body)
+        response = connection.getresponse()
+    except (OSError, TimeoutError, http.client.HTTPException) as error:
+        return RequestUnavailable(RequestDelivery.POSSIBLE, error)
+    try:
+        return _read_response(
+            transport_socket=transport_socket, response=response,
+            expected_topology=endpoint.expected_topology,
+            deadline=deadline, operation=operation,
+        )
+    finally:
+        response.close()
 
 
 def _validate_request(
