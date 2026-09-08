@@ -1,4 +1,4 @@
-"""Decode the transport, presentation, and cadence for provider hello."""
+"""Decode fixed deployment facts for hello and optional Job execution."""
 
 from __future__ import annotations
 
@@ -11,10 +11,39 @@ import tomllib
 from secs_inference.provider.http import HttpsEndpoint, validate_endpoint_config
 
 
-SCHEMA_ID = "secs.provider.hello_config.v1"
+SCHEMA_ID = "secs.provider.config.v1"
 CONFIG_PATH = Path("/run/config/provider/provider.toml")
 CA_PATH = Path("/run/config/provider/api-ca.crt")
 CREDENTIAL_PATH = Path("/run/secrets/provider/signing.private.json")
+INTERPRETER_KEY_PATH = Path("/run/secrets/provider/interpreter.key")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionConfig:
+    """Execution is enabled by this table, never by finding ambient credentials."""
+
+    interpreter_url: str
+    interpreter_model: str
+    upload_store_origin: str
+    work_seconds: float = 1800
+    interpretation_seconds: float = 120
+    worker_startup_seconds: float = 600
+    poll_seconds: float = 5
+    max_turns: int = 12
+    max_upload_bytes: int = 128 * 1024 * 1024
+    max_total_bytes: int = 256 * 1024 * 1024
+    interpreter_use_private_ca: bool = False
+    upload_store_use_private_ca: bool = False
+
+    def __post_init__(self):
+        for name in ("interpreter_use_private_ca", "upload_store_use_private_ca"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"Execution {name} must be a boolean")
+        for name in ("work_seconds", "interpretation_seconds", "worker_startup_seconds", "poll_seconds"):
+            _require_positive_seconds(getattr(self, name), "execution " + name)
+        for name in ("max_turns", "max_upload_bytes", "max_total_bytes"):
+            if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
+                raise ValueError(f"Execution {name} must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,14 +98,15 @@ class HelloPolicy:
 
 @dataclass(frozen=True, slots=True)
 class ProviderConfig:
-    """Complete local configuration needed by the hello-only process."""
+    """The execution table is absent for an explicitly hello-only deployment."""
 
     endpoint: EndpointConfig
     hello: HelloPolicy
+    execution: ExecutionConfig | None = None
 
 
 def decode_provider_config(raw: bytes) -> ProviderConfig:
-    """Decode one closed TOML document into hello-owned values."""
+    """Decode one closed TOML document; endpoint owners admit their URLs."""
 
     if type(raw) is not bytes or len(raw) > 65_536:
         raise ValueError("Provider config must be bounded bytes")
@@ -84,7 +114,7 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
         document = tomllib.loads(raw.decode("utf-8"))
     except (UnicodeError, tomllib.TOMLDecodeError) as error:
         raise ValueError("Provider config is not valid TOML") from error
-    _require_fields("top level", document, {"api", "hello", "schema_id"})
+    _require_fields("top level", document, {"api", "hello", "schema_id"}, {"execution"})
     if document["schema_id"] != SCHEMA_ID:
         raise ValueError("Provider config schema is unsupported")
 
@@ -121,7 +151,13 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
         publication_interval_seconds=hello["publication_interval_seconds"],
         retry_initial_seconds=hello["retry_initial_seconds"],
     )
-    return ProviderConfig(endpoint=endpoint, hello=policy)
+    execution = None
+    if "execution" in document:
+        required = {"interpreter_url", "interpreter_model", "upload_store_origin"}
+        table = _require_table(document, "execution", required,
+                               set(ExecutionConfig.__dataclass_fields__) - required)
+        execution = ExecutionConfig(**table)
+    return ProviderConfig(endpoint=endpoint, hello=policy, execution=execution)
 
 
 def _require_table(
