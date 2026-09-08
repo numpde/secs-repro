@@ -1,11 +1,12 @@
 """Acquire verified Upload bytes without sending provider credentials to a store."""
 
 from base64 import b64encode
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from hashlib import sha256
 import http.client
+import logging
 import math
+import os
 from pathlib import Path
 import re
 import ssl
@@ -15,6 +16,9 @@ from urllib.parse import urlsplit
 
 from secs_inference.provider.job_upload import UploadReadCapability
 from secs_inference.provider.socket_deadline import socket_deadline
+
+
+_LOG = logging.getLogger(__name__)
 
 
 class UploadDownloadError(RuntimeError):
@@ -58,15 +62,19 @@ class UploadStore:
         object.__setattr__(self, "authority", parsed.netloc)
         object.__setattr__(self, "host", parsed.hostname)
         object.__setattr__(self, "port", parsed.port or 443)
-        object.__setattr__(self, "tls_context", ssl.create_default_context(cafile=self.ca_file))
+        try:
+            context = ssl.create_default_context(cafile=self.ca_file)
+        except OSError as error:
+            reason = type(error).__name__ if isinstance(error, ssl.SSLError) or error.errno is None else os.strerror(error.errno)
+            raise ValueError(f"Cannot load Upload store TLS trust from {self.ca_file or 'the system CA store'}: {reason}") from error
+        object.__setattr__(self, "tls_context", context)
 
 
-@contextmanager
-def downloaded_upload(
+def download_upload(
     *, store: UploadStore, capability: UploadReadCapability,
     directory: Path, deadline: float,
 ):
-    """Keep one verified private file until its Attempt finishes using it.
+    """Return one verified private file; the Attempt owner controls its lifetime.
 
     There is no redirect, resume or retry here. Acquisition policy may obtain a
     new grant, but must not expose a partly downloaded file to any parser.
@@ -77,18 +85,44 @@ def downloaded_upload(
     if re.fullmatch(r"[\x21-\x7e]+", capability.capability) is None:
         raise UploadDownloadError("the grant bearer cannot be sent as an HTTP header")
     if capability.byte_length > store.max_upload_bytes:
-        raise UploadDownloadError("the Upload exceeds the configured acquisition byte limit")
-    # NamedTemporaryFile owns both failure cleanup and successful lifetime.
-    # No rename or fsync is needed for bytes that never survive the Attempt.
-    with NamedTemporaryFile(dir=directory, prefix="upload-") as output:
-        _transfer(store, capability, target, output, deadline)
+        raise UploadDownloadError(f"the {capability.byte_length}-byte Upload exceeds this provider's {store.max_upload_bytes}-byte per-Upload limit")
+    # Successful files must have no destructor-driven deletion: if worker stop
+    # cannot be confirmed, they remain until recovery confirms it has exited.
+    try:
+        output = NamedTemporaryFile(dir=directory, prefix="upload-", delete=False)
+    except OSError as error:
+        raise _file_error("creation", error) from error
+    path = Path(output.name)
+    try:
         try:
-            output.flush()
+            _transfer(store, capability, target, output, deadline)
+        except BaseException:
+            try:
+                output.close()
+            except OSError as cleanup:
+                _LOG.error("%s; preserving the original transfer failure", _file_error("finalization", cleanup))
+            raise
+        # Closing flushes buffered writes before the verified file is exposed.
+        # A failed close must not replace an earlier transfer error above.
+        try:
+            output.close()
         except OSError as error:
-            raise UploadDownloadError("the private input file could not be flushed") from error
+            raise _file_error("finalization", error) from error
         if monotonic() >= deadline:
             raise UploadUnavailable("the acquisition deadline elapsed before the file was ready")
-        yield Path(output.name)
+        return path
+    except BaseException:
+        try:
+            path.unlink()
+        except OSError as cleanup:
+            _LOG.error("Cannot confirm removal of an incomplete private input file (%s); it may remain in the Attempt workspace", type(cleanup).__name__)
+        raise
+
+
+def _file_error(operation: str, error: OSError) -> UploadDownloadError:
+    """Keep safe OS evidence at local file effects, never around network I/O."""
+    reason = os.strerror(error.errno) if error.errno is not None else type(error).__name__
+    return UploadDownloadError(f"private input file {operation} failed ({reason})")
 
 
 def _transfer(store, capability, target, output, deadline):
@@ -143,7 +177,7 @@ def _copy_verified(response, capability, output):
         try:
             output.write(chunk)
         except OSError as error:
-            raise UploadDownloadError("the private input file could not be written") from error
+            raise _file_error("write", error) from error
         measured.update(chunk)
     if count != capability.byte_length:
         raise UploadUnavailable("the stream ended before the declared bytes arrived")
