@@ -1,4 +1,4 @@
-"""Send the exact signed provider hello over verified, bounded HTTPS."""
+"""Send exact signed provider requests over verified, bounded HTTPS."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import http.client
 import math
+import os
 from pathlib import Path
 import re
 import socket
@@ -16,15 +17,10 @@ from secs_inference.provider.signing import (
     SignedRequest,
     is_canonical_https_authority,
 )
-from secs_inference.provider.hello import HELLO_PATH
+from secs_inference.provider.operations import Operation
 
 
 _VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,128}")
-_HELLO_REQUEST_BODY_LIMIT = 524_288
-_HELLO_RESPONSE_BODY_LIMIT = 65_536
-_HELLO_STATUSES = frozenset(
-    {200, 400, 401, 403, 404, 408, 413, 414, 431, 500, 503}
-)
 _EDGE_UNAVAILABLE_STATUSES = frozenset({502, 504})
 
 
@@ -37,7 +33,7 @@ class RequestDelivery(Enum):
 
 
 class ResponseRejection(Enum):
-    """Why an HTTP response cannot enter hello receipt parsing."""
+    """Why an HTTP response cannot enter operation-specific receipt parsing."""
 
     UNDECLARED_STATUS = "undeclared_status"
     INVALID_CONTENT_TYPE = "invalid_content_type"
@@ -75,7 +71,7 @@ class TlsRejected:
 
 @dataclass(frozen=True, slots=True)
 class ResponseRejected:
-    """The peer returned an HTTP response outside the pinned hello envelope."""
+    """The peer returned an HTTP response outside the operation's envelope."""
 
     reason: ResponseRejection
     status: int
@@ -113,7 +109,11 @@ class HttpsEndpoint:
         else:
             port = int(port_text)
         ca_file = None if self.ca_file is None else str(Path(self.ca_file))
-        context = ssl.create_default_context(cafile=ca_file)
+        try:
+            context = ssl.create_default_context(cafile=ca_file)
+        except OSError as error:
+            reason = type(error).__name__ if isinstance(error, ssl.SSLError) or error.errno is None else os.strerror(error.errno)
+            raise ValueError(f"Cannot load Provider API TLS trust from {ca_file or 'the system CA store'}: {reason}") from error
         context.check_hostname = True
         context.verify_mode = ssl.CERT_REQUIRED
         object.__setattr__(self, "authority", authority)
@@ -157,7 +157,18 @@ def send_hello_request(
 ) -> HttpOutcome:
     """Send one hello exactly once and return transport evidence without retry."""
 
-    _validate_hello_request(endpoint, request)
+    return send_provider_request(endpoint=endpoint, request=request, operation=Operation.HELLO)
+
+
+def send_provider_request(
+    *,
+    endpoint: HttpsEndpoint,
+    request: SignedRequest,
+    operation: Operation,
+) -> HttpOutcome:
+    """Send once; the caller retains operation-specific retry responsibility."""
+
+    _validate_request(endpoint, request, operation)
 
     connection = http.client.HTTPSConnection(
         endpoint.host,
@@ -194,7 +205,9 @@ def send_hello_request(
             )
             for name, value in request.headers.items():
                 connection.putheader(name, value)
-            connection.putheader("Content-Length", str(len(request.body or b"")))
+            # Bodyless capability POSTs forbid even Content-Length: 0.
+            if request.body is not None:
+                connection.putheader("Content-Length", str(len(request.body)))
             connection.endheaders(request.body)
             _set_remaining_socket_timeout(transport_socket, deadline)
             response = connection.getresponse()
@@ -207,6 +220,7 @@ def send_hello_request(
                 response=response,
                 expected_topology=endpoint.expected_topology,
                 deadline=deadline,
+                operation=operation,
             )
         finally:
             response.close()
@@ -214,13 +228,23 @@ def send_hello_request(
         connection.close()
 
 
-def _validate_hello_request(endpoint: HttpsEndpoint, request: SignedRequest) -> None:
+def _validate_request(
+    endpoint: HttpsEndpoint, request: SignedRequest, operation: Operation,
+) -> None:
     if request.authority != endpoint.authority:
         raise ValueError("Signed request authority does not match Provider API origin")
-    if request.method != "POST" or request.path != HELLO_PATH or request.query:
-        raise ValueError("Signed request target does not match provider hello")
-    if request.body is None or len(request.body) > _HELLO_REQUEST_BODY_LIMIT:
-        raise ValueError("Signed request body does not match provider hello")
+    if (
+        request.method != operation.method
+        or operation.path_pattern.fullmatch(request.path) is None
+        or (request.query and not operation.allows_query)
+    ):
+        raise ValueError(f"Signed request target does not match {operation.name.lower()}")
+    if operation.request_limit == 0:
+        admitted_body = request.body is None
+    else:
+        admitted_body = request.body is not None and len(request.body) <= operation.request_limit
+    if not admitted_body:
+        raise ValueError(f"Signed request body does not match {operation.name.lower()}")
 
 
 def _read_response(
@@ -229,6 +253,7 @@ def _read_response(
     response: http.client.HTTPResponse,
     expected_topology: str,
     deadline: float,
+    operation: Operation,
 ) -> HttpOutcome:
     status = response.status
     if status in _EDGE_UNAVAILABLE_STATUSES:
@@ -236,7 +261,7 @@ def _read_response(
             RequestDelivery.RESPONSE_RECEIVED,
             status=status,
         )
-    if status not in _HELLO_STATUSES:
+    if status not in operation.statuses:
         return ResponseRejected(ResponseRejection.UNDECLARED_STATUS, status)
     headers = response.getheaders()
     expected_media_type = (
@@ -271,20 +296,20 @@ def _read_response(
     declared_length = None
     if lengths:
         significant_length = lengths[0].lstrip("0") or "0"
-        if len(significant_length) > len(str(_HELLO_RESPONSE_BODY_LIMIT)):
+        if len(significant_length) > len(str(operation.response_limit)):
             return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status)
         declared_length = int(significant_length)
-        if declared_length > _HELLO_RESPONSE_BODY_LIMIT:
+        if declared_length > operation.response_limit:
             return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status)
     body_parts: list[bytes] = []
     body_length = 0
     try:
-        while body_length <= _HELLO_RESPONSE_BODY_LIMIT:
+        while body_length <= operation.response_limit:
             if body_length == declared_length or response.isclosed():
                 break
             _set_remaining_socket_timeout(transport_socket, deadline)
             part = response.read1(
-                min(65_536, _HELLO_RESPONSE_BODY_LIMIT + 1 - body_length)
+                min(65_536, operation.response_limit + 1 - body_length)
             )
             if not part:
                 break
@@ -297,7 +322,7 @@ def _read_response(
             status,
         )
     body = b"".join(body_parts)
-    if len(body) > _HELLO_RESPONSE_BODY_LIMIT:
+    if len(body) > operation.response_limit:
         return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status)
     if declared_length is not None and len(body) != declared_length:
         return RequestUnavailable(

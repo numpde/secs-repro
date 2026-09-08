@@ -10,9 +10,10 @@ import re
 
 from secs_inference.provider.canonical_json import JsonValue, canonical_json_bytes
 from secs_inference.provider.credential import validate_provider_ref
+from secs_inference.provider.operations import Operation
 
 
-HELLO_PATH = "/provider/v1/hello"
+HELLO_PATH = Operation.HELLO.path
 HELLO_REQUEST_SCHEMA_ID = "nmr.provider.hello_request.v1"
 HELLO_RESPONSE_SCHEMA_ID = "nmr.provider.hello_response.v1"
 _ANALYSIS_KIND = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*")

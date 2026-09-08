@@ -1,6 +1,13 @@
 PROVIDER_IMAGE_TAG := secs-repro/provider:local
 PROVIDER_WHEELHOUSE := $(REPOSITORY_ROOT)/wheelhouse/provider
 
+.PHONY: provider/contracts/check provider/contracts/write
+provider/contracts/check provider/contracts/write: private export NMR_API_V1_DIRECTORY_INPUT = $(value NMR_API_V1_DIR)
+provider/contracts/check provider/contracts/write:
+	@test -n "$${NMR_API_V1_DIRECTORY_INPUT}" || { \
+		printf '%s\n' 'Set NMR_API_V1_DIR to the API checkout containing the pinned release.' >&2; exit 2; }
+	python3 -I tools/provider_contract.py $(notdir $@) "$${NMR_API_V1_DIRECTORY_INPUT}"
+
 .PHONY: provider/lock/write provider/wheelhouse provider/image
 
 provider/lock/write:

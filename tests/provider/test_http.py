@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import json
 import socket
 import ssl
 from tempfile import TemporaryDirectory
@@ -26,7 +27,9 @@ from secs_inference.provider.http import (
     ResponseRejection,
     TlsRejected,
     send_hello_request,
+    send_provider_request,
 )
+from secs_inference.provider.operations import Operation
 from secs_inference.provider.signing import sign_request
 
 
@@ -86,6 +89,56 @@ class ProviderHttpTests(unittest.TestCase):
 
         self.assertEqual(outcome, TlsRejected())
         self.assertEqual(server.requests, [])
+
+    def test_upload_read_and_capability_post_have_no_content_headers(self):
+        for operation, path in (
+            (Operation.UPLOADS, "/provider/v1/jobs/job:sample/uploads"),
+            (Operation.CAPABILITY, "/provider/v1/jobs/job:sample/uploads/upload:sha256:" + "a" * 64 + "/read-capability"),
+        ):
+            with self.subTest(operation=operation), _tls_server(self.certificate_directory) as server:
+                endpoint = self._endpoint(server.port)
+                request = sign_request(
+                    private_key=PRIVATE_KEY, credential_ref="credential:test",
+                    method=operation.method, authority=endpoint.authority,
+                    path=path, query="", body=None, created=1_784_073_600,
+                    nonce=bytes(range(16)),
+                )
+                outcome = send_provider_request(endpoint=endpoint, request=request, operation=operation)
+            self.assertIsInstance(outcome, HttpResponse)
+            captured = server.requests[0]
+            self.assertEqual(captured["requestline"], f"{operation.method} {path} HTTP/1.1")
+            self.assertIsNone(captured["content-length"])
+            self.assertIsNone(captured["content-type"])
+            self.assertIsNone(captured["content-digest"])
+            self.assertEqual(captured["body"], b"")
+
+    def test_upload_metadata_has_its_own_response_budget(self):
+        body = json.dumps({"description": "x" * 70_000}).encode()
+        for operation, expected_type in (
+            (Operation.UPLOADS, HttpResponse),
+            (Operation.CAPABILITY, ResponseRejected),
+        ):
+            with self.subTest(operation=operation), _tls_server(self.certificate_directory, response_body=body) as server:
+                endpoint = self._endpoint(server.port)
+                path = operation.path.format(job_ref="job:sample", upload_ref="upload:sha256:" + "a" * 64)
+                request = sign_request(
+                    private_key=PRIVATE_KEY, credential_ref="credential:test",
+                    method=operation.method, authority=endpoint.authority,
+                    path=path, query="", body=None, created=1_784_073_600,
+                    nonce=bytes(range(16)),
+                )
+                outcome = send_provider_request(endpoint=endpoint, request=request, operation=operation)
+            self.assertIsInstance(outcome, expected_type)
+
+    def test_operation_envelopes_match_the_frozen_api_release(self):
+        release = Path("/workspace/contracts/upstream/nmr_api_v1/openapi/openapi.v1.json")
+        published = json.loads(release.read_bytes())["paths"]
+        for operation in Operation:
+            with self.subTest(operation=operation):
+                route = published[operation.path][operation.method.lower()]
+                self.assertEqual(operation.request_limit, route["x-nmr-max-request-body-bytes"])
+                self.assertEqual(operation.response_limit, route["x-nmr-max-response-bytes"])
+                self.assertEqual(operation.statuses, {int(status) for status in route["responses"]})
 
     def test_connection_refusal_proves_the_request_was_not_sent(self):
         probe = socket.socket()
@@ -292,8 +345,9 @@ def _tls_server(
                     "requestline": self.requestline,
                     "host": self.headers.get("Host", ""),
                     "signature-input": self.headers.get("Signature-Input", ""),
-                    "content-length": self.headers.get("Content-Length", ""),
-                    "content-digest": self.headers.get("Content-Digest", ""),
+                    "content-length": self.headers.get("Content-Length"),
+                    "content-type": self.headers.get("Content-Type"),
+                    "content-digest": self.headers.get("Content-Digest"),
                     "body": self.rfile.read(length),
                 }
             )
@@ -320,6 +374,8 @@ def _tls_server(
 
         def log_message(self, format, *args):
             pass
+
+        do_GET = do_POST
 
     server = _QuietThreadingHttpServer(("127.0.0.1", 0), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
