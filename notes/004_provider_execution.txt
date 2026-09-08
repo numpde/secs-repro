@@ -1,0 +1,154 @@
+Provider execution
+==================
+
+The provider now handles a Job from input selection to result publication.
+The API and model endpoint in the local proof are scripted HTTPS peers.
+No live deployment or full-index benchmark is implied by that proof.
+
+What it does
+------------
+
+The interpreter sees the complete Job specification and all attached Upload
+descriptions. It can inspect bounded source facts, then chooses the Upload,
+archive member or Bruker processing directory, reader and molecular formula.
+It must explain its choice, or explain why it cannot choose a usable input.
+
+The runner downloads Uploads selected for inspection or analysis, reusing each
+download. It checks the received length and SHA-256 against the API grant
+before exposing bytes to the offline worker.
+Reader and formula rejections return to the same interpreter conversation.
+An outage or model bug does not ask the LLM to invent a different input.
+
+The model and candidate index stay loaded between healthy Attempts. Each
+analysis gets a fresh graph-GA search. After a confirmed scientific-child stop,
+the next admitted Job gets a fresh child. The interrupted analysis is never
+rerun automatically.
+
+What the result says
+--------------------
+
+Result schema: secs.elucidation.result.v1.
+
+An analysed result records:
+
+- The interpreter's final explanation.
+- Each selected reader, formula and exact source identity, with its explanation.
+- Rejected choices and their reading errors; the used choice is marked used.
+- The verified length and SHA-256 of every acquired Upload.
+- Ranked candidate SMILES and scores, actual GA counts and search settings.
+- Spectrum preparation and configured inference mode and retrieval budget.
+
+Scores and ppm endpoints are decimal strings because this provider's canonical
+JSON encoder does not admit floating-point numbers. Compute mode does not
+describe checkpoint or FAISS storage precision.
+
+A cannot_analyse result contains the interpreter's explanation and selection
+history, without invented candidates. This is a completed Attempt whose result
+explains the scientific limitation, not an operationally failed Attempt.
+
+Operational failures use the API failure code/message. Private diagnostics
+identify the Attempt, exception class and code locations; they omit exception
+text, source bytes, credentials and locals. API failure messages distinguish
+requested shutdown, observed Job cancellation and scientific execution errors.
+
+Recovery and shutdown
+---------------------
+
+The private journal retains one obligation: pending start, active work, or an
+exact terminal command. A lost result receipt retries those exact bytes; it
+does not repeat inference. A restarted active Attempt is reported interrupted.
+Terminal publication retries are not cut off by the scientific work deadline.
+
+Observed Job cancellation stops work. Closing a Job does not. A temporarily
+unavailable lifecycle read is retried while the existing work deadline remains
+in force. Only the supervisor may confirm that the scientific child exited.
+An unconfirmed stop preserves its source files and stops new admission.
+
+Recovery of active work or a terminal command does not load the model.
+Replaying a pending start does require worker readiness: the previous request
+may never have arrived, so replay can create a new Attempt.
+
+After restart, leftover sources are removed only after a new ready worker
+connection proves the old child was reaped. A healthy idle worker can also
+release leftovers from its completed operation. Failed cleanup blocks the next
+remote start rather than consuming another Job.
+
+Signals stop admission. In-flight network operations finish or reach their
+deadline; active scientific waits check shutdown at five-second intervals.
+Keep the container stop grace longer than the configured work/startup budgets.
+The example uses 1,900 seconds for its 1,800-second work budget. Forced process
+termination still leaves the last confirmed journal record for recovery.
+
+Deployment inputs
+-----------------
+
+compose/provider.yml follows nmrpeak-repro's separate provider/runner layout.
+This two-service recipe is for Job execution, not a hello-only deployment.
+It is not a claim of live API or GPU qualification.
+
+The recipe assumes a local Linux Docker daemon without user-namespace remapping,
+Compose, and a configured NVIDIA container runtime. Its numeric UID/GID and
+private host-directory ownership must match. Rootless or remapped engines need
+a separately verified ownership mapping; this recipe does not establish one.
+
+Build existing offline inputs with make provider/image and
+make packages/gpu/image. Neither target downloads dependencies. Use the
+returned immutable image IDs for PROVIDER_IMAGE_REF and WORKER_IMAGE_REF.
+
+Use the same default Docker context as the image builds, with DOCKER_HOST and
+DOCKER_CONTEXT unset. Set a distinct Compose project name. After supplying the
+recipe's explicit paths and identities, check its rendering without starting it:
+
+  env -u DOCKER_HOST -u DOCKER_CONTEXT docker --context default compose \
+    --project-name secs-provider -f compose/provider.yml config
+
+No restart, deployment or credential installation is performed by test targets.
+
+Provider inputs:
+
+- Copy config/provider.toml.example to the configured directory as provider.toml.
+  Its schema is secs.provider.config.v1. Keep [execution] for this recipe.
+- Mount the API-issued signing credential and interpreter key separately.
+- Public CA trust is the default. For private trust, api.use_private_ca selects
+  api-ca.crt; execution.interpreter_use_private_ca selects interpreter-ca.crt;
+  execution.upload_store_use_private_ca selects upload-store-ca.crt.
+  These independent files belong beside provider.toml. No TLS bypass is used.
+- State, sources and socket directories must already exist, be private (0700),
+  and be owned by the same nonroot UID/GID used by both containers.
+
+Worker inputs:
+
+- Copy config/worker.toml.example and mount the existing complete checkpoint,
+  candidate parquet/index pair, verified model cache, cache lock and verifier.
+- Choose the one authorized GPU UUID. Inside the worker it is cuda:0.
+- The model cache is verified before imports. Startup loads the existing index;
+  it does not rebuild it or rehash the large index on every Job.
+
+The provider has outbound networking and no GPU. Its configured HTTPS clients
+do not follow redirects or ambient proxy settings. The Compose bridge itself
+is not a destination allowlist. The worker has no network, provider credentials
+or engine socket. Both receive only their declared mounts. Model artifacts are
+read-only; only the private source/socket workspace is shared writable with the
+worker. Preserve the journal and sources across restarts, using the same owner.
+
+The supervisor relies on container lifecycle to kill all children if it dies.
+Do not run it as an unsupervised host process. Normal socket reuse is protected
+by an exclusive supervisor lock; another worker cannot displace a live listener.
+
+Local proof
+-----------
+
+make test/provider covers API binding, acquisition, interpretation, exact
+terminal replay, journal ownership, child termination and runtime wiring.
+
+make test/provider/e2e runs two networkless containers. HTTPS peers live on the
+controller's loopback interface. The production service loop publishes hello,
+downloads a real spectrum in a fixture ZIP, corrects a wrong-nucleus choice,
+runs the real checkpoint with an eight-molecule FAISS index and one GA
+generation, then retries a lost completion receipt without repeating the work.
+The test removes its exact containers before deleting its private workspace.
+
+This proves local workflow integration. It does not measure live interpreter
+selection quality, full-index ranking quality, GPU speed, or deployed API
+acceptance. The fixture observes emitted signing headers; cryptographic
+conformance is covered by the separate provider signing tests.
