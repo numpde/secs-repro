@@ -1,0 +1,13 @@
+# Paths are inside the offline worker, not host paths.
+checkpoint_directory = "/checkpoint"
+molformer_lock = "/input/molformer.lock.toml"
+device = "cuda:0"
+compute_dtype = "bfloat16"
+smiles_batch_size = 256
+initial_population_size = 512
+neighbours = 100000
+threads = 8
+population_size = 512
+offspring_size = 1024
+max_generations = 10
+seed = 42
