@@ -1,4 +1,4 @@
-"""Own fresh authentication and receipt validation for provider hello sends."""
+"""Own fresh provider authentication for every send, including command replay."""
 
 from __future__ import annotations
 
@@ -19,8 +19,15 @@ from secs_inference.provider.http import (
     HttpResponse,
     HttpsEndpoint,
     send_hello_request,
+    send_provider_request,
+    TlsRejected,
+    ResponseRejected,
+    RequestUnavailable,
 )
 from secs_inference.provider.signing import sign_request
+from secs_inference.provider.operations import Operation
+from secs_inference.provider.job_api import ApiError, ApiUnavailable
+from secs_inference.provider.response_json import response_object
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,12 +46,46 @@ class HelloCorrectionRequired:
 
 @dataclass(frozen=True, slots=True)
 class ProviderApi:
-    """Authenticated hello transport for one provider credential."""
+    """Authenticate hello and execution requests with one provider credential."""
 
     endpoint: HttpsEndpoint
     provider_ref: str
     credential_ref: str
     private_key: Ed25519PrivateKey = field(repr=False, compare=False)
+
+    def request(self, operation: Operation, *, path: str | None = None, query: str = "", body: bytes | None = None) -> bytes:
+        """Send once with fresh authentication; execution policy owns all retries."""
+        signed = sign_request(
+            private_key=self.private_key, credential_ref=self.credential_ref,
+            method=operation.method, authority=self.endpoint.authority,
+            path=operation.path if path is None else path, query=query, body=body,
+            created=int(time()), nonce=token_bytes(16),
+        )
+        outcome = send_provider_request(endpoint=self.endpoint, request=signed, operation=operation)
+        operation_name = f"Provider API request to {operation.action}"
+        if isinstance(outcome, TlsRejected):
+            raise ApiError(f"Cannot finish {operation_name}: TLS verification failed before the request was sent")
+        if isinstance(outcome, ResponseRejected):
+            raise ApiError(f"Cannot confirm the outcome of the {operation_name}: HTTP {outcome.status} response was rejected ({outcome.reason.value})")
+        if isinstance(outcome, RequestUnavailable):
+            evidence = (f"HTTP {outcome.status} did not yield an admitted API response" if outcome.status is not None
+                        else f"request delivery was {outcome.delivery.value.replace('_', ' ')}")
+            raise ApiUnavailable(f"Cannot confirm the outcome of the {operation_name}: {evidence}")
+        if outcome.status == 200:
+            return outcome.body
+        request = " without a request ID" if outcome.request_id is None else f" for request {outcome.request_id}"
+        # Only these problem meanings authorize retirement or reconciliation.
+        # A status line alone, even over TLS, is not their application receipt.
+        if outcome.status in {404, 409}:
+            meaning = "not-found" if outcome.status == 404 else "operation-conflict"
+            try:
+                problem = response_object(outcome.body)
+            except (ValueError, UnicodeError, RecursionError):
+                problem = {}
+            if problem.get("type") != "urn:nmr-api:problem:" + meaning or problem.get("status") != outcome.status:
+                raise ApiError(f"Cannot reconcile {operation_name} HTTP {outcome.status}{request}: its problem meaning is unreadable")
+        error_type = ApiUnavailable if outcome.status in {408, 503} else ApiError
+        raise error_type(f"{operation_name} returned HTTP {outcome.status}{request}", status=outcome.status)
 
     def publish_hello(
         self,

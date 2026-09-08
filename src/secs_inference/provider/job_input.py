@@ -7,6 +7,7 @@ from binascii import Error as Base64Error
 from dataclasses import dataclass, field
 from hashlib import sha256
 import json
+import re
 
 
 JOB_SPECIFICATION_SCHEMA_ID = "nmr.job.specification.text.v1"
@@ -37,6 +38,17 @@ class JobSpecification:
 
     job_ref: str
     text: str = field(repr=False)
+
+
+def selected_job_input(document: dict) -> SelectedJobInput:
+    """Admit an input identity from the feed or the retained recovery record."""
+    ref, length, fingerprint = document["job_ref"], document["input_byte_length"], document["input_fingerprint"]
+    if (type(ref) is not str or re.fullmatch(r"job:[A-Za-z0-9_.-]{1,124}", ref) is None
+            or type(length) is not int or not 1 <= length <= 65536
+            or type(fingerprint) is not str or re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint) is None
+            or document["input_schema_id"] != JOB_SPECIFICATION_SCHEMA_ID):
+        raise JobInputError("the selected input identity is unreadable")
+    return SelectedJobInput(ref, document["input_schema_id"], fingerprint, length)
 
 
 def parse_job_input_read_response(
