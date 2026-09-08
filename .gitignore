@@ -3,6 +3,7 @@
 /checkpoints/**/*.zst
 /wheelhouse/
 /cache/
+/secrets/
 /qualification/
 /checkpoints/*/candidates/*
 !/checkpoints/*/candidates/manifest.json
