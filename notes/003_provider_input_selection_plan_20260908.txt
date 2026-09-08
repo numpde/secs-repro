@@ -1,0 +1,223 @@
+Provider input selection and format extensions
+=============================================
+
+Date: 2026-09-08
+Status: revised implementation plan; provider execution is not implemented
+
+
+Decision
+--------
+
+The interpreter chooses the inputs and the supported way to read them. It
+uses the Job specification, Upload descriptions and, when needed, bounded
+inspection facts from file contents. It explains its choice or why it cannot
+make one. The runner executes that choice and returns useful reading failures
+for correction.
+
+An Upload is a stored file. A dataset is a group of related scientific data,
+possibly spread across files. A spectrum is an observation decoded from that
+dataset. These are separate concepts: an archive can contain several datasets,
+and a future analysis may need several spectra.
+
+For this analysis, the end product of input preparation is one processed 1D
+proton spectrum plus a molecular formula. That requirement does not imply one
+Upload, one archive member, or one dataset in every submitted archive.
+
+
+Who makes each decision
+-----------------------
+
+The API owns Upload identity, byte access and current Job membership. Its
+metadata has no filename, relative path, format or scientific role. Descriptions
+can inform the interpreter's selection; they cannot reconstruct a file tree.
+
+The interpreter owns scientific input selection: which Uploads matter, which
+dataset to use, which available reader or processing operation fits, and which
+formula the supplied information establishes. It receives descriptions of
+available operations with their typed arguments and input requirements.
+
+The input adapter obtains verified bytes and exposes inspection or reading
+operations. It resolves source references and archive members inside those
+bytes. Local paths and download credentials remain its implementation details.
+Inspection and reading share the acquired file for the duration of the work;
+moving between them does not require another download or membership read.
+The adapter removes acquired and materialized files when that work ends,
+including failure. The execution owner must stop and join active operations
+before releasing their files or accepting new work; merely ending a wait does
+not stop a parser or GPU computation.
+
+The selected reader owns decoding and the scientific facts needed to interpret
+its input. It reports an unsupported representation or unreadable data where
+reading fails. There is no second classifier deciding whether the interpreter
+chose the right format, and no automatic retry through every installed reader.
+Reader- or formula-owned input rejections can go back for correction, including
+an expected inability to decode the selected source. That reports what the
+chosen operation could not do; it does not prove the data or chemistry invalid.
+Unexpected program faults remain operational. An exception type alone does
+not distinguish these cases; do not catch every ValueError around the pipeline.
+
+The existing formula parser owns formula syntax. The existing SECS preparation
+function owns resampling and normalization. The interpreter adapter does not
+duplicate formula parsing or spectrum preparation.
+
+
+Selection and execution
+-----------------------
+
+1. Read the Job specification and its current Upload metadata after admitting
+   an Attempt. Give the interpreter the available descriptions without silently
+   dropping choices to fit its context.
+2. Let it request inspection of a relevant Upload when descriptions are
+   insufficient. Obtain that Upload on demand. Inspection returns useful facts
+   such as archive members and spectrum headers, rather than decoding every
+   attachment or requiring a separate approval for each read.
+3. Let it either choose a reader, its source arguments and formula with a
+   short explanation, or return an explained input problem. Only an executable
+   choice proceeds to reading and SECS. An input problem becomes a
+   cannot_analyse report without dummy reader, source or formula fields.
+4. Execute the requested read, prepare the spectrum and run SECS. The
+   elucidator already parses the formula before model work. Return actionable
+   formula or reading rejections to the interpreter for correction. The
+   interpreter policy bounds total interpretation time and model turns across
+   inspection and correction, within the Attempt work deadline. Readers do not
+   acquire their own semantic retry policies.
+5. Preserve the selection explanation, any corrected choice, actual source
+   references and the processing performed in the report. Transport retries
+   retain the choice; they do not ask the interpreter to diagnose an outage.
+
+Inspection results are input evidence, including untrusted file text. The
+interpreter selects among available operations; it cannot introduce shell
+commands, arbitrary downloads or new executable processing code.
+
+
+First readers and packaging
+---------------------------
+
+Expose the existing processed JCAMP-DX and Bruker readers through explicit
+reader-specific requests. A JCAMP request identifies its file; a Bruker request
+identifies the processed dataset and associated parameters. Do not force both
+into an interface where a single local filename must describe every input.
+
+Support direct JCAMP and ZIP-packaged files in the first provider integration.
+ZIP handling makes members available to readers and inspection. It does not
+choose a Bruker experiment. When an archive contains several experiments, the
+interpreter chooses the relevant one from the available evidence. If the
+evidence is insufficient, it explains the ambiguity instead of guessing.
+
+Archive members identify source data, not host output paths. The adapter owns
+bounded member access and any private materialization needed by a library.
+Readers do not acquire network access or implement their own archive extraction.
+
+The Bruker reader currently reconstructs an axis without checking the nucleus.
+Before exposing it to arbitrary inputs, make it establish the supported 1D
+proton case while decoding. That is part of reading the spectrum correctly;
+it does not justify a separate general Bruker validator.
+
+
+Adding capabilities
+-------------------
+
+Evolve the existing format inventory into one lightweight catalogue of input
+operations and their admitted representations. Hello descriptions and
+interpreter guidance derive from it.
+Reader implementations are bound in preprocessing composition, so publishing
+hello does not import NumPy, nmrglue or the model. A library's ability to parse
+a format is not by itself a promise that this analysis can use every variant.
+
+An additional processed format adds a reader, its operation description and
+scientific fixtures. Acquisition, Attempt recovery and SECS inference keep
+their responsibilities. Use explicit registrations; no plugin discovery or
+generic workflow language is needed.
+
+Additional archive formats extend member access. Additional datasets within a
+supported container extend inspection and the selected reader's source
+arguments. Neither requires a new Upload transport or an automatic ranking
+policy in the runner.
+
+A dataset spread across separate Uploads needs an explicit mapping from reader
+components to Upload references. Add that typed request when implementing the
+first such reader. The interpreter can then assemble the mapping from evidence;
+the API does not currently provide relative paths that we can assume exist.
+
+Raw FID support adds a qualified processing operation before the processed
+spectrum handoff. Its parameters and performed transformations belong in the
+report. Do not silently process raw data inside a processed-spectrum reader.
+
+Another nucleus, multidimensional data or several spectra may require a new
+analysis input model. Keep the current SourceSpectrum seam for processed 1D
+data; do not build a universal spectrum object with unused optional fields.
+
+
+Failure and recovery
+--------------------
+
+Keep checks where they have an effect: API access, verified transfer, contained
+file access and actual decoding. Pass admitted values onwards without repeated
+membership reads, mirrored validators or format-guessing gates. A capability
+404 does not prove that an Upload was removed; reconcile access before asking
+the interpreter to choose from a changed set.
+
+An analysed or cannot_analyse report completes the Attempt successfully; the
+report distinguishes the scientific outcome and includes the explanation.
+Operational failures use the API's failed Attempt message. The API cannot
+attach a structured result to a failed Attempt, so an outage must not be
+relabeled as a scientific input conclusion to publish one.
+Exhausting the interpretation budget without a usable selection or an explicit
+input-problem report is a provider failure; it does not establish bad input.
+At publication, render a failure message naming the blocked operation and its
+safe cause within the API's 1,024-character limit. Keep raw inputs, results,
+stack traces and credentials out of it. Retain protected, credential-free
+diagnostic evidence under the Attempt reference; do not copy exception chains
+into LLM feedback.
+
+Use a warm inference worker and initially settle one Attempt before accepting
+another. Persist start facts before requesting an Attempt, its returned identity
+and the feed's specification fingerprint before work, and exact terminal bytes
+before publication. That fingerprint identifies Job text, not linked Uploads.
+On restart, reconcile with the API: replay pending start facts; report an
+interrupted active Attempt as failed if it is still in progress; replay a
+pending terminal command exactly. A start replay can reveal an already terminal
+Attempt and must not restart its analysis. Adding a reader adds no journal
+states or recovery policy. The work deadline does not discard a retained
+terminal command, and pending publication does not keep source files alive.
+
+
+Proof and implementation order
+------------------------------
+
+Use existing decoder fixtures through the real input path. Exercise selection
+among distractor Uploads, selection inside an archive with several experiments,
+and a reader failure followed by an explained correction. Verify that an
+outage preserves the choice and that lost result delivery does not rerun it.
+Distinguish an expected input rejection from an unexpected execution fault
+in the emitted interpreter feedback and Attempt outcome.
+Keep transfer identity and archive containment tests at their owning boundary.
+Exercise work timeout and cleanup together so a stopped wait cannot hide work
+still using files or the GPU.
+
+First import the supported immutable API contract and implement byte access.
+Then connect inspection and the existing readers to interpreter-owned selection,
+including archive member selection. Add reporting and durable orchestration
+around that path. Implement future readers against the same responsibilities
+when their scientific fixtures and concrete input requirements are available.
+Connect one fixture through selection, reading and result delivery before
+enabling live Job consumption with durable recovery connected.
+
+
+Evidence and scope
+------------------
+
+Current code: src/secs_inference/provider/analysis.py, provider/job_input.py,
+spectra/{jcamp,bruker,source,secs}.py and containers/provider/Dockerfile.
+The provider image currently contains hello transport, not these execution
+operations. The frontend's spectrum/readSpectrum.ts demonstrates that one
+archive can contain multiple experiments; its automatic ranking is not adopted.
+
+API authority: nmr-api-v1 supported provider release
+sha256:bb932dc51685d8403d859fdae5a887f44ecf3ca2bbed4fb1825fe16e04849b65
+and its Job Upload-set, capability and Attempt contracts. Local release
+availability does not establish deployed endpoint readiness.
+
+This note replaces the input-selection proposals in the preceding discussion
+and the assumed Upload paths in historical note 001. It records planned
+behavior; it does not extend the formats supported by the current code.

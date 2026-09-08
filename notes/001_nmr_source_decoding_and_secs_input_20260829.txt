@@ -4,6 +4,10 @@ Bruker experiment decoding and SECS input design
 Date: 2026-08-29
 Status: historical design record; not a current implementation contract
 
+For the current provider input plan, see
+003_provider_input_selection_plan_20260908.txt. The Upload relative-path
+contract assumed below was not adopted by the API.
+
 
 Purpose
 -------
