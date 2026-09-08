@@ -1,0 +1,135 @@
+# Adapted from nmrpeak-repro: the provider owns network credentials; the
+# scientific worker has no network and receives only private input paths.
+services:
+  provider:
+    image: "${PROVIDER_IMAGE_REF:?set the built provider image ID}"
+    pull_policy: never
+    init: true
+    user: "${PROVIDER_UID:?set the owning nonroot UID}:${PROVIDER_GID:?set its GID}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    cpus: 1
+    mem_limit: 512m
+    memswap_limit: 512m
+    # Covers the example's longest input transfer plus stop acknowledgement.
+    stop_grace_period: 1900s
+    depends_on: [worker]
+    networks: [provider-egress]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777
+    volumes:
+      - type: bind
+        source: "${PROVIDER_CONFIG_DIRECTORY:?set the provider TOML and CA directory}"
+        target: /run/config/provider
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${PROVIDER_CREDENTIAL_FILE:?set the provider signing credential file}"
+        target: /run/secrets/provider/signing.private.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${INTERPRETER_KEY_FILE:?set the interpreter API key file}"
+        target: /run/secrets/provider/interpreter.key
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${ATTEMPT_STATE_DIRECTORY:?set the persistent private state directory}"
+        target: /state
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${SOURCE_DIRECTORY:?set the private shared source directory}"
+        target: /run/secs/sources
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${WORKER_SOCKET_DIRECTORY:?set the private shared socket directory}"
+        target: /run/secs/worker
+        read_only: true
+        bind: {create_host_path: false}
+    logging:
+      driver: json-file
+      options: {max-file: "3", max-size: 10m}
+
+  worker:
+    image: "${WORKER_IMAGE_REF:?set the built GPU package image ID}"
+    pull_policy: never
+    init: true
+    user: "${PROVIDER_UID:?set the owning nonroot UID}:${PROVIDER_GID:?set its GID}"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    cpus: 8
+    mem_limit: 64g
+    memswap_limit: 64g
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${WORKER_GPU_UUID:?set the one authorized GPU UUID}"]
+              capabilities: [gpu]
+    environment:
+      HF_HUB_CACHE: /cache/hub
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_MODULES_CACHE: /modules
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      TORCHINDUCTOR_CACHE_DIR: /tmp/torchinductor
+      OMP_NUM_THREADS: "8"
+      OPENBLAS_NUM_THREADS: "8"
+      MKL_NUM_THREADS: "8"
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777
+      - /modules:rw,nosuid,nodev,noexec,size=16m,mode=1777
+    volumes:
+      - type: bind
+        source: "${WORKER_CONFIG_FILE:?set the worker TOML file}"
+        target: /run/config/worker/worker.toml
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${CHECKPOINT_DIRECTORY:?set the existing complete checkpoint directory}"
+        target: /checkpoint
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${MOLFORMER_CACHE_DIRECTORY:?set the existing verified model cache}"
+        target: /cache
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${MOLFORMER_LOCK_FILE:?set the pinned model cache lock}"
+        target: /input/molformer.lock.toml
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${CACHE_VERIFIER_FILE:?set tools/materialize_molformer_cache.py}"
+        target: /opt/materialize.py
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${SOURCE_DIRECTORY:?set the private shared source directory}"
+        target: /run/secs/sources
+        bind: {create_host_path: false}
+      - type: bind
+        source: "${WORKER_SOCKET_DIRECTORY:?set the private shared socket directory}"
+        target: /run/secs/worker
+        bind: {create_host_path: false}
+    entrypoint: [/bin/sh, -c]
+    command:
+      - python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && exec python -P -m secs_inference.provider.worker_model
+    logging:
+      driver: json-file
+      options: {max-file: "3", max-size: 10m}
+
+networks:
+  # The controller uses configured HTTPS destinations. This bridge is not an
+  # engine-enforced destination allowlist; the worker is not attached to it.
+  provider-egress:
+    driver: bridge

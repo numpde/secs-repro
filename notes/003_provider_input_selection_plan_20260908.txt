@@ -2,7 +2,8 @@ Provider input selection and format extensions
 =============================================
 
 Date: 2026-09-08
-Status: revised implementation plan; provider execution is not implemented
+Status: implemented and locally exercised; live deployment is not qualified
+Operation and proof limits: notes/004_provider_execution.txt
 
 
 Decision
