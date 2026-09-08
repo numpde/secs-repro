@@ -115,3 +115,72 @@ test/qualification-tools:
 		--mount type=bind,src="$$tests_dir",dst=/tests,readonly \
 		--entrypoint python "$$cpu_packages_image" \
 		-P -m unittest discover -v -s /tests -p 'test_*.py'
+
+.PHONY: test/provider/e2e
+test/provider/e2e:
+	@if test "$(HOST_UID)" -eq 0; then
+		printf '%s\n' 'Cannot run the provider scenario as host UID 0.' >&2
+		exit 2
+	fi
+	provider_image=$$($(MAKE) --no-print-directory provider/image)
+	cpu_image=$$($(MAKE) --no-print-directory packages/cpu/image)
+	stage=$$(mktemp -d /tmp/secs-provider-e2e.XXXXXXXX)
+	worker_started=0
+	controller_started=0
+	cleanup() {
+		status=$$?
+		for role in controller worker; do
+			started_variable=$${role}_started
+			if test "$${!started_variable}" -eq 0; then continue; fi
+			if ! test -s "$$stage/$$role.cid"; then
+				printf '%s\n' "$$role container identity is unconfirmed; retaining $$stage" >&2
+				exit 1
+			fi
+			read -r container_id < "$$stage/$$role.cid" || true
+			[[ "$$container_id" =~ ^[a-f0-9]{64}$$ ]] || exit 1
+			if test "$$status" -ne 0; then $(DOCKER) logs --tail 80 "$$container_id" >&2 || true; fi
+			if ! $(DOCKER) rm --force "$$container_id" >/dev/null; then
+				printf '%s\n' "$$role removal is unconfirmed; retaining $$stage" >&2
+				exit 1
+			fi
+		done
+		rm -rf -- "$$stage"
+		exit "$$status"
+	}
+	trap cleanup EXIT
+	mkdir -m 700 "$$stage/sources" "$$stage/socket" "$$stage/state"
+	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")
+	checkpoint_dir=$$(realpath -e "$(CHECKPOINT_DIRECTORY)")
+	worker_started=1
+	$(DOCKER) run --cidfile "$$stage/worker.cid" --detach --init --pull never --network none --read-only \
+		--user "$(HOST_UID):$(HOST_GID)" --cap-drop ALL --security-opt no-new-privileges:true \
+		--pids-limit 64 --cpus 2 --memory 3g --memory-swap 3g \
+		--log-opt max-size=1m --log-opt max-file=1 \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777 \
+		--tmpfs /modules:rw,nosuid,nodev,noexec,size=16m,mode=1777 \
+		--env HF_HUB_CACHE=/cache/hub --env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1 \
+		--env HF_MODULES_CACHE=/modules --env PYTHONDONTWRITEBYTECODE=1 --env PYTHONPATH=/tests \
+		--env OMP_NUM_THREADS=2 --env OPENBLAS_NUM_THREADS=2 --env MKL_NUM_THREADS=2 \
+		--env TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor \
+		--mount type=bind,src="$(MOLFORMER_LOCK)",dst=/input/molformer.lock.toml,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
+		--mount type=bind,src="$$cache_dir",dst=/cache,readonly \
+		--mount type=bind,src="$$checkpoint_dir",dst=/checkpoint,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/e2e/worker_fixture.py",dst=/tests/worker_fixture.py,readonly \
+		--mount type=bind,src="$$stage/sources",dst=/run/secs/sources \
+		--mount type=bind,src="$$stage/socket",dst=/run/secs/worker \
+		--entrypoint /bin/sh "$$cpu_image" \
+		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && exec python -m worker_fixture' >/dev/null
+	controller_started=1
+	$(DOCKER) run --cidfile "$$stage/controller.cid" --init --pull never --network none --read-only \
+		--user "$(HOST_UID):$(HOST_GID)" --cap-drop ALL --security-opt no-new-privileges:true \
+		--pids-limit 64 --cpus 1 --memory 512m --memory-swap 512m \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777 \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/e2e/test_provider_e2e.py",dst=/tests/e2e/test_provider_e2e.py,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/provider/test_http.py",dst=/tests/e2e/tls_fixture.py,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/fixtures",dst=/fixtures,readonly \
+		--mount type=bind,src="$$stage/sources",dst=/run/secs/sources \
+		--mount type=bind,src="$$stage/socket",dst=/run/secs/worker,readonly \
+		--mount type=bind,src="$$stage/state",dst=/state \
+		--entrypoint python "$$provider_image" \
+		-m unittest discover -v -s /tests/e2e -p test_provider_e2e.py

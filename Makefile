@@ -64,7 +64,10 @@ help:
 	'      Reproduce artifact-bound ScoreOnly ranks for all 20 published spectra.' \
 	'      One GPU model and full index load are shared across the cases.' \
 	'  make test/provider' \
-	'      Verify hello composition, signing, receipt binding, and retry cadence offline.' \
+	'      Verify input selection, signed API transport, recovery and cancellation offline.' \
+	'  make test/provider/e2e' \
+	'      Prove hello, verified input, real model/FAISS/GA and result retry in two offline containers.' \
+	'      Uses eight fixture candidates, not the full index; see notes/004_provider_execution.txt.' \
 	'' \
 	'5. Build the GPU candidate bundle' \
 	'  make packages/base-images/pull packages/gpu/wheelhouse' \
@@ -86,7 +89,7 @@ help:
 	'Dependency maintenance' \
 		'' \
 		'  make provider/lock/write provider/wheelhouse provider/image' \
-		'      Lock, download, and build the small provider hello runtime independently.' \
+		'      Lock, download, and build the networked provider independently of scientific packages.' \
 		'  make checkpoint/manifest' \
 		'      Recreate manifest.json only if its recorded specification and weight hashes still match.' \
 		'  make packages/base-images/pull packages/locks/write' \
