@@ -1,9 +1,13 @@
 """A parser receives only verified bytes; credentials stay at the store."""
 
 from base64 import b64encode
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
+import errno
+import io
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
@@ -12,11 +16,25 @@ from unittest.mock import patch
 
 from secs_inference.provider.job_upload import UploadReadCapability
 from secs_inference.provider.upload_download import (
-    UploadDownloadError, UploadStore, UploadUnavailable, downloaded_upload,
+    UploadDownloadError, UploadStore, UploadUnavailable, download_upload,
 )
 from secs_inference.provider.socket_deadline import socket_deadline
+from secs_inference.provider.attempt_store import AttemptStore
+from secs_inference.provider.analysis_run import AttemptSources
+from secs_inference.provider.execution import ExecutionLoop
+from test_execution import FakeApi
 import socket
 from test_http import _tls_server, _write_test_certificates
+
+
+@contextmanager
+def downloaded_upload(**arguments):
+    """This fixture, like the execution owner, releases successfully acquired files."""
+    path = download_upload(**arguments)
+    try:
+        yield path
+    finally:
+        path.unlink()
 
 
 class UploadDownloadTests(unittest.TestCase):
@@ -47,7 +65,7 @@ class UploadDownloadTests(unittest.TestCase):
             "Content-Digest": "sha-256=:" + b64encode(sha256(body).digest()).decode() + ":",
         }
 
-    def test_verified_file_lives_with_its_context_and_get_has_only_store_authority(self):
+    def test_verified_private_file_and_get_have_only_the_granted_authority(self):
         with TemporaryDirectory() as directory, _tls_server(
             self.certificates, response_headers=self._headers(), response_body=b"data",
         ) as server:
@@ -58,7 +76,6 @@ class UploadDownloadTests(unittest.TestCase):
             ) as path:
                 self.assertEqual(path.read_bytes(), b"data")
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-            self.assertFalse(path.exists())
             request = server.requests[0]
             self.assertEqual(request["requestline"], f"GET {grant.download_url.split(str(server.port))[1]} HTTP/1.1")
             self.assertEqual(request["headers"], {
@@ -82,6 +99,20 @@ class UploadDownloadTests(unittest.TestCase):
                 self.assertNotIn("private", str(caught.exception))
             self.assertEqual(server.requests, [])
             self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_failed_transfer_cleanup_is_visible_even_if_acquisition_retries(self):
+        with TemporaryDirectory() as directory:
+            failure = UploadUnavailable("transfer interrupted")
+            with self.assertLogs("secs_inference.provider.upload_download", level="ERROR") as logged:
+                with patch("secs_inference.provider.upload_download._transfer", side_effect=failure), patch(
+                        "secs_inference.provider.upload_download.Path.unlink", side_effect=PermissionError("private-bearer")):
+                    with self.assertRaises(UploadUnavailable) as caught:
+                        download_upload(store=self._store(443), capability=self._grant(443),
+                                        directory=Path(directory), deadline=monotonic() + 2)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(len(list(Path(directory).iterdir())), 1)
+            self.assertIn("may remain in the Attempt workspace", " ".join(logged.output))
+            self.assertNotIn("private-bearer", " ".join(logged.output))
 
     def test_corruption_truncation_and_header_conflicts_leave_no_source(self):
         for body, headers, length in (
@@ -146,11 +177,13 @@ class UploadDownloadTests(unittest.TestCase):
                     self.fail("Untrusted store was accepted")
             self.assertNotIsInstance(caught.exception, UploadUnavailable)
             # File writes are the local storage boundary, independent of TLS.
-            with patch("tempfile._TemporaryFileWrapper.write", create=True, side_effect=OSError("disk full")):
+            with patch("tempfile._TemporaryFileWrapper.write", create=True, side_effect=OSError(errno.ENOSPC, "secret device detail")):
                 with self.assertRaises(UploadDownloadError) as caught:
                     with downloaded_upload(store=self._store(server.port), capability=self._grant(server.port), directory=Path(directory), deadline=monotonic() + 2):
                         self.fail("Failed write was accepted")
             self.assertNotIsInstance(caught.exception, UploadUnavailable)
+            self.assertIn("No space left on device", str(caught.exception))
+            self.assertNotIn("secret device detail", str(caught.exception))
             self.assertEqual(list(Path(directory).iterdir()), [])
 
     def test_store_settings_bound_actual_resource_effects(self):
@@ -159,3 +192,58 @@ class UploadDownloadTests(unittest.TestCase):
                 UploadStore("https://localhost", length, timeout)
         with self.assertRaises(ValueError):
             UploadStore("https://localhost:0", 1024)
+        with TemporaryDirectory() as directory, patch("secs_inference.provider.upload_download._transfer") as transfer:
+            with self.assertRaises(UploadDownloadError) as caught:
+                download_upload(store=replace(self._store(443), max_upload_bytes=3), capability=self._grant(443),
+                                directory=Path(directory), deadline=monotonic() + 1)
+            self.assertIn("4-byte Upload", str(caught.exception))
+            self.assertIn("3-byte per-Upload limit", str(caught.exception))
+            transfer.assert_not_called()
+
+    def test_local_input_setup_and_buffered_flush_failures_reach_the_attempt_message(self):
+        for phase in ("workspace", "creation", "finalization"):
+            with self.subTest(phase=phase), TemporaryDirectory() as directory:
+                root = Path(directory)
+                api = FakeApi()
+                def analyse(active):
+                    if phase == "workspace":
+                        with patch("secs_inference.provider.analysis_run.Path.mkdir", side_effect=PermissionError(errno.EACCES, "secret path")):
+                            with AttemptSources(None, active, (), None, root / "current", deadline=monotonic() + 2, max_total_bytes=10):
+                                self.fail("Unwritable workspace was accepted")
+                    if phase == "creation":
+                        arguments = {"side_effect": PermissionError(errno.EACCES, "secret path")}
+                    else:
+                        arguments = {"return_value": FlushFailure((root / "upload").open("wb", buffering=0))}
+                    with patch("secs_inference.provider.upload_download.NamedTemporaryFile", **arguments), patch(
+                            "secs_inference.provider.upload_download._transfer", side_effect=lambda _s, _c, _t, output, _d: output.write(b"data")):
+                        return download_upload(store=self._store(443), capability=self._grant(443), directory=root, deadline=monotonic() + 2)
+                with AttemptStore(root / "journal") as journal:
+                    ExecutionLoop(api, journal, analyse, lambda *_: None).step()
+                    command = json.loads(api.calls[-1])
+                    self.assertEqual(command["failure_code"], "input_access_failed")
+                    self.assertIn("No space left on device" if phase == "finalization" else "Permission denied", command["failure_message"])
+                    self.assertNotIn("secret", command["failure_message"])
+                    self.assertFalse((root / "upload").exists())
+
+    def test_buffered_close_failure_does_not_replace_the_transfer_failure(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = FlushFailure((root / "upload").open("wb", buffering=0))
+            failure = UploadUnavailable("transfer interrupted")
+            with patch("secs_inference.provider.upload_download.NamedTemporaryFile", return_value=output), patch(
+                    "secs_inference.provider.upload_download._transfer", side_effect=failure), self.assertLogs(
+                    "secs_inference.provider.upload_download", level="ERROR") as logged:
+                with self.assertRaises(UploadUnavailable) as caught:
+                    download_upload(store=self._store(443), capability=self._grant(443), directory=root, deadline=monotonic() + 2)
+            self.assertIs(caught.exception, failure)
+            self.assertTrue(output.closed)
+            self.assertFalse((root / "upload").exists())
+            self.assertIn("No space left on device", " ".join(logged.output))
+            self.assertNotIn("secret", " ".join(logged.output))
+
+
+class FlushFailure(io.BufferedWriter):
+    """Small writes succeed; the OS failure is first observed when close flushes."""
+
+    def flush(self):
+        raise OSError(errno.ENOSPC, "secret device detail")

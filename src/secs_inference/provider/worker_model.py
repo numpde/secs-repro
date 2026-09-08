@@ -103,6 +103,8 @@ class ScientificHandler:
         elucidator = SecsElucidator(self.inference, self.candidates, optimizer,
                                   initial_population_size=self.config.initial_population_size)
         result = elucidator.elucidate(spectrum, selection.formula)
+        # This provider's canonical JSON excludes floating-point numbers. Scientific
+        # decimal values travel as text; counts and discrete settings stay integers.
         return {
             "candidates": [{"smiles": smiles, "score": str(float(score))} for smiles, score in result.population],
             "search": {"optimizer": "graph_ga", "generations": result.generations, "evaluated": result.n_evaluated,
