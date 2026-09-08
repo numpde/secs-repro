@@ -61,8 +61,10 @@ help:
 	'  make test/integration/jcamp-reference' \
 	'      Compare processed JCAMP-DX decoding with its pinned frontend vector.' \
 	'  make test/integration/challenges' \
-	'      Reproduce artifact-bound ScoreOnly ranks for all 20 published spectra.' \
+	'      Check all 20 published ScoreOnly ranks and one Bruker GA generation.' \
 	'      One GPU model and full index load are shared across the cases.' \
+	'  make test/integration/challenges/bruker' \
+	'      Run only the Bruker GA test; still loads the GPU model and full index.' \
 	'  make test/provider' \
 	'      Verify input selection, signed API transport, recovery and cancellation offline.' \
 	'  make test/provider/e2e' \

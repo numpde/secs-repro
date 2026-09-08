@@ -1,4 +1,5 @@
 .PHONY: test/integration test/integration/challenges
+.PHONY: test/integration/challenges/bruker
 .PHONY: test/integration/bruker-reference test/provider
 .PHONY: test/integration/jcamp-reference test/qualification-tools
 
@@ -52,8 +53,10 @@ test/integration/bruker-reference test/integration/jcamp-reference:
 		--entrypoint python "$$cpu_packages_image" \
 		-m unittest discover -v -s /tests -p "$(REFERENCE_TEST_PATTERN)"
 
-test/integration/challenges: private export CANDIDATE_GPU_INPUT = $(value CANDIDATE_GPU)
-test/integration/challenges: packages/gpu/image
+test/integration/challenges: private CHALLENGE_TEST := PublishedChallengeTest
+test/integration/challenges/bruker: private CHALLENGE_TEST := PublishedChallengeTest.test_bruker_full_index_runs_one_graph_ga_generation
+test/integration/challenges test/integration/challenges/bruker: private export CANDIDATE_GPU_INPUT = $(value CANDIDATE_GPU)
+test/integration/challenges test/integration/challenges/bruker: packages/gpu/image
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot run the published challenge tests as host UID 0.' >&2
 		exit 2
@@ -84,7 +87,7 @@ test/integration/challenges: packages/gpu/image
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/fixtures/bruker/F3697/1/pdata/1",dst=/fixtures/bruker/F3697/1/pdata/1,readonly \
 		--mount type=bind,src="$$test_file",dst=/tests/test_published_challenges.py,readonly \
 		--entrypoint python "$$package_image" \
-		-P -m unittest discover -v -s /tests -p test_published_challenges.py
+		-P /tests/test_published_challenges.py -v "$(CHALLENGE_TEST)"
 
 test/provider:
 	@tests_dir=$$(realpath -e tests/provider)
