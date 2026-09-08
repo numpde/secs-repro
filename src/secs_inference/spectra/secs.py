@@ -1,7 +1,10 @@
+"""Prepare one decoded 1D spectrum on the checkpoint's normalized ppm grid."""
+
 import numpy as np
 from numpy.typing import NDArray
 
 from secs_inference.spectra.source import Float64Array, SourceSpectrum
+from secs_inference.spectra.errors import SpectrumReadError
 
 
 Float32Array = NDArray[np.float32]
@@ -24,6 +27,11 @@ def prepare_secs_spectrum(source: SourceSpectrum) -> Float32Array:
     )
     minimum = float(np.min(resampled))
     maximum = float(np.max(resampled))
+    if not np.all(np.isfinite(resampled)) or maximum <= minimum:
+        raise SpectrumReadError(
+            f"Cannot prepare this spectrum: the SECS window from {SECS_PPM_FROM:g} to {SECS_PPM_TO:g} ppm needs finite "
+            "intensities with some variation to normalize."
+        )
     return ((resampled - minimum) / (maximum - minimum)).astype(np.float32)
 
 

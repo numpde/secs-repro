@@ -10,6 +10,7 @@ import nmrglue as ng
 import numpy as np
 
 from secs_inference.spectra.source import SourceSpectrum
+from secs_inference.spectra.errors import SpectrumReadError
 
 
 _AFFN_NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?")
@@ -23,7 +24,7 @@ def read_jcamp_spectrum(spectrum_file: str | Path) -> SourceSpectrum:
             warnings.simplefilter("always")
             parameters, intensities = ng.jcampdx.read(spectrum_path)
     except (AttributeError, IndexError, TypeError, ValueError) as cause:
-        raise ValueError(
+        raise SpectrumReadError(
             "Cannot read the processed JCAMP-DX spectrum because its parser "
             "could not decode the file.",
         ) from cause
@@ -169,7 +170,7 @@ def _referenced_ppm_axis(parameters: dict, x_axis: np.ndarray) -> np.ndarray:
             reference_point = float(fields[2])
             reference_ppm = float(fields[3])
         except ValueError as cause:
-            raise ValueError(
+            raise SpectrumReadError(
                 "Cannot read the processed JCAMP-DX spectrum because "
                 ".SHIFT REFERENCE has a non-numeric point or shift.",
             ) from cause
@@ -238,7 +239,7 @@ def _ntuple_integer_metadata(
     try:
         values = {symbol: int(value) for symbol, value in text.items()}
     except ValueError as cause:
-        raise ValueError(
+        raise SpectrumReadError(
             "Cannot read the processed JCAMP-DX spectrum because "
             f"NTUPLES {name} contains a non-integer value.",
         ) from cause
@@ -256,7 +257,7 @@ def _ntuple_float_metadata(
     try:
         values = {symbol: float(value) for symbol, value in text.items()}
     except ValueError as cause:
-        raise ValueError(
+        raise SpectrumReadError(
             "Cannot read the processed JCAMP-DX spectrum because "
             f"NTUPLES {name} contains a non-numeric value.",
         ) from cause
@@ -277,7 +278,7 @@ def _finite_parameter(parameters: dict, name: str) -> float:
     try:
         value = float(text)
     except ValueError as cause:
-        raise ValueError(
+        raise SpectrumReadError(
             "Cannot read the processed JCAMP-DX spectrum because "
             f"{name} is not numeric.",
         ) from cause
@@ -291,7 +292,7 @@ def _integer_parameter(parameters: dict, name: str) -> int:
     try:
         return int(text)
     except ValueError as cause:
-        raise ValueError(
+        raise SpectrumReadError(
             "Cannot read the processed JCAMP-DX spectrum because "
             f"{name} is not an integer.",
         ) from cause
@@ -358,13 +359,13 @@ def _read_utf8_lines(spectrum_path: Path) -> list[str]:
     try:
         return spectrum_path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError as cause:
-        raise ValueError(
+        raise SpectrumReadError(
             "Cannot read the processed JCAMP-DX spectrum because the file is "
             "not UTF-8 text.",
         ) from cause
 
 
 def _reject(reason: str) -> Never:
-    raise ValueError(
+    raise SpectrumReadError(
         f"Cannot read the processed JCAMP-DX spectrum because {reason}.",
     )

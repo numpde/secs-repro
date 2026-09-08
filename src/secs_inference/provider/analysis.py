@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
+from secs_inference.provider.input_operations import INPUT_OPERATIONS
+
 ANALYSIS_KIND_REF = "mol_from_1h_spectrum_formula"
 
-ADMISSIBLE_SPECTRUM_FORMATS = (
-    "a Bruker processed pdata directory",
-    (
-        "a JCAMP-DX file containing one processed 1H NMR AFFN XYDATA "
-        "block with a ppm axis"
-    ),
-    (
-        "a JCAMP-DX file containing one processed 1H NMR NTUPLES "
-        "real/imaginary pair with a ppm axis or a referenced Hz axis"
-    ),
+ADMISSIBLE_SPECTRUM_FORMATS = tuple(
+    representation for operation in INPUT_OPERATIONS for representation in operation.formats
 )
 
 

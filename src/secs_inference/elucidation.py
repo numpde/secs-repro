@@ -1,3 +1,5 @@
+"""Compose formula parsing, candidate retrieval and molecular refinement."""
+
 from collections.abc import Sequence
 
 import torch
@@ -8,6 +10,10 @@ from secs.elucidation.optimizers.base import MoleculeOptimizer, OptimizerResult
 from secs.utils.elucidation import build_formula_string, get_atom_counts_from_formula
 
 from secs_inference.model import FloatArray, SecsInference
+
+
+class FormulaError(ValueError):
+    """The formula parser rejected the supplied text before model work."""
 
 
 class _HnmrCandidateEmbedder:
@@ -39,7 +45,10 @@ class SecsElucidator:
     def elucidate(self, spectrum: Sequence[float] | FloatArray, formula: str) -> OptimizerResult:
         """Elucidate from a complete formula, rejecting it before model work."""
 
-        target_atom_counts = get_atom_counts_from_formula(formula)
+        try:
+            target_atom_counts = get_atom_counts_from_formula(formula)
+        except ValueError as cause:
+            raise FormulaError(str(cause)) from cause
         canonical_formula = build_formula_string(target_atom_counts)
         spectrum_embedding = torch.from_numpy(self._inference.embed_spectrum(spectrum))
 
