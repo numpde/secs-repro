@@ -60,22 +60,25 @@ def initialize_configuration(
                 f"Deployment configuration already exists: {destination}. "
                 "Initialization will not replace it."
             )
-        with TemporaryDirectory(prefix=f".{name}.", dir=parent) as temporary:
-            stage = Path(temporary)
-            for filename, content in contents.items():
-                _write_new_file(stage / filename, content)
-            _sync_directory(stage)
-            stage.rename(destination)
-            # After rename the configuration is visible. A failed fsync does
-            # not undo publication; never delete the destination as rollback.
-            try:
-                os.fsync(parent_fd)
-            except OSError as error:
-                error.add_note(
-                    f"Configuration is visible at {destination}, but crash durability "
-                    "could not be confirmed. It has not been removed."
-                )
-                raise
+        published = False
+        try:
+            with _temporary_directory(prefix=f".{name}.", dir=parent) as stage:
+                for filename, content in contents.items():
+                    _write_new_file(stage / filename, content)
+                _sync_directory(stage)
+                stage.rename(destination)
+                published = True
+                try:
+                    os.fsync(parent_fd)
+                except OSError as error:
+                    error.add_note("Configuration crash durability could not be confirmed.")
+                    raise
+        except OSError as error:
+            # Rename cannot be rolled back by a later sync or staging-cleanup
+            # failure. Track this invocation, not a possibly preexisting path.
+            if published:
+                error.add_note(f"Configuration is visible at {destination}. It has not been removed.")
+            raise
     return destination
 
 
@@ -159,19 +162,46 @@ def _write_new_file(path: Path, content: bytes) -> None:
         os.fsync(output.fileno())
 
 
+@contextmanager
+def _temporary_directory(*, prefix: str, dir: Path | None = None) -> Iterator[Path]:
+    """Clean private staging without replacing an operation failure or interruption."""
+    temporary = TemporaryDirectory(prefix=prefix, dir=dir)
+    try:
+        yield Path(temporary.name)
+    except BaseException as primary:
+        try:
+            temporary.cleanup()
+        except OSError as cleanup:
+            primary.add_note(f"Cleanup failed for temporary directory {temporary.name}: {cleanup}")
+        raise
+    else:
+        try:
+            temporary.cleanup()
+        except OSError as error:
+            error.add_note(f"Temporary directory may remain at {temporary.name}.")
+            raise
+
+
 def _publish_new_file(path: Path, content: bytes) -> None:
     """Publish complete owner-only bytes in an existing private parent, without replacement."""
-    with TemporaryDirectory(prefix=".install-", dir=path.parent) as temporary:
-        staged = Path(temporary) / path.name
-        _write_new_file(staged, content)
-        # A failed write must not reserve the destination with partial bytes.
-        # Linking also preserves an existing credential or ownership record.
-        os.link(staged, path)
-        try:
-            _sync_directory(path.parent)
-        except OSError as error:
-            error.add_note(f"File is visible at {path}; crash durability is unconfirmed.")
-            raise
+    published = False
+    try:
+        with _temporary_directory(prefix=".install-", dir=path.parent) as temporary:
+            staged = temporary / path.name
+            _write_new_file(staged, content)
+            # A failed write must not reserve the destination with partial bytes.
+            # Linking also preserves an existing credential or ownership record.
+            os.link(staged, path)
+            published = True
+            try:
+                _sync_directory(path.parent)
+            except OSError as error:
+                error.add_note("File crash durability is unconfirmed.")
+                raise
+    except OSError as error:
+        if published:
+            error.add_note(f"File is visible at {path}; it has not been removed.")
+        raise
 
 
 def _sync_directory(path: Path) -> None:

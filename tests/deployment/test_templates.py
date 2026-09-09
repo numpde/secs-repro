@@ -177,7 +177,7 @@ class InitializationTests(unittest.TestCase):
             with patch.object(templates.os, "fsync", side_effect=fail_after_publication):
                 with self.assertRaisesRegex(OSError, "sync failed") as failure:
                     templates.initialize_configuration(root, "production", TEMPLATES)
-            self.assertIn("has not been removed", failure.exception.__notes__[0])
+            self.assertIn("has not been removed", "\n".join(failure.exception.__notes__))
             self.assertEqual((root / "config/deployments/production/worker.toml").read_text(),
                              "example for worker.toml\n")
 
@@ -198,8 +198,8 @@ class InitializationTests(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "sync failed") as failure:
                     templates._publish_new_file(destination, b"complete ownership record")
             self.assertEqual(destination.read_bytes(), b"complete ownership record")
-            self.assertIn("is visible", failure.exception.__notes__[0])
-            self.assertIn("durability is unconfirmed", failure.exception.__notes__[0])
+            self.assertIn("is visible", "\n".join(failure.exception.__notes__))
+            self.assertIn("durability is unconfirmed", "\n".join(failure.exception.__notes__))
 
 
 if __name__ == "__main__":
