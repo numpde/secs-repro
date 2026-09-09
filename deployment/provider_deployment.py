@@ -1,7 +1,7 @@
 """Bind named SECS deployments to their configuration, secrets, and attempt state.
 
 Maintained examples supply defaults; Compose owns the service recipe.
-This adapter supplies SECS paths and serializes deployment operations.
+This adapter supplies SECS paths and serializes deployment mutations.
 """
 
 from __future__ import annotations
@@ -183,25 +183,30 @@ def main(arguments: list[str] | None = None) -> int:
             return 0
         config = configuration_directory(repository, options.deployment)
         _private_directory(config)
-        # Serialize all named lifecycle operations in this checkout. Directory
-        # locking also works when credentials or runtime config are unreadable.
+        project = _project(repository, options.deployment)
+        # Observations must remain available during a long shutdown. Inventory
+        # checks ownership without promising a snapshot across lifecycle changes.
+        if options.operation == "config":
+            print(json.dumps(render_deployment(repository, options.deployment), indent=2))
+            return 0
+        if options.operation == "status":
+            print(json.dumps(_status(project.inventory()), indent=2))
+            return 0
+        if options.operation == "logs":
+            project.logs()
+            return 0
+        # Serialize mutations, including their ownership admission. Acquiring
+        # the lock needs no credential contents.
         with _locked_parent(config.parent):
-            project = _project(repository, options.deployment)
             if installing:
                 filename = "provider.signing.private.json" if options.operation == "credential-install" else "interpreter.key"
                 print(install_secret(repository, options.deployment, filename, options.source))
-            elif options.operation == "config":
-                print(json.dumps(render_deployment(repository, options.deployment), indent=2))
             elif options.operation == "up":
                 print(json.dumps(_status(start_deployment(repository, options.deployment)), indent=2))
                 print("Containers started. Check provider logs for hello publication or errors.")
                 print("A successful hello confirms API acceptance, not model readiness.")
             elif options.operation == "down":
                 print(json.dumps(_status(project.stop()), indent=2))
-            elif options.operation == "status":
-                print(json.dumps(_status(project.inventory()), indent=2))
-            else:
-                project.logs()
     except (OSError, ValueError, RuntimeError) as error:
         headline = "initialization" if options.operation == "init" else options.operation
         print(f"Deployment {headline} failed: {error}", file=sys.stderr)
