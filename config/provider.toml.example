@@ -16,6 +16,9 @@ retry_initial_seconds = 5
 [execution]
 interpreter_url = "https://model.example.test/v1/chat/completions"
 interpreter_model = "replace-with-deployment-model"
+# gpt-5.6-luna requires none for function tools on Chat Completions.
+# Other endpoints may use a different effort, or omit it for their default.
+interpreter_reasoning_effort = "none"
 upload_store_origin = "https://uploads.example.test"
 work_seconds = 1800
 interpretation_seconds = 120

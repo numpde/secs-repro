@@ -132,6 +132,7 @@ class RuntimeTests(unittest.TestCase):
                 "secs_inference.provider.main.run_services") as services:
             run_provider()
         self.assertEqual(chat.call_args.args[-1], Path("/run/config/provider/interpreter-ca.crt"))
+        self.assertEqual(chat.call_args.kwargs["reasoning_effort"], "none")
         self.assertEqual(store.call_args.kwargs["ca_file"], Path("/run/config/provider/upload-store-ca.crt"))
         services.assert_called_once()
 

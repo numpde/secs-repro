@@ -34,8 +34,12 @@ class ExecutionConfig:
     max_total_bytes: int = 256 * 1024 * 1024
     interpreter_use_private_ca: bool = False
     upload_store_use_private_ca: bool = False
+    interpreter_reasoning_effort: str | None = None
 
     def __post_init__(self):
+        if self.interpreter_reasoning_effort is not None and (
+                not isinstance(self.interpreter_reasoning_effort, str) or not self.interpreter_reasoning_effort.strip()):
+            raise ValueError("Interpreter reasoning effort must be nonempty text when configured")
         for name in ("interpreter_use_private_ca", "upload_store_use_private_ca"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"Execution {name} must be a boolean")

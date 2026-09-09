@@ -19,6 +19,7 @@ from secs_inference.provider.config import (
     CONFIG_PATH,
     CREDENTIAL_PATH,
     INTERPRETER_KEY_PATH,
+    ExecutionConfig,
     ProviderConfig,
     decode_provider_config,
 )
@@ -80,12 +81,7 @@ def run_provider(config_path: Path = CONFIG_PATH) -> None:
     chat = upload_store = None
     if config.execution is not None:
         execution = config.execution
-        key = _read_regular_file(INTERPRETER_KEY_PATH, 16_384)
-        if not key.isascii():
-            raise ValueError("Interpreter API key must contain only header-safe ASCII characters")
-        chat = ChatEndpoint(execution.interpreter_url, execution.interpreter_model,
-                            key.decode("ascii").rstrip("\r\n"),
-                            Path("/run/config/provider/interpreter-ca.crt") if execution.interpreter_use_private_ca else None)
+        chat = load_chat_endpoint(execution)
         upload_store = UploadStore(execution.upload_store_origin, execution.max_upload_bytes,
                                    ca_file=Path("/run/config/provider/upload-store-ca.crt") if execution.upload_store_use_private_ca else None)
     stop = Event()
@@ -125,6 +121,20 @@ def _read_regular_file(path: Path, maximum_bytes: int) -> bytes:
     except OSError as error:
         reason = os.strerror(error.errno) if error.errno is not None else type(error).__name__
         raise ValueError(f"{failure}: {reason}") from error
+
+
+def load_chat_endpoint(execution: ExecutionConfig) -> ChatEndpoint:
+    """Load the same interpreter inputs for service startup and live qualification.
+
+    This acquires only interpreter credentials and trust, not API or worker authority.
+    """
+    key = _read_regular_file(INTERPRETER_KEY_PATH, 16_384)
+    if not key.isascii():
+        raise ValueError("Interpreter API key must contain only header-safe ASCII characters")
+    return ChatEndpoint(execution.interpreter_url, execution.interpreter_model,
+                        key.decode("ascii").rstrip("\r\n"),
+                        Path("/run/config/provider/interpreter-ca.crt") if execution.interpreter_use_private_ca else None,
+                        reasoning_effort=execution.interpreter_reasoning_effort)
 
 
 def main() -> int:

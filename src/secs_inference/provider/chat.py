@@ -38,6 +38,7 @@ class ChatEndpoint:
     model: str
     api_key: str = field(repr=False)
     ca_file: Path | None = None
+    reasoning_effort: str | None = None
     tls_context: ssl.SSLContext = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
@@ -57,10 +58,15 @@ class ChatEndpoint:
 
     def complete(self, messages: list[dict], tools: list[dict], *, deadline: float) -> dict:
         """Return one assistant message; retain only selected rejection details on failure."""
-        body = json.dumps({
+        request = {
             "model": self.model, "messages": messages, "tools": tools,
             "tool_choice": "required", "parallel_tool_calls": False, "stream": False,
-        }, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        }
+        # Ported from the sibling Chat adapters: omission preserves the
+        # endpoint default; a configured effort is sent without model guessing.
+        if self.reasoning_effort is not None:
+            request["reasoning_effort"] = self.reasoning_effort
+        body = json.dumps(request, ensure_ascii=False, allow_nan=False).encode("utf-8")
         if len(body) > _MAX_REQUEST_BYTES:
             raise InterpreterError(f"Cannot interpret this Job: its {len(body)}-byte input and inspection context exceeds this provider's {_MAX_REQUEST_BYTES}-byte model-request limit")
         prompt_text = tuple(m["content"] for m in messages if isinstance(m.get("content"), str) and m["content"])

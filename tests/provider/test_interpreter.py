@@ -37,6 +37,19 @@ class ScriptedChat:
 
 
 class InterpreterTests(unittest.TestCase):
+    def test_reasoning_effort_is_explicit_or_absent_not_inferred_from_model(self):
+        response = json.dumps({"choices": [{"message": tool("report_input_problem", {"explanation": "No input."})}]}).encode()
+        for effort in (None, "none", "low"):
+            with self.subTest(effort=effort):
+                endpoint = ChatEndpoint("https://model.test/chat", "model", "key", reasoning_effort=effort)
+                with patch.object(ChatEndpoint, "_post", return_value=response) as post:
+                    endpoint.complete([], [], deadline=monotonic() + 1)
+                request = json.loads(post.call_args.args[0])
+                if effort is None:
+                    self.assertNotIn("reasoning_effort", request)
+                else:
+                    self.assertEqual(request["reasoning_effort"], effort)
+
     def test_endpoint_rejection_reaches_attempt_result_and_private_diagnostic(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
