@@ -1,7 +1,7 @@
-"""Bind the common deployment initializer to SECS's maintained configuration.
+"""Bind named SECS deployments to their configuration, secrets, and attempt state.
 
-The model's examples remain authoritative. This adapter selects files, not
-copied settings; changing a worker default requires no framework change.
+Maintained examples supply defaults; Compose owns the service recipe.
+This adapter supplies SECS paths and serializes deployment operations.
 """
 
 from __future__ import annotations
@@ -194,7 +194,8 @@ def main(arguments: list[str] | None = None) -> int:
                 print(json.dumps(render_deployment(repository, options.deployment), indent=2))
             elif options.operation == "up":
                 print(json.dumps(_status(start_deployment(repository, options.deployment)), indent=2))
-                print("Containers started; verify provider hello and Job polling in logs.")
+                print("Containers started. Check provider logs for hello publication or errors.")
+                print("A successful hello confirms API acceptance, not model readiness.")
             elif options.operation == "down":
                 print(json.dumps(_status(project.stop()), indent=2))
             elif options.operation == "status":

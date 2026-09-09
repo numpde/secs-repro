@@ -68,9 +68,9 @@ help:
 	'  make test/provider' \
 	'      Verify input selection, signed API transport, recovery and cancellation offline.' \
 	'  make test/deployment' \
-	'      Test host-side deployment initialization using temporary Git repositories.' \
+	'      Test configuration publication, saved-state ownership and container lifecycle rules.' \
 	'  make test/deployment/e2e' \
-	'      Prove real offline Compose startup, stop/restart, ownership and state preservation.' \
+	'      Test offline Compose start/stop/restart and retained state using disposable services.' \
 	'  make provider/deployment/init DEPLOYMENT=<name>' \
 	'      Copy committed examples into private config/deployments/<name>; no services start.' \
 	'  make provider/deployment/config DEPLOYMENT=<name>' \
