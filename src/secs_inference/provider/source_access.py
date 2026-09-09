@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from lzma import LZMAError
+import json
 from pathlib import Path
 import stat
 from tempfile import TemporaryDirectory
@@ -34,10 +35,16 @@ class SourceAccess:
             with self._archive(path) as archive:
                 if len(archive.infolist()) > 4096:
                     raise InputReadError("Cannot inspect this ZIP: it exceeds the 4096-member inspection limit")
-                return {"members": [
+                facts = {"members": [
                     {"name": info.filename, "byte_length": info.file_size}
                     for info in archive.infolist() if not info.is_dir()
                 ]}
+                # Entry count alone does not bound long or escaped filenames.
+                # Refuse the whole listing rather than hide choices from the
+                # interpreter or overflow the worker's response frame.
+                if len(json.dumps(facts, ensure_ascii=False).encode("utf-8")) > 256 * 1024:
+                    raise InputReadError("Cannot inspect this ZIP: its member listing exceeds the 262144-byte inspection limit; an exact member can still be selected if known")
+                return facts
         with self.open(source) as stream:
             prefix = _read_chunk(stream, 16 * 1024 + 1)
         return {"text_prefix": prefix[:16 * 1024].decode("utf-8", errors="replace"),

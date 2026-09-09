@@ -13,6 +13,20 @@ from secs_inference.provider.source_access import InputReadError, SourceAccess, 
 
 
 class SourceAccessTests(unittest.TestCase):
+    def test_oversized_inventory_is_rejected_without_disabling_exact_member_access(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "upload"
+            with ZipFile(path, "w") as archive:
+                for index in range(33):
+                    member = "x" * 64000 + str(index)
+                    archive.writestr(member, "spectrum")
+            access = SourceAccess({"upload:chosen": path}, root)
+            with self.assertRaisesRegex(InputReadError, "262144-byte inspection limit"):
+                access.inspect(SourceRef("upload:chosen"))
+            with access.materialize({"spectrum.jdx": SourceRef("upload:chosen", member)}) as materialized:
+                self.assertEqual((materialized / "spectrum.jdx").read_text(), "spectrum")
+
     def test_corrupt_compressed_members_are_input_rejections(self):
         for compression, offset in ((ZIP_BZIP2, 0), (ZIP_LZMA, 4)):
             with self.subTest(compression=compression), TemporaryDirectory() as directory:
