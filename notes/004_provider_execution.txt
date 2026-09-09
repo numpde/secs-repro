@@ -42,13 +42,18 @@ Scores and ppm endpoints are decimal strings because this provider's canonical
 JSON encoder does not admit floating-point numbers. Compute mode does not
 describe checkpoint or FAISS storage precision.
 
-A cannot_analyse result contains the interpreter's explanation and selection
-history, without invented candidates. This is a completed Attempt whose result
-explains the scientific limitation, not an operationally failed Attempt.
+A cannot_analyse outcome fails the Attempt: no analysis was produced. The public
+failure message attributes its explanation to the interpreter. The API failure
+endpoint cannot attach a result; the full report is retained privately as
+<attempt-hash>.report.json in the journal, including selection history and actual
+tool-call or inspection rejections. These are evidence, not the model's account
+of what happened. Earlier deployments published cannot_analyse as success;
+existing Attempts are not rewritten.
 
 Operational failures use the API failure code/message. Private diagnostics
-identify the Attempt, exception class and code locations; they omit exception
-text, source bytes, credentials and locals. API failure messages distinguish
+identify the Attempt, exception class and code locations; they retain selected
+boundary diagnostics, not arbitrary exception text, source bytes, credentials
+or locals. API failure messages distinguish
 requested shutdown, observed Job cancellation and scientific execution errors.
 
 Recovery and shutdown

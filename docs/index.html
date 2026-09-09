@@ -85,11 +85,13 @@ Molecular formula: C21H22N2O2.</pre>
     correct. These are candidates for chemical review, not validated structure
     assignments. The example above demonstrates input preparation, not a
     guarantee of recovering strychnine.</p>
-  <p>A completed attempt can instead contain a <code>cannot_analyse</code>
-    result: the interpreter explains why it could not select usable input.
-    Completed results retain rejected input choices and their reading errors.
-    Use that explanation to correct the files or instructions before submitting
-    a new job; completion alone does not mean structures were found.</p>
+  <p>If the interpreter cannot select usable input, the attempt fails with
+    <code>cannot_analyse</code>: no analysis was produced. Its failure message
+    includes the interpreter's explanation. That explanation is the model's
+    account, not proof that a reader ran or that your spectrum is invalid.
+    The deployment operator retains the full report and recorded rejection
+    reasons under the attempt identifier. Older attempts may show this outcome
+    as a successful result; that did not mean structures were found.</p>
   <p>A failed attempt reports an error or interruption, for example an outage
     or an interpretation limit. It does not establish whether computation finished.
     Read its failure message and share the job and attempt identifiers with the
