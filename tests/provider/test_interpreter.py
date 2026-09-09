@@ -14,6 +14,9 @@ from secs_inference.provider.job_upload import JobUpload
 from test_http import _tls_server, _write_test_certificates
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from secs_inference.provider.attempt_store import AttemptStore
+from secs_inference.provider.execution import ExecutionLoop
+from test_execution import FakeApi, ACTIVE
 
 
 def tool(name, arguments, call_id="call-1"):
@@ -34,6 +37,85 @@ class ScriptedChat:
 
 
 class InterpreterTests(unittest.TestCase):
+    def test_endpoint_rejection_reaches_attempt_result_and_private_diagnostic(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_test_certificates(root)
+            prompt = "Private Job input with model-secret that must not be retained in diagnostics"
+            reason = "Unsupported parameter: parallel_tool_calls.\nmodel-secret " + prompt
+            raw = json.dumps({"error": {"message": reason, "type": "invalid_request_error",
+                                      "code": "unsupported_parameter", "param": "parallel_tool_calls"},
+                              "request": prompt}).encode()
+            with _tls_server(root, status=400, response_body=raw,
+                             response_headers={"Content-Type": "application/json", "x-request-id": "req-test"}) as server:
+                endpoint = ChatEndpoint(f"https://localhost:{server.port}/chat", "test-model", "model-secret", root / "ca.pem")
+                with AttemptStore(root / "journal") as store:
+                    api = FakeApi()
+                    def analyse(active):
+                        return endpoint.complete([{"role": "user", "content": "Private Job"},
+                                                  {"role": "user", "content": prompt}], [], deadline=monotonic() + 2)
+                    ExecutionLoop(api, store, analyse, store.diagnose).step()
+                    result = json.loads(api.calls[-1])
+                    self.assertEqual(result["failure_code"], "interpretation_failed")
+                    self.assertIn("Unsupported parameter: parallel_tool_calls", result["failure_message"])
+                    self.assertIn("HTTP 400", result["failure_message"])
+                path = next((root / "journal").glob("*.diagnostic.json"))
+                retained = json.loads(path.read_bytes())
+                detail = retained["interpreter"]
+                self.assertEqual(retained["execution_attempt_ref"], ACTIVE.execution_attempt_ref)
+                self.assertNotIn("worker", retained)
+                self.assertEqual(detail["status"], 400)
+                self.assertEqual(detail["request_id"], "req-test")
+                self.assertEqual(detail["model"], "test-model")
+                self.assertEqual(detail["endpoint"], f"https://localhost:{server.port}")
+                self.assertEqual(detail["param"], "parallel_tool_calls")
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                for output in (json.dumps(retained), result["failure_message"]):
+                    self.assertNotIn("model-secret", output)
+                    self.assertNotIn(prompt, output)
+                    self.assertNotIn("must not be retained", output)
+                self.assertEqual(len(server.requests), 1)
+
+    def test_unreadable_rejection_detail_does_not_hide_http_status(self):
+        raw = b'{"error":{"message":"partial reason"}}'
+        cases = (
+            ({"response_body": b"<html>private proxy page</html>"}, "JSONDecodeError"),
+            ({"response_body": b"x" * 16385}, "16384-byte"),
+            ({"response_body": raw, "declared_response_length": len(raw) + 1}, "declared bytes"),
+            ({"response_body": raw, "response_headers": {"Content-Encoding": "gzip"}}, "encoded"),
+            ({"response_body": raw, "drip_seconds": 0.05}, "declared bytes"),
+            ({"response_body": b'{"error":{"message":42}}'}, "error.message"),
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_test_certificates(root)
+            for response, evidence in cases:
+                with self.subTest(evidence=evidence), _tls_server(root, status=400, **response) as server:
+                    endpoint = ChatEndpoint(f"https://localhost:{server.port}/chat", "model", "key", root / "ca.pem")
+                    started = monotonic()
+                    with self.assertRaisesRegex(InterpreterError, "HTTP 400") as raised:
+                        endpoint.complete([], [], deadline=monotonic() + (0.15 if "drip_seconds" in response else 2))
+                    if "drip_seconds" in response:
+                        self.assertLess(monotonic() - started, 1)
+                    detail = raised.exception.diagnostic
+                    self.assertEqual(detail["status"], 400)
+                    self.assertIn(evidence, detail["detail_unavailable"])
+                    self.assertNotIn("message", detail)
+                    self.assertNotIn("private proxy page", str(raised.exception))
+
+    def test_rejection_redacts_before_bounding_and_removes_controls(self):
+        from secs_inference.provider.chat import _diagnostic_text
+        secret = "a-very-long-configured-key"
+        text = "x" * 20 + secret + "\x00\u202e\nBearer other-token sk-proj-partial***"
+        result = _diagnostic_text(text, (secret,), 200)
+        self.assertNotIn(secret, result)
+        self.assertNotIn("other-token", result)
+        self.assertNotIn("sk-proj", result)
+        self.assertTrue(all(c.isprintable() for c in result))
+        short = _diagnostic_text(text, (secret,), 25)
+        self.assertLessEqual(len(short), 25)
+        self.assertNotIn("a-ver", short)
+
     def _session(self, chat, inspect=lambda source: {}, max_turns=8):
         return InterpretationSession(
             chat, JobSpecification("job:chosen", "Find C2H6O"),

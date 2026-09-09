@@ -146,7 +146,7 @@ class ExecutionLoop:
 
 
 def _public_failure(error: Exception) -> tuple[str, str]:
-    """Publish only owner-written reasons, never arbitrary exception text."""
+    """Publish boundary-owned reasons, including redacted interpreter rejection text."""
     for error_type, code in ((InterpreterError, "interpretation_failed"), (UploadDownloadError, "input_access_failed"),
                              (ApiError, "api_access_failed"), (JobInputError, "api_access_failed"),
                              (UploadResponseError, "api_access_failed"), (WorkerError, "scientific_execution_failed")):

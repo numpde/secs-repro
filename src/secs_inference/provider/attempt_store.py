@@ -17,6 +17,7 @@ from tempfile import NamedTemporaryFile
 
 from secs_inference.provider.attempt_state import ActiveAttempt, AttemptState, StartPending, TerminalPending
 from secs_inference.provider.canonical_json import canonical_json_bytes
+from secs_inference.provider.chat import InterpreterError
 from secs_inference.provider.job_input import selected_job_input
 from secs_inference.provider.response_json import response_object
 
@@ -99,7 +100,7 @@ class AttemptStore:
             raise
 
     def diagnose(self, active: ActiveAttempt, error: Exception) -> None:
-        """Keep credential-free frame evidence under the admitted Attempt identity."""
+        """Retain frames and boundary-redacted diagnostics under the Attempt identity."""
         self._require_usable()
         document = {
             "execution_attempt_ref": active.execution_attempt_ref,
@@ -107,7 +108,10 @@ class AttemptStore:
             "frames": [{"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
                        for frame in traceback.extract_tb(error.__traceback__)],
         }
-        if hasattr(error, "diagnostic"):
+        if isinstance(error, InterpreterError):
+            if error.diagnostic is not None:
+                document["interpreter"] = error.diagnostic
+        elif hasattr(error, "diagnostic"):
             document["worker"] = error.diagnostic
         name = active.execution_attempt_ref.removeprefix("execution_attempt:sha256:") + ".diagnostic.json"
         descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self._directory_fd)
