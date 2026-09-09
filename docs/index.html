@@ -23,10 +23,17 @@
   <p>Propose molecular structures from a molecular formula and one processed
     one-dimensional proton (<sup>1</sup>H) NMR spectrum.</p>
   <p>This service repackages <a href="https://github.com/lamalab-org/secs">SECS</a>,
-    the work of Adrian Mirza, Kevin Maik Jablonka, and upstream contributors.
+    the work of Adrian Mirza, Luc Patiny, Kevin Maik Jablonka, and upstream contributors.
     We did not develop the scientific methods or train the supplied model.
     Our work connects them to the NMR API, handles uploaded spectra, and supports
     reproducible deployment, with adaptations maintained in pinned forks.</p>
+  <p>We also used the upstream GUI,
+    <a href="https://elucidation.cheminfo.org/">elucidation.cheminfo.org</a>
+    (<a href="https://github.com/cheminfo/elucidation.cheminfo.org">source</a>),
+    as a reference for spectrum conversion and published challenge fixtures.
+    Our conversion tests use outputs from a pinned revision of its frontend.
+    The GUI is a separate application, not the interface to this API provider;
+    its supported inputs and results may differ.</p>
 
   <h2>What to upload</h2>
   <p>Submit through a compatible NMR API client; this page is a guide, not an
@@ -77,10 +84,11 @@ Molecular formula: C21H22N2O2.</pre>
     failed attempts, separately from an input that cannot be analysed.</p>
 
   <h2>Credit the original work</h2>
-  <p>Adrian Mirza and Kevin Maik Jablonka (2024),
-    <a href="https://doi.org/10.26434/chemrxiv-2024-f3b18-v2"><cite>Elucidating
-    structures from spectra using multimodal embeddings and discrete
-    optimization</cite></a>. See also the
+  <p>Adrian Mirza, Luc Patiny, and Kevin Maik Jablonka (2026),
+    <a href="https://doi.org/10.1038/s41467-026-73846-y"><cite>End-to-end multimodal
+    structure elucidation from raw spectra combining contrastive learning and
+    evolutionary algorithms</cite></a>, <i>Nature Communications</i> 17, 5013.
+    See also the
     <a href="https://github.com/lamalab-org/secs#citation">upstream citation guidance</a>.
     Please cite the original research when using these methods.</p>
 </main>

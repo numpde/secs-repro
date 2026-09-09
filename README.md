@@ -8,10 +8,17 @@ NMR API. The scientific methods and pretrained model are upstream work—not
 methods developed here. Our contribution is input conversion, API integration,
 reproducible packaging, and deployment support, with adaptations in pinned forks.
 
-Please credit Adrian Mirza and Kevin Maik Jablonka,
-[Elucidating structures from spectra using multimodal embeddings and discrete
-optimization](https://doi.org/10.26434/chemrxiv-2024-f3b18-v2) (2024), and follow
+Please credit Adrian Mirza, Luc Patiny, and Kevin Maik Jablonka,
+[End-to-end multimodal structure elucidation from raw spectra combining
+contrastive learning and evolutionary algorithms](https://doi.org/10.1038/s41467-026-73846-y),
+*Nature Communications* **17**, 5013 (2026), and follow
 the [upstream citation guidance](https://github.com/lamalab-org/secs#citation).
+
+We also used the upstream GUI, [elucidation.cheminfo.org](https://elucidation.cheminfo.org/)
+([source](https://github.com/cheminfo/elucidation.cheminfo.org)), as a reference
+for spectrum conversion and published challenge fixtures. Our conversion tests
+use outputs from a pinned revision of its frontend. That GUI is a separate
+application, not the interface to this API provider.
 
 ## License and source
 
