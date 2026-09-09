@@ -67,6 +67,10 @@ help:
 	'      Run only the Bruker GA test; still loads the GPU model and full index.' \
 	'  make test/provider' \
 	'      Verify input selection, signed API transport, recovery and cancellation offline.' \
+	'  make test/deployment' \
+	'      Test host-side deployment initialization using temporary Git repositories.' \
+	'  make provider/deployment/init DEPLOYMENT=<name>' \
+	'      Copy committed examples into private config/deployments/<name>; no services start.' \
 	'  make test/provider/e2e' \
 	'      Prove hello, verified input, real model/FAISS/GA and result retry in two offline containers.' \
 	'      Uses eight fixture candidates, not the full index; see notes/004_provider_execution.txt.' \

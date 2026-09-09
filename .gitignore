@@ -4,6 +4,7 @@
 /wheelhouse/
 /cache/
 /secrets/
+/config/deployments/
 /qualification/
 /checkpoints/*/candidates/*
 !/checkpoints/*/candidates/manifest.json

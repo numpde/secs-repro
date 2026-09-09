@@ -106,7 +106,13 @@ No restart, deployment or credential installation is performed by test targets.
 
 Provider inputs:
 
-- Copy config/provider.toml.example to the configured directory as provider.toml.
+- Run make provider/deployment/init DEPLOYMENT=<name> to create private
+  config/deployments/<name>/provider.toml and worker.toml from one committed
+  HEAD revision. Initialization ignores working-tree edits and never overwrites
+  an existing deployment. Review the files before use: their endpoints are
+  examples, not a selected production service. No credentials, runtime state,
+  containers, or downloads are created by this command.
+- Use the initialized provider.toml as the provider configuration.
   Its schema is secs.provider.config.v1. Keep [execution] for this recipe.
 - Mount the API-issued signing credential and interpreter key separately.
 - Public CA trust is the default. For private trust, api.use_private_ca selects
@@ -118,7 +124,7 @@ Provider inputs:
 
 Worker inputs:
 
-- Copy config/worker.toml.example and mount the existing complete checkpoint,
+- Use the initialized worker.toml and mount the existing complete checkpoint,
   candidate parquet/index pair, verified model cache, cache lock and verifier.
 - Choose the one authorized GPU UUID. Inside the worker it is cuda:0.
 - The model cache is verified before imports. Startup loads the existing index;

@@ -1,6 +1,18 @@
 PROVIDER_IMAGE_TAG := secs-repro/provider:local
 PROVIDER_WHEELHOUSE := $(REPOSITORY_ROOT)/wheelhouse/provider
 
+# Initialization is a host filesystem operation, not a build or API operation.
+# Pass the literal name through the environment to keep shell syntax out of it.
+.PHONY: provider/deployment/init test/deployment
+provider/deployment/init: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
+provider/deployment/init:
+	@cd "$(REPOSITORY_ROOT)"
+	python3 -m deployment.provider_deployment init "$${DEPLOYMENT_INPUT}"
+
+test/deployment:
+	@cd "$(REPOSITORY_ROOT)"
+	python3 -m unittest discover -v -s tests/deployment -p 'test_*.py'
+
 .PHONY: provider/contracts/check provider/contracts/write
 provider/contracts/check provider/contracts/write: private export NMR_API_V1_DIRECTORY_INPUT = $(value NMR_API_V1_DIR)
 provider/contracts/check provider/contracts/write:
