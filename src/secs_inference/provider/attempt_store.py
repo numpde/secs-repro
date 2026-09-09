@@ -112,6 +112,8 @@ class AttemptStore:
                 document["interpreter"] = error.diagnostic
         elif hasattr(error, "diagnostic"):
             document["worker"] = error.diagnostic
+        if hasattr(error, "analysis_context"):
+            document["analysis"] = error.analysis_context
         self._write_evidence(active, "diagnostic", document)
 
     def record_report(self, active: ActiveAttempt, report: dict) -> None:
