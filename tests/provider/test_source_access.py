@@ -1,15 +1,48 @@
 """Archive members are source identities, never extraction paths."""
 
 from pathlib import Path
+import errno
+from io import BytesIO
 from tempfile import TemporaryDirectory
 import unittest
-from zipfile import ZipFile, ZipInfo
+from unittest.mock import Mock
+from zipfile import ZipFile, ZipInfo, ZipExtFile, ZIP_BZIP2, ZIP_LZMA
 
 from secs_inference.provider.input_operations import SourceRef
-from secs_inference.provider.source_access import InputReadError, SourceAccess
+from secs_inference.provider.source_access import InputReadError, SourceAccess, _read_chunk
 
 
 class SourceAccessTests(unittest.TestCase):
+    def test_corrupt_compressed_members_are_input_rejections(self):
+        for compression, offset in ((ZIP_BZIP2, 0), (ZIP_LZMA, 4)):
+            with self.subTest(compression=compression), TemporaryDirectory() as directory:
+                root = Path(directory)
+                data = BytesIO()
+                with ZipFile(data, "w", compression=compression) as archive:
+                    archive.writestr("spectrum.jdx", "spectrum " * 300)
+                raw = bytearray(data.getvalue())
+                # Damage the codec header, leaving the ZIP directory readable.
+                payload = 30 + int.from_bytes(raw[26:28], "little") + int.from_bytes(raw[28:30], "little")
+                raw[payload + offset] ^= 255
+                path = root / "upload"
+                path.write_bytes(raw)
+                access = SourceAccess({"upload:chosen": path}, root)
+                source = SourceRef("upload:chosen", "spectrum.jdx")
+                with self.assertRaises(InputReadError):
+                    access.inspect(source)
+                with self.assertRaises(InputReadError):
+                    with access.materialize({"spectrum.jdx": source}):
+                        self.fail("Corrupt bytes reached the reader")
+
+    def test_filesystem_read_errors_are_not_bad_input(self):
+        for stream, error in ((Mock(spec=ZipExtFile), OSError(errno.EIO, "disk read failed")),
+                              (Mock(), OSError("unclassified read failure"))):
+            with self.subTest(error=error):
+                stream.read.side_effect = error
+                with self.assertRaises(OSError) as caught:
+                    _read_chunk(stream, 1024)
+                self.assertIs(caught.exception, error)
+
     def test_malformed_zip_name_encoding_is_a_source_rejection(self):
         for damaged_header in (b"PK\x01\x02", b"PK\x03\x04"):
             with self.subTest(header=damaged_header), TemporaryDirectory() as directory:

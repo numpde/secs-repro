@@ -1,10 +1,11 @@
 """Bound member access to acquired files without trusting archive output paths."""
 
 from contextlib import contextmanager
+from lzma import LZMAError
 from pathlib import Path
 import stat
 from tempfile import TemporaryDirectory
-from zipfile import BadZipFile, ZipFile, ZipInfo, is_zipfile
+from zipfile import BadZipFile, ZipExtFile, ZipFile, ZipInfo, is_zipfile
 import zlib
 
 from secs_inference.provider.input_operations import SourceRef
@@ -114,5 +115,10 @@ def _read_chunk(stream, size: int) -> bytes:
     """Translate failures only while decoding bytes, not around the consumer."""
     try:
         return stream.read(size)
-    except (BadZipFile, zlib.error, EOFError) as error:
+    except (BadZipFile, zlib.error, LZMAError, EOFError, OSError) as error:
+        # bz2 reports corrupt compressed data as an errno-less OSError.
+        # Translate that form only for ZIP decoding; filesystem errors and
+        # unclassified errors from direct-file reads remain operational.
+        if isinstance(error, OSError) and (not isinstance(stream, ZipExtFile) or error.errno is not None):
+            raise
         raise InputReadError("Cannot read the selected ZIP member: decoding or integrity checking failed") from error
