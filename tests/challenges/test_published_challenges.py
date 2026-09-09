@@ -12,8 +12,9 @@ import torch
 
 from secs.elucidation import FaissCandidateSource, GraphGAOptimizer, ScoreOnlyOptimizer
 from secs.elucidation.caching import TrajectoryCallback
+from secs.elucidation.optimizers.base import OptimizerResult
 from secs.utils.elucidation import smiles_to_molecular_formula
-from secs_inference.elucidation import SecsElucidator
+from secs_inference.elucidation import NoStartingCandidates, SecsElucidator
 from secs_inference.model import SecsInference
 from secs_inference.spectra.bruker import read_bruker_pdata
 from secs_inference.spectra.secs import prepare_secs_spectrum
@@ -112,6 +113,7 @@ class PublishedChallengeTest(unittest.TestCase):
         # https://pubchem.ncbi.nlm.nih.gov/compound/441071
         result = elucidator.elucidate(spectrum, "C21H22N2O2")
 
+        self.assertIsInstance(result, OptimizerResult)
         self.assertEqual(result.generations, 1)
         self.assertTrue(result.population)
         self.assertGreater(result.n_evaluated, trajectory.history[0]["n_evaluated"])
@@ -130,8 +132,10 @@ class PublishedChallengeTest(unittest.TestCase):
                 spectrum = np.asarray(spectrum_document["y"], dtype=np.float32)
 
                 result = self.elucidator.elucidate(spectrum, case["formula"])
+                # Empty retrieval means no recovered structure in this baseline.
+                population = [] if isinstance(result, NoStartingCandidates) else result.population
                 rank = rank_expected_structure(
-                    result.population,
+                    population,
                     case["formula"],
                     case["expected_smiles"],
                 )

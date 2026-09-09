@@ -85,6 +85,10 @@ Molecular formula: C21H22N2O2.</pre>
     correct. These are candidates for chemical review, not validated structure
     assignments. The example above demonstrates input preparation, not a
     guarantee of recovering strychnine.</p>
+  <p>A completed search can return no candidates. If retrieval finds no starting
+    molecules, the result records <code>no_starting_candidates</code> and explains
+    that refinement did not run. This is a limit of that search, not proof that
+    the formula is invalid or that no matching structure exists.</p>
   <p>If the interpreter cannot select usable input, the attempt fails with
     <code>cannot_analyse</code>: no analysis was produced. Its failure message
     includes the interpreter's explanation. That explanation is the model's

@@ -1,6 +1,7 @@
 """Compose formula parsing, candidate retrieval and molecular refinement."""
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import torch
 
@@ -14,6 +15,11 @@ from secs_inference.model import FloatArray, SecsInference
 
 class FormulaError(ValueError):
     """The formula parser rejected the supplied text before model work."""
+
+
+@dataclass(frozen=True, slots=True)
+class NoStartingCandidates:
+    """Retrieval completed without starting molecules; optimization did not run."""
 
 
 class _HnmrCandidateEmbedder:
@@ -42,8 +48,14 @@ class SecsElucidator:
         self._optimizer = optimizer
         self._initial_population_size = initial_population_size
 
-    def elucidate(self, spectrum: Sequence[float] | FloatArray, formula: str) -> OptimizerResult:
-        """Elucidate from a complete formula, rejecting it before model work."""
+    def elucidate(
+        self, spectrum: Sequence[float] | FloatArray, formula: str
+    ) -> OptimizerResult | NoStartingCandidates:
+        """Return refinement results, or NoStartingCandidates for empty retrieval.
+
+        Malformed formulas are rejected before model work. Empty retrieval is
+        a search limitation, not evidence that the supplied formula is invalid.
+        """
 
         try:
             target_atom_counts = get_atom_counts_from_formula(formula)
@@ -57,6 +69,10 @@ class SecsElucidator:
             canonical_formula,
             self._initial_population_size,
         )
+        if not initial_population:
+            # Keep empty retrieval distinct from an optimizer that ran and
+            # returned no survivors; callers must report the observed stage.
+            return NoStartingCandidates()
 
         candidate_embedder = _HnmrCandidateEmbedder(self._inference)
         objective = spectral_objective(
