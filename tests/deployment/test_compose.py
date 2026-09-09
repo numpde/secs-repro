@@ -1,7 +1,7 @@
 """Preserve NMRPeak's project ownership and ordered-stop behavior across providers."""
 
 import json
-from contextlib import nullcontext, redirect_stderr
+from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 import subprocess
@@ -130,9 +130,7 @@ class ComposeTests(unittest.TestCase):
                 output = StringIO()
                 behavior = {"side_effect": result} if isinstance(result, Exception) else {"return_value": result}
                 with patch("tempfile.tempdir", temporary), patch("deployment.compose.subprocess.run", **behavior):
-                    with patch("deployment.provider_deployment._private_directory"), patch(
-                        "deployment.provider_deployment._locked_parent", return_value=nullcontext(),
-                    ), redirect_stderr(output):
+                    with patch("deployment.provider_deployment._private_directory"), redirect_stderr(output):
                         self.assertEqual(main(["status", "production"]), 1)
                 files = list(Path(temporary).iterdir())
                 self.assertEqual(len(files), 1)

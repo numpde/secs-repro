@@ -1,15 +1,59 @@
 """Test SECS-specific installation and attempt ownership without a model or engine."""
 
 import json
+import fcntl
+import os
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from deployment.provider_deployment import _bind_attempt_owner, install_secret
+from deployment.compose import ComposeProject
+from deployment.provider_deployment import _bind_attempt_owner, install_secret, main
+from deployment.templates import _locked_parent
 
 
 class ProviderDeploymentTests(unittest.TestCase):
+    def test_lifecycle_mutations_still_hold_the_exclusive_lock(self):
+        with TemporaryDirectory() as temporary:
+            config = Path(temporary) / "production"
+            config.mkdir(mode=0o700)
+
+            def check_exclusion(*args):
+                """A separate open cannot acquire the lock while a mutation owns it."""
+                descriptor = os.open(config.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(descriptor)
+                return {}
+
+            with patch("deployment.provider_deployment.configuration_directory", return_value=config), patch(
+                "deployment.provider_deployment.start_deployment", side_effect=check_exclusion,
+            ), patch.object(ComposeProject, "stop", side_effect=check_exclusion), redirect_stdout(StringIO()):
+                for operation in ("up", "down"):
+                    with self.subTest(operation=operation):
+                        self.assertEqual(main([operation, "production"]), 0)
+
+    def test_observation_does_not_wait_for_a_lifecycle_lock(self):
+        with TemporaryDirectory() as temporary:
+            config = Path(temporary) / "production"
+            config.mkdir(mode=0o700)
+            with patch("deployment.provider_deployment.configuration_directory", return_value=config), patch(
+                "deployment.provider_deployment.render_deployment", return_value={},
+            ), patch.object(ComposeProject, "inventory", return_value={}), redirect_stdout(StringIO()), \
+                    ThreadPoolExecutor(max_workers=1) as pool:
+                for operation in ("status", "logs", "config"):
+                    with self.subTest(operation=operation), _locked_parent(config.parent):
+                        # A shutdown may hold this inode for its entire grace
+                        # period. Observations must finish before it releases it.
+                        observed = pool.submit(main, [operation, "production"])
+                        self.assertEqual(observed.result(timeout=5), 0)
+
     def test_failed_owner_write_does_not_poison_the_next_start(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
