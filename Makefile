@@ -69,8 +69,20 @@ help:
 	'      Verify input selection, signed API transport, recovery and cancellation offline.' \
 	'  make test/deployment' \
 	'      Test host-side deployment initialization using temporary Git repositories.' \
+	'  make test/deployment/e2e' \
+	'      Prove real offline Compose startup, stop/restart, ownership and state preservation.' \
 	'  make provider/deployment/init DEPLOYMENT=<name>' \
 	'      Copy committed examples into private config/deployments/<name>; no services start.' \
+	'  make provider/deployment/config DEPLOYMENT=<name>' \
+	'      Render the selected local images and paths without starting services.' \
+	'  make provider/credential/install DEPLOYMENT=<name> SOURCE=<private-file>' \
+	'  make provider/interpreter-key/install DEPLOYMENT=<name> SOURCE=<private-file>' \
+	'      Install an owner-only secret once; existing files are never overwritten.' \
+	'  make provider/deployment/up DEPLOYMENT=<name>' \
+	'  make provider/deployment/status DEPLOYMENT=<name>' \
+	'  make provider/logs DEPLOYMENT=<name>' \
+	'  make provider/deployment/down DEPLOYMENT=<name>' \
+	'      Down stops provider then worker; containers, configuration and state remain.' \
 	'  make test/provider/e2e' \
 	'      Prove hello, verified input, real model/FAISS/GA and result retry in two offline containers.' \
 	'      Uses eight fixture candidates, not the full index; see notes/004_provider_execution.txt.' \

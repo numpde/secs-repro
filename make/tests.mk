@@ -121,6 +121,8 @@ test/qualification-tools:
 		-P -m unittest discover -v -s /tests -p 'test_*.py'
 
 .PHONY: test/provider/e2e
+# A single retained log file has no rotated files to compress. Override the
+# daemon's compression default so this bounded test logger works on either host.
 test/provider/e2e:
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot run the provider scenario as host UID 0.' >&2
@@ -159,7 +161,7 @@ test/provider/e2e:
 	$(DOCKER) run --cidfile "$$stage/worker.cid" --detach --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" --cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 64 --cpus 2 --memory 3g --memory-swap 3g \
-		--log-opt max-size=1m --log-opt max-file=1 \
+		--log-opt max-size=1m --log-opt max-file=1 --log-opt compress=false \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777 \
 		--tmpfs /modules:rw,nosuid,nodev,noexec,size=16m,mode=1777 \
 		--env HF_HUB_CACHE=/cache/hub --env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1 \
