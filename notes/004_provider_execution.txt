@@ -95,32 +95,54 @@ Build existing offline inputs with make provider/image and
 make packages/gpu/image. Neither target downloads dependencies. Use the
 returned immutable image IDs for PROVIDER_IMAGE_REF and WORKER_IMAGE_REF.
 
-Use the same default Docker context as the image builds, with DOCKER_HOST and
-DOCKER_CONTEXT unset. Set a distinct Compose project name. After supplying the
-recipe's explicit paths and identities, check its rendering without starting it:
+Use the named deployment commands; they select the default local Docker context
+and project secs-<name>, without inherited Docker/Compose settings or .env files:
 
-  env -u DOCKER_HOST -u DOCKER_CONTEXT docker --context default compose \
-    --project-name secs-provider -f compose/provider.yml config
+  make provider/deployment/init DEPLOYMENT=<name>
 
-No restart, deployment or credential installation is performed by test targets.
+Edit config/deployments/<name>/provider.toml, worker.toml, and deployment.env.
+The environment file needs the two local image IDs, one GPU UUID, and absolute
+checkpoint and model-cache directory paths. Keep credentials out of that file.
+Install the two owner-only secret files separately, using their existing paths:
+
+  make provider/credential/install DEPLOYMENT=<name> SOURCE=<credential-file>
+  make provider/interpreter-key/install DEPLOYMENT=<name> SOURCE=<key-file>
+  make provider/deployment/config DEPLOYMENT=<name>
+  make provider/deployment/up DEPLOYMENT=<name>
+  make provider/deployment/status DEPLOYMENT=<name>
+  make provider/logs DEPLOYMENT=<name>
+
+Config only renders the recipe. Up creates private workspaces and starts existing
+images; it never builds or downloads. Running containers do not establish API
+acceptance or scientific readiness: check hello and Job polling in provider logs.
+Down stops the provider before its worker, retaining containers and all data:
+
+  make provider/deployment/down DEPLOYMENT=<name>
+
+Use down before up to apply changed configuration. Status, logs, and down do not
+read credentials. Secrets and attempt state live in secrets/deployments/<name>.
+Attempt ownership is fixed to the API origin and provider reference; changing
+either requires another deployment name. Do not copy journals across names.
+The earlier hand-assembled secrets/fw-remote and secrets/nmr-dapp32-com layouts
+are not adopted automatically. These commands do not provide tunnel setup.
 
 Provider inputs:
 
 - Run make provider/deployment/init DEPLOYMENT=<name> to create private
-  config/deployments/<name>/provider.toml and worker.toml from one committed
+  config/deployments/<name> from one committed
   HEAD revision. Initialization ignores working-tree edits and never overwrites
   an existing deployment. Review the files before use: their endpoints are
   examples, not a selected production service. No credentials, runtime state,
   containers, or downloads are created by this command.
 - Use the initialized provider.toml as the provider configuration.
   Its schema is secs.provider.config.v1. Keep [execution] for this recipe.
-- Mount the API-issued signing credential and interpreter key separately.
+- The recipe mounts the installed signing credential and interpreter key separately.
 - Public CA trust is the default. For private trust, api.use_private_ca selects
   api-ca.crt; execution.interpreter_use_private_ca selects interpreter-ca.crt;
   execution.upload_store_use_private_ca selects upload-store-ca.crt.
   These independent files belong beside provider.toml. No TLS bypass is used.
-- State, sources and socket directories must already exist, be private (0700),
-  and be owned by the same nonroot UID/GID used by both containers.
+- Up creates state, sources and socket directories privately (0700), owned by
+  the nonroot operator UID/GID used by both containers.
 
 Worker inputs:
 
@@ -143,6 +165,15 @@ by an exclusive supervisor lock; another worker cannot displace a live listener.
 
 Local proof
 -----------
+
+make test/deployment covers named initialization, secret installation, attempt
+ownership, foreign-container rejection and ordered shutdown. It uses temporary
+directories and mocked engine responses, not production credentials.
+
+make test/deployment/e2e renders the actual SECS recipe and separately starts,
+stops, and restarts two disposable offline services through the common lifecycle
+code. It checks engine-visible restrictions and retained state, not model or API
+behavior. Only this test removes its admitted test containers afterward.
 
 make test/provider covers API binding, acquisition, interpretation, exact
 terminal replay, journal ownership, child termination and runtime wiring.

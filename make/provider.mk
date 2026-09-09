@@ -3,15 +3,29 @@ PROVIDER_WHEELHOUSE := $(REPOSITORY_ROOT)/wheelhouse/provider
 
 # Initialization is a host filesystem operation, not a build or API operation.
 # Pass the literal name through the environment to keep shell syntax out of it.
-.PHONY: provider/deployment/init test/deployment
-provider/deployment/init: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
-provider/deployment/init:
+.PHONY: provider/deployment/init provider/deployment/config provider/deployment/up
+.PHONY: provider/deployment/status provider/deployment/down provider/logs test/deployment
+provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/logs: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
+provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/logs:
 	@cd "$(REPOSITORY_ROOT)"
-	python3 -m deployment.provider_deployment init "$${DEPLOYMENT_INPUT}"
+	python3 -m deployment.provider_deployment "$(@F)" "$${DEPLOYMENT_INPUT}"
+
+.PHONY: provider/credential/install provider/interpreter-key/install
+provider/credential/install provider/interpreter-key/install: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
+provider/credential/install provider/interpreter-key/install: private export SECRET_SOURCE_INPUT := $(value SOURCE)
+provider/credential/install provider/interpreter-key/install:
+	@cd "$(REPOSITORY_ROOT)"
+	python3 -m deployment.provider_deployment "$(word 2,$(subst /, ,$@))-install" "$${DEPLOYMENT_INPUT}" --source "$${SECRET_SOURCE_INPUT}"
 
 test/deployment:
 	@cd "$(REPOSITORY_ROOT)"
 	python3 -m unittest discover -v -s tests/deployment -p 'test_*.py'
+
+.PHONY: test/deployment/e2e
+test/deployment/e2e:
+	@cd "$(REPOSITORY_ROOT)"
+	image=$$($(MAKE) --no-print-directory provider/image)
+	DEPLOYMENT_TEST_IMAGE="$$image" python3 -m unittest discover -v -s tests/deployment_e2e -p 'test_*.py'
 
 .PHONY: provider/contracts/check provider/contracts/write
 provider/contracts/check provider/contracts/write: private export NMR_API_V1_DIRECTORY_INPUT = $(value NMR_API_V1_DIR)

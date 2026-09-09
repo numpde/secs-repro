@@ -33,11 +33,7 @@ def initialize_configuration(
     publication is durable. Other processes running as the owner are trusted.
     No credentials, runtime state, containers, or downloads are created.
     """
-    if _NAME.fullmatch(name) is None:
-        raise ValueError(
-            "Cannot initialize deployment: use 1–64 lowercase letters, digits, "
-            "or hyphens, starting and ending with a letter or digit."
-        )
+    destination = configuration_directory(repository, name)
     root = repository.resolve(strict=True)
     config = root / "config"
     if config.is_symlink() or not config.is_dir():
@@ -55,7 +51,6 @@ def initialize_configuration(
 
     parent = config / "deployments"
     _ensure_private_parent(parent)
-    destination = parent / name
     with _locked_parent(parent) as parent_fd:
         # Test without following links: a dangling link also reserves this name.
         if os.path.lexists(destination):
@@ -80,6 +75,16 @@ def initialize_configuration(
                 )
                 raise
     return destination
+
+
+def configuration_directory(repository: Path, name: str) -> Path:
+    """Resolve a literal deployment name without allowing it to select another directory."""
+    if _NAME.fullmatch(name) is None:
+        raise ValueError(
+            "Cannot select deployment: use 1–64 lowercase letters, digits, "
+            "or hyphens, starting and ending with a letter or digit."
+        )
+    return repository.resolve(strict=True) / "config/deployments" / name
 
 
 def _git(repository: Path, *arguments: str) -> bytes:
