@@ -203,7 +203,8 @@ Live interpreter qualification (opt-in; makes paid model requests):
 Ported from Magnet's model-behavior lane. This uses the production interpreter
 configuration, key loader, tool definitions and conversation loop against the
 real model endpoint. It checks missing-input reporting, selection of a proton
-spectrum among archive distractors, and response to a forced reader rejection.
+spectrum among archive distractors, a typed Bruker processed-pair selection,
+and response to a forced reader rejection.
 Only fixture inputs are sent. Each case is bounded to at most eight turns and
 120 seconds, or the deployment's smaller limits. It does not create Jobs,
 publish hello, access a GPU, or prove scientific ranking quality.
