@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Using the repackaged SECS methods to propose molecular structures from a formula and a processed proton NMR spectrum.">
+  <title>SECS, repackaged — user guide</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.6; }
+    body { max-width: 44rem; margin: 2rem auto; padding: 0 1rem; }
+    h1, h2 { line-height: 1.2; }
+    h2 { margin-top: 2rem; }
+    a { color: light-dark(#0757a6, #8fcaff); }
+    code { overflow-wrap: anywhere; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1rem; border: 1px solid #888; }
+    li { margin-block: .5rem; }
+    footer { border-top: 1px solid #888; margin-top: 2rem; padding-top: 1rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>SECS, repackaged</h1>
+  <p>Propose molecular structures from a molecular formula and one processed
+    one-dimensional proton (<sup>1</sup>H) NMR spectrum.</p>
+  <p>This service repackages <a href="https://github.com/lamalab-org/secs">SECS</a>,
+    the work of Adrian Mirza, Kevin Maik Jablonka, and upstream contributors.
+    We did not develop the scientific methods or train the supplied model.
+    Our work connects them to the NMR API, handles uploaded spectra, and supports
+    reproducible deployment, with adaptations maintained in pinned forks.</p>
+
+  <h2>What to upload</h2>
+  <p>Submit through a compatible NMR API client; this page is a guide, not an
+    upload form. Choose the SECS provider for the analysis kind
+    <code>mol_from_1h_spectrum_formula</code>. Attach a supported spectrum and
+    put its molecular formula in the job instructions.</p>
+  <ul>
+    <li><strong>Bruker:</strong> upload a ZIP containing a processed
+      <code>pdata</code> directory. Keep <code>1r</code> and <code>procs</code>
+      together in the same directory; include <code>title</code> if available.
+      That directory can be at the ZIP root or inside preserved experiment folders.
+      <code>1r</code> alone is insufficient: <code>procs</code> supplies the
+      spectrum metadata and ppm axis.</li>
+    <li><strong>JCAMP-DX:</strong> upload a file directly or inside a ZIP.
+      Supported representations are a processed <sup>1</sup>H AFFN XYDATA block
+      with a ppm axis, or an NTUPLES real/imaginary pair with a ppm axis or a
+      referenced Hz axis.</li>
+  </ul>
+  <p>Raw time-domain data (FID), spectrum images, and peak lists are not inputs
+    to this analysis. Upload processed spectral data, not a screenshot.</p>
+
+  <h2>Example: a Bruker experiment</h2>
+  <p>For the <a href="https://github.com/numpde/secs-repro/tree/main/tests/fixtures/bruker/F3697/1/pdata/1">strychnine example files</a>
+    used by our Bruker regression test, ZIP
+    <code>F3697/1/pdata/1/</code>, including <code>1r</code>, <code>procs</code>,
+    and <code>title</code>. Attach that ZIP and write:</p>
+  <pre>Analyse the sole processed 1H spectrum in the attached ZIP.
+Molecular formula: C21H22N2O2.</pre>
+  <p>If you upload several files or experiments, explain which sample and
+    experiment you intend. A language-model interpreter can inspect the attachments and
+    chooses a source, reader, and formula, with a reason for its choice.</p>
+
+  <h2>What the result means</h2>
+  <p>SECS retrieves candidates from a molecular index and refines them with a
+    genetic algorithm. The result includes ranked candidate SMILES (text
+    representations of molecular structures), scores, the selected input and
+    formula, selection explanations, and search settings.</p>
+  <p>Higher scores rank better within a search; they are not probabilities that a structure is
+    correct. These are candidates for chemical review, not validated structure
+    assignments. The Bruker regression test checks that conversion, retrieval,
+    and refinement run; it does not require recovery of strychnine.</p>
+  <p>If the interpreter cannot establish a usable spectrum and formula, the
+    result explains why. Rejected input choices and their reading errors are
+    retained in the selection history. Check that the chosen experiment and
+    formula are the ones you intended. If input is missing or unusable, correct
+    the attachment or instructions before submitting a new job.
+    Operational failures are reported as
+    failed attempts, separately from an input that cannot be analysed.</p>
+
+  <h2>Credit the original work</h2>
+  <p>Adrian Mirza and Kevin Maik Jablonka (2024),
+    <a href="https://doi.org/10.26434/chemrxiv-2024-f3b18-v2"><cite>Elucidating
+    structures from spectra using multimodal embeddings and discrete
+    optimization</cite></a>. See also the
+    <a href="https://github.com/lamalab-org/secs#citation">upstream citation guidance</a>.
+    Please cite the original research when using these methods.</p>
+</main>
+<footer>
+  <p><a href="https://github.com/numpde/secs-repro">Source code and deployment instructions</a>
+    · <a href="https://github.com/numpde/fork-of-secs">Adapted SECS source</a>
+    · <a href="https://github.com/numpde/secs-repro/blob/main/LICENSE">AGPLv3 license</a>
+    · <a href="https://github.com/numpde/secs-repro/blob/main/open_source_licenses.txt">Third-party notice</a></p>
+  <p>The upstream license text is preserved verbatim. Dependencies and external
+    model/data artifacts retain their own licenses. Provided without warranty;
+    see the license for terms.</p>
+</footer>
+</body>
+</html>
