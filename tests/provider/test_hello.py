@@ -38,6 +38,7 @@ class ProviderHelloTests(unittest.TestCase):
         document = parse_canonical_json_bytes(prepared.body)
 
         self.assertEqual(document["schema_id"], "nmr.provider.hello_request.v1")
+        self.assertIn("https://numpde.github.io/secs-repro/", document["description"])
         self.assertEqual(
             document["analysis_offerings"],
             [
