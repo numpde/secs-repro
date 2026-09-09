@@ -11,7 +11,7 @@ from time import monotonic, sleep
 from secs_inference.provider.input_operations import BrukerSelection, CannotAnalyse, JcampSelection
 from secs_inference.provider.interpreter import InterpretationSession
 from secs_inference.provider.chat import InterpreterError
-from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive
+from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive, ProviderStopping
 from secs_inference.provider.job_api import ApiError, ApiUnavailable
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.upload_download import UploadDownloadError, UploadUnavailable, download_upload
@@ -148,51 +148,54 @@ def run_analysis(
         session = InterpretationSession(chat, specification, uploads, inspect,
                                         deadline=interpretation_deadline, max_turns=max_turns)
         choices = []
-        while True:
-            check_running()
-            try:
+        try:
+            while True:
+                check_running()
                 decision = session.select()
-            except InterpreterError as error:
-                # Preserve actual feedback even when the model never reaches a
-                # decision. Do not substitute its prose for provider evidence.
-                error.diagnostic = (error.diagnostic or {}) | {
-                    "interpretation_rejections": session.rejections, "input_choices": choices,
-                    "acquired_uploads": _upload_evidence(sources),
-                }
-                raise
-            check_running()
-            if isinstance(decision, CannotAnalyse):
-                return {"schema_id": RESULT_SCHEMA_ID, "outcome": "cannot_analyse",
-                        "explanation": decision.explanation, "input_choices": choices,
+                check_running()
+                if isinstance(decision, CannotAnalyse):
+                    return {"schema_id": RESULT_SCHEMA_ID, "outcome": "cannot_analyse",
+                            "explanation": decision.explanation, "input_choices": choices,
+                            "interpretation_rejections": session.rejections,
+                            "acquired_uploads": _upload_evidence(sources)}
+                if isinstance(decision, JcampSelection):
+                    reader, ref = "jcamp", decision.source.upload_ref
+                elif isinstance(decision, BrukerSelection):
+                    reader, ref = "bruker", decision.upload_ref
+                else:
+                    raise AssertionError("No scientific reader is bound to the interpreted selection")
+                choice = {"reader": reader, **asdict(decision)}
+                choices.append(choice)
+                try:
+                    sources.acquire(ref)
+                except UploadSetChanged as change:
+                    choice["reading_error"] = str(change)
+                    session.reject(str(change) + "\n" + json.dumps({"current_uploads": [asdict(item) for item in change.uploads]}, ensure_ascii=False))
+                    continue
+                except InputReadError as error:
+                    choice["reading_error"] = str(error)
+                    session.reject(str(error))
+                    continue
+                response = _worker_request(worker, sources, {"operation": "analyse", "selection": choice}, work_deadline, check_running)
+                if response["outcome"] == "input_rejected":
+                    choice["reading_error"] = response["reason"]
+                    session.reject(response["reason"])
+                    continue
+                choice["used"] = True
+                return {"schema_id": RESULT_SCHEMA_ID, "outcome": "analysed", "explanation": decision.explanation,
                         "interpretation_rejections": session.rejections,
-                        "acquired_uploads": _upload_evidence(sources)}
-            if isinstance(decision, JcampSelection):
-                reader, ref = "jcamp", decision.source.upload_ref
-            elif isinstance(decision, BrukerSelection):
-                reader, ref = "bruker", decision.upload_ref
-            else:
-                raise AssertionError("No scientific reader is bound to the interpreted selection")
-            choice = {"reader": reader, **asdict(decision)}
-            choices.append(choice)
-            try:
-                sources.acquire(ref)
-            except UploadSetChanged as change:
-                choice["reading_error"] = str(change)
-                session.reject(str(change) + "\n" + json.dumps({"current_uploads": [asdict(item) for item in change.uploads]}, ensure_ascii=False))
-                continue
-            except InputReadError as error:
-                choice["reading_error"] = str(error)
-                session.reject(str(error))
-                continue
-            response = _worker_request(worker, sources, {"operation": "analyse", "selection": choice}, work_deadline, check_running)
-            if response["outcome"] == "input_rejected":
-                choice["reading_error"] = response["reason"]
-                session.reject(response["reason"])
-                continue
-            choice["used"] = True
-            return {"schema_id": RESULT_SCHEMA_ID, "outcome": "analysed", "explanation": decision.explanation,
-                    "interpretation_rejections": session.rejections,
-                    "input_choices": choices, "acquired_uploads": _upload_evidence(sources), "analysis": response["analysis"]}
+                        "input_choices": choices, "acquired_uploads": _upload_evidence(sources), "analysis": response["analysis"]}
+        except (WorkerStopUnconfirmed, ProviderStopping, AnalysisCancelled, AttemptNoLongerActive):
+            raise
+        except Exception as error:
+            # Selection and transfer facts belong to this run, regardless of
+            # which component failed. Keep them separate from that component's
+            # diagnostic, and leave exception classification unchanged.
+            error.analysis_context = {
+                "interpretation_rejections": session.rejections, "input_choices": choices,
+                "acquired_uploads": _upload_evidence(sources),
+            }
+            raise
 
 
 def _worker_request(worker, sources, request, deadline, check_running=lambda: None):

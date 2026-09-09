@@ -1,6 +1,7 @@
 """Acquisition outages and observed membership changes have different owners."""
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic
@@ -10,13 +11,15 @@ from unittest.mock import Mock, patch
 
 from secs_inference.provider.analysis_run import AttemptSources, AcquiredUpload, UploadSetChanged, _worker_request, run_analysis
 from secs_inference.provider.chat import InterpreterError
+from secs_inference.provider.attempt_store import AttemptStore
 from secs_inference.provider.job_input import JobSpecification
 from secs_inference.provider.job_api import ApiError, ApiUnavailable, AttemptSnapshot
-from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive
+from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive, ExecutionLoop
 from secs_inference.provider.job_upload import JobUpload, UploadReadCapability
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
 from test_interpreter import ScriptedChat, tool
+from test_execution import FakeApi
 
 
 UPLOAD = JobUpload("upload:sha256:" + "a" * 64, "Proton experiment", 4, None)
@@ -25,6 +28,37 @@ GRANT = UploadReadCapability(UPLOAD.upload_ref, 4, "sha256:" + "b" * 64,
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_worker_failures_keep_analysis_evidence_without_reclassifying_the_failure(self):
+        for failure, code in (({"outcome": "failed", "exception_type": "ValueError", "frames": []}, "scientific_execution_failed"),
+                              (TimeoutError("work expired"), "work_deadline_exceeded")):
+            with self.subTest(code=code), TemporaryDirectory() as directory:
+                root = Path(directory)
+                api = FakeApi()
+                api.specification = Mock(return_value=JobSpecification("job:test", "C2H6O"))
+                api.uploads = Mock(return_value=(UPLOAD,))
+                api.capability = Mock(return_value=GRANT)
+                chat = ScriptedChat(tool("read_jcamp", {}), tool("read_jcamp", {
+                    "source": {"upload_ref": UPLOAD.upload_ref, "member": "chosen.jdx"},
+                    "formula": "C2H6O", "explanation": "Proton experiment."}))
+                worker = Mock()
+                worker.request.side_effect = [failure]
+                with AttemptStore(root / "journal") as journal, patch(
+                        "secs_inference.provider.analysis_run.download_upload", return_value=root / "verified"):
+                    def analyse(active):
+                        return run_analysis(api=api, active=active, chat=chat, worker=worker, store=None,
+                            directory=root / "current", work_deadline=monotonic() + 10,
+                            interpretation_seconds=5, max_turns=3, max_total_bytes=100)
+                    ExecutionLoop(api, journal, analyse, journal.diagnose).step()
+                    self.assertEqual(json.loads(api.calls[-1])["failure_code"], code)
+                    diagnostic = json.loads((journal.directory / ("b" * 64 + ".diagnostic.json")).read_bytes())
+                evidence = diagnostic["analysis"]
+                self.assertEqual(evidence["input_choices"][0]["source"]["member"], "chosen.jdx")
+                self.assertEqual(evidence["input_choices"][0]["formula"], "C2H6O")
+                self.assertEqual(evidence["interpretation_rejections"][0]["stage"], "tool_call")
+                self.assertEqual(evidence["acquired_uploads"][UPLOAD.upload_ref]["content_hash"], GRANT.content_hash)
+                if isinstance(failure, dict):
+                    self.assertEqual(diagnostic["worker"], failure)
+
     def test_reader_rejection_survives_exhausted_interpretation_budget(self):
         api = Mock()
         api.specification.return_value = JobSpecification("job:test", "C21H22N2O2")
@@ -40,7 +74,7 @@ class AcquisitionTests(unittest.TestCase):
                 run_analysis(api=api, active=None, chat=chat, worker=worker, store=None,
                     directory=Path(directory) / "current", work_deadline=monotonic() + 10,
                     interpretation_seconds=5, max_turns=1, max_total_bytes=100)
-        evidence = caught.exception.diagnostic
+        evidence = caught.exception.analysis_context
         self.assertEqual(evidence["input_choices"][0]["reading_error"], worker.request.return_value["reason"])
         self.assertEqual(evidence["interpretation_rejections"], [])
         self.assertEqual(evidence["acquired_uploads"][UPLOAD.upload_ref]["content_hash"], GRANT.content_hash)
@@ -66,7 +100,7 @@ class AcquisitionTests(unittest.TestCase):
                 else:
                     with self.assertRaises(InterpreterError) as caught:
                         run()
-                    evidence = caught.exception.diagnostic["interpretation_rejections"]
+                    evidence = caught.exception.analysis_context["interpretation_rejections"]
                 self.assertEqual(evidence[0]["stage"], "tool_call")
                 self.assertIn("upload_ref, pdata_directory, formula, explanation", evidence[0]["reason"])
                 worker.request.assert_not_called()
