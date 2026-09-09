@@ -84,10 +84,10 @@ help:
 	'  make provider/deployment/down DEPLOYMENT=<name>' \
 	'      Down stops provider then worker; containers, configuration and state remain.' \
 	'  make test/provider/e2e' \
-	'  make interpreter/model-behavior CONFIG_DIR=<provider-config-dir> KEY_FILE=<interpreter-key>' \
-	'    Opt-in paid live interpreter tests; no Job API or GPU work.' \
 	'      Prove hello, verified input, real model/FAISS/GA and result retry in two offline containers.' \
 	'      Uses eight fixture candidates, not the full index; see notes/004_provider_execution.txt.' \
+	'  make interpreter/model-behavior CONFIG_DIR=<provider-config-dir> KEY_FILE=<interpreter-key>' \
+	'      Opt-in paid live interpreter tests; no Job API or GPU work.' \
 	'' \
 	'5. Build the GPU candidate bundle' \
 	'  make packages/base-images/pull packages/gpu/wheelhouse' \
