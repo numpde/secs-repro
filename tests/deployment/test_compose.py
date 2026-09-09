@@ -149,6 +149,20 @@ class ComposeTests(unittest.TestCase):
                 self.project.command("ps")
         self.assertIn("Could not retain", failure.exception.__notes__[0])
 
+    def test_snapshot_cleanup_cannot_hide_the_docker_failure(self):
+        with TemporaryDirectory() as temporary:
+            plan = {"services": {"provider": {"image": "sha256:" + "a" * 64}}}
+            error = RuntimeError("Docker compose failed (exit 17).")
+            error.add_note("Private Docker diagnostic: retained-evidence.log")
+            with patch("tempfile.tempdir", temporary), patch.object(ComposeProject, "inventory", return_value={}):
+                with patch.object(ComposeProject, "command", side_effect=(b"", error)), patch.object(
+                    TemporaryDirectory, "_rmtree", side_effect=OSError("snapshot cleanup denied"),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "exit 17") as failure:
+                        self.project.start(plan)
+            self.assertIn("retained-evidence.log", "\n".join(failure.exception.__notes__))
+            self.assertIn("snapshot cleanup denied", "\n".join(failure.exception.__notes__))
+
     def test_malformed_inspection_cannot_select_a_stop_target(self):
         for records in (["wrong"], [record(self.project, "provider", 2)]):
             with self.subTest(records=records):

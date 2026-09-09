@@ -13,7 +13,9 @@ import json
 from pathlib import Path
 import re
 import subprocess
-from tempfile import NamedTemporaryFile, TemporaryDirectory
+from tempfile import NamedTemporaryFile
+
+from deployment.templates import _temporary_directory
 
 
 _ID = re.compile(r"[0-9a-f]{64}")
@@ -98,8 +100,8 @@ class ComposeProject:
         for service in plan["services"].values():
             self.command("image", "inspect", service["image"])
         try:
-            with TemporaryDirectory(prefix="provider-compose-") as temporary:
-                path = Path(temporary) / "compose.json"
+            with _temporary_directory(prefix="provider-compose-") as temporary:
+                path = temporary / "compose.json"
                 # Compose will parse this normalized document again. Preserve
                 # literal dollars in paths instead of interpolating them twice.
                 path.write_text(json.dumps(plan).replace("$", "$$"))

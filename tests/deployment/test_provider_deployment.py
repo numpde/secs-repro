@@ -4,7 +4,7 @@ import json
 import fcntl
 import os
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,6 +17,35 @@ from deployment.templates import _locked_parent
 
 
 class ProviderDeploymentTests(unittest.TestCase):
+    def test_installation_reports_publication_when_staging_cleanup_fails(self):
+        for sync_fails in (False, True):
+            with self.subTest(sync_fails=sync_fails), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                config = root / "config/deployments/production"
+                config.mkdir(parents=True, mode=0o700)
+                source = root / "key"
+                source.write_bytes(b"test-only secret")
+                source.chmod(0o600)
+                destination = root / "secrets/deployments/production/interpreter.key"
+                output = StringIO()
+
+                def sync_after_link(path):
+                    """Inject a sync failure only after the complete key becomes visible."""
+                    if sync_fails and destination.exists():
+                        raise OSError("publication sync failed")
+
+                with patch("deployment.provider_deployment.__file__", str(root / "deployment/cli.py")), patch(
+                    "deployment.templates._sync_directory", side_effect=sync_after_link,
+                ), patch.object(TemporaryDirectory, "_rmtree", side_effect=OSError("staging cleanup denied")), \
+                        redirect_stderr(output):
+                    self.assertEqual(main(["interpreter-key-install", "production", "--source", str(source)]), 1)
+                self.assertEqual(destination.read_bytes(), b"test-only secret")
+                self.assertIn(f"File is visible at {destination}", output.getvalue())
+                self.assertIn("staging cleanup denied", output.getvalue())
+                if sync_fails:
+                    self.assertIn("publication sync failed", output.getvalue())
+                    self.assertIn("durability is unconfirmed", output.getvalue())
+
     def test_lifecycle_mutations_still_hold_the_exclusive_lock(self):
         with TemporaryDirectory() as temporary:
             config = Path(temporary) / "production"
