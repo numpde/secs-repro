@@ -4,11 +4,34 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from deployment.provider_deployment import _bind_attempt_owner, install_secret
 
 
 class ProviderDeploymentTests(unittest.TestCase):
+    def test_failed_owner_write_does_not_poison_the_next_start(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider, credential = root / "provider.toml", root / "provider.signing.private.json"
+            provider.write_text('[api]\norigin="https://api.example.test"\n')
+            credential.write_text('{"principal_ref": "provider:test"}')
+            for path in (provider, credential):
+                path.chmod(0o600)
+
+            def interrupted_write(output, content):
+                """Simulate a disk write failure after the first byte reaches the file."""
+                output.write_bytes(content[:1])
+                raise OSError("disk full")
+
+            with patch("deployment.templates._write_new_file", side_effect=interrupted_write):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    _bind_attempt_owner(root, root)
+            self.assertFalse((root / "attempt-owner.json").exists())
+            _bind_attempt_owner(root, root)
+            self.assertEqual(json.loads((root / "attempt-owner.json").read_bytes()),
+                             {"origin": "https://api.example.test", "provider_ref": "provider:test"})
+
     def test_credential_install_is_private_and_never_replaces_existing_input(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
