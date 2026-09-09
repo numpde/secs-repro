@@ -81,7 +81,9 @@ INPUT_OPERATIONS = (
     InputOperation(
         "read_bruker",
         "Choose a processed 1D proton Bruker pdata directory inside a ZIP. Its "
-        "1r and procs files are required. Supply the exact archive directory "
+        "1r and procs files are required. If supplied evidence does not establish "
+        "nucleus and dimensionality, inspect procs: AXNUC must identify proton "
+        "and PPARMOD must be 0 for one dimension. Supply the exact archive directory "
         "without a trailing slash (empty for the ZIP root), "
         "formula and reason for choosing this experiment rather than others.",
         _arguments({"upload_ref": _TEXT, "pdata_directory": {"type": "string"},
