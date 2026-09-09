@@ -126,6 +126,9 @@ class InitializationTests(unittest.TestCase):
                 templates.initialize_configuration(root, "production", TEMPLATES)
             parent.unlink()
             parent.mkdir(mode=0o755)
+            # mkdir applies the caller's umask; this scenario specifically
+            # requires a shared directory even under an owner-only umask.
+            parent.chmod(0o755)
             with self.assertRaisesRegex(ValueError, "0700"):
                 templates.initialize_configuration(root, "production", TEMPLATES)
 
