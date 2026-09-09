@@ -28,6 +28,27 @@ GRANT = UploadReadCapability(UPLOAD.upload_ref, 4, "sha256:" + "b" * 64,
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_cleanup_failure_does_not_discard_completed_analysis(self):
+        api = Mock()
+        api.specification.return_value = JobSpecification("job:test", "C2H6O")
+        api.uploads.return_value = (UPLOAD,)
+        api.capability.return_value = GRANT
+        chat = ScriptedChat(tool("read_jcamp", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None},
+            "formula": "C2H6O", "explanation": "Proton experiment."}))
+        worker = Mock()
+        worker.request.return_value = {"outcome": "analysed", "analysis": {"candidates": []}}
+        with TemporaryDirectory() as directory, patch("secs_inference.provider.analysis_run.download_upload",
+                return_value=Path(directory) / "verified"):
+            with self.assertLogs("secs_inference.provider.analysis_run", level="ERROR"), patch(
+                    "secs_inference.provider.analysis_run.shutil.rmtree", side_effect=PermissionError("private path")):
+                report = run_analysis(api=api, active=None, chat=chat, worker=worker, store=None,
+                    directory=Path(directory) / "current", work_deadline=monotonic() + 10,
+                    interpretation_seconds=5, max_turns=1, max_total_bytes=100)
+            self.assertTrue((Path(directory) / "current").exists())
+        self.assertEqual(report["outcome"], "analysed")
+        self.assertEqual(report["analysis"], worker.request.return_value["analysis"])
+        self.assertTrue(report["input_choices"][0]["used"])
+
     def test_worker_failures_keep_analysis_evidence_without_reclassifying_the_failure(self):
         for failure, code in (({"outcome": "failed", "exception_type": "ValueError", "frames": []}, "scientific_execution_failed"),
                               (TimeoutError("work expired"), "work_deadline_exceeded")):
