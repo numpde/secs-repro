@@ -1,6 +1,6 @@
 """Decode processed one-dimensional proton JCAMP-DX spectra for SECS."""
 
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from pathlib import Path
 import re
 from typing import Never
@@ -118,7 +118,11 @@ def _read_ntuples(
     units = _ntuple_metadata(parameters, "UNITS", symbols)
     first = _ntuple_float_metadata(parameters, "FIRST", symbols)
     last = _ntuple_float_metadata(parameters, "LAST", symbols)
-    table_channels = _ntuple_table_channels(spectrum_path)
+    factors = _ntuple_float_metadata(parameters, "FACTOR", symbols)
+    if factors["X"] == 0:
+        _reject("NTUPLES X FACTOR is zero")
+    tables = _ntuple_tables(spectrum_path)
+    table_channels = [channel for channel, rows in tables]
     if len(table_channels) != 2 or set(table_channels) != {"R", "I"}:
         _reject("NTUPLES must contain one real and one imaginary DATA TABLE")
 
@@ -131,6 +135,8 @@ def _read_ntuples(
     if first_x == last_x:
         _reject("NTUPLES FIRST and LAST do not define an X axis")
     x_axis = np.linspace(first_x, last_x, points, dtype=np.float64)
+    for channel, rows in tables:
+        _validate_ntuple_checkpoints(rows, channel, x_axis, factors["X"])
     x_units = units["X"].upper()
     if x_units == "HZ":
         ppm = _referenced_ppm_axis(parameters, x_axis)
@@ -142,13 +148,17 @@ def _read_ntuples(
     return SourceSpectrum(ppm=ppm, intensities=intensities)
 
 
-def _ntuple_table_channels(spectrum_path: Path) -> list[str]:
-    """Read the table headers that justify reconstructing a linear X axis."""
-    channels: list[str] = []
+def _ntuple_tables(spectrum_path: Path) -> list[tuple[str, list[str]]]:
+    """Retain encoded rows because nmrglue discards their checkpoints."""
+    tables: list[tuple[str, list[str]]] = []
+    rows = None
     for raw_line in _read_utf8_lines(spectrum_path):
         line = raw_line.split("$$", 1)[0].strip()
         if not line.startswith("##"):
+            if rows is not None and line:
+                rows.append(line)
             continue
+        rows = None
         label, separator, value = line.partition("=")
         canonical_label = re.sub(r"[\s\-_/]", "", label[2:]).upper()
         if separator == "" or canonical_label != "DATATABLE":
@@ -157,8 +167,113 @@ def _ntuple_table_channels(spectrum_path: Path) -> list[str]:
         match = re.fullmatch(r"\(X\+\+\(([RI])\.\.\1\)\),XYDATA", header)
         if match is None:
             _reject("an NTUPLES DATA TABLE does not define a linear X++ axis")
-        channels.append(match.group(1))
-    return channels
+        rows = []
+        tables.append((match.group(1), rows))
+    return tables
+
+
+def _validate_ntuple_checkpoints(
+    rows: list[str],
+    channel: str,
+    x_axis: np.ndarray,
+    x_factor: float,
+) -> None:
+    """Check row positions and DIF overlaps before using the reconstructed axis."""
+    point = 0
+    overlap = False
+    previous_y = 0.0
+    y_roundoff = 0.0
+    # nmrglue selects one numeric family for the entire table. Keep that
+    # context: a compressed checkpoint such as 5E4 is not the number 50000.
+    pseudo = ng.jcampdx._detect_format(rows[0]) == 1
+    for row_number, row in enumerate(rows, start=1):
+        token, values, ends_in_difference = _decode_ntuple_row(row, pseudo=pseudo)
+        checkpoint, precision = _x_checkpoint(token)
+        start = point - int(overlap)
+        # Allow half the last written X unit. FACTOR converts both the encoded
+        # coordinate and its rounding precision into the declared axis units.
+        checkpoint *= x_factor
+        tolerance = abs(x_factor) * precision
+        if not np.isfinite(checkpoint) or not np.isfinite(tolerance):
+            _reject("an NTUPLES X checkpoint or its precision overflows after FACTOR scaling")
+        if start >= x_axis.size or not np.isclose(
+            checkpoint, x_axis[start],
+            rtol=8 * np.finfo(float).eps, atol=tolerance,
+        ):
+            _reject(f"NTUPLES {channel} row {row_number} has an X checkpoint "
+                    "that disagrees with FIRST, LAST, and VAR_DIM")
+        if overlap and not np.isclose(
+            values[0], previous_y, rtol=0, atol=y_roundoff,
+        ):
+            _reject(f"NTUPLES {channel} row {row_number} has a Y checkpoint "
+                    "that disagrees with the preceding row")
+
+        point = start + values.size
+        previous_y = values[-1]
+        # Fractional DIF can accumulate binary64 rounding within a row. This
+        # allowance covers arithmetic error, not measurement uncertainty.
+        y_roundoff = 2 * values.size * np.finfo(float).eps * np.max(np.abs(values))
+        # JCAMP-DX 4.24 section 5.8: only a terminal DIF value repeats on the
+        # next row. DUP inherits the encoded value's mode; X cannot decide it.
+        overlap = ends_in_difference
+    if point != x_axis.size:
+        _reject(f"NTUPLES {channel} row checkpoints do not cover VAR_DIM points")
+    if overlap:
+        _reject(f"NTUPLES {channel} is missing its final DIF checkpoint row")
+
+
+def _decode_ntuple_row(row: str, *, pseudo: bool) -> tuple[str, np.ndarray, bool]:
+    """Return the X token, unscaled ordinates, and whether the last value is DIF."""
+    # In ASDF rows E/e starts a squeezed ordinate, not an X exponent.
+    match = (re.match(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", row)
+             if pseudo else _AFFN_NUMBER.match(row))
+    if match is None:
+        _reject("an NTUPLES row has no numeric X checkpoint")
+    if not pseudo and _AFFN_NUMBER.sub("", row).strip(" \t,"):
+        _reject("an NTUPLES numeric row contains text the decoder would ignore")
+    # nmrglue 0.11 has no public row decoder. Keep the private decoding seam
+    # here: it expands ASDF numbers, while this adapter checks the checkpoints
+    # omitted by the public whole-file reader.
+    decode = ng.jcampdx._parse_pseudo if pseudo else ng.jcampdx._parse_affn_pac
+    try:
+        with warnings.catch_warnings(record=True) as parser_warnings:
+            warnings.simplefilter("always")
+            decoded = decode([row])
+    except (AttributeError, IndexError, TypeError, ValueError) as cause:
+        raise SpectrumReadError(
+            "Cannot read the processed JCAMP-DX spectrum because an NTUPLES "
+            "row could not be decoded.",
+        ) from cause
+    if parser_warnings or not decoded:
+        _reject("an NTUPLES row could not be decoded completely")
+    values = np.asarray(decoded, dtype=np.float64)
+    if not np.all(np.isfinite(values)):
+        _reject("an NTUPLES row contains a non-finite intensity")
+
+    ordinates = row[match.end():].strip()
+    ends_in_difference = False
+    if pseudo:
+        for character in ordinates:
+            if character in ng.jcampdx._SQZ_DIGITS:
+                ends_in_difference = False
+            elif character in ng.jcampdx._DIF_DIGITS:
+                ends_in_difference = True
+    return match.group(), values, ends_in_difference
+
+
+def _x_checkpoint(token: str) -> tuple[float, float]:
+    """Read an encoded coordinate and half its last written unit, before scaling."""
+    try:
+        checkpoint = float(token)
+        precision = float(Decimal("0.5").scaleb(Decimal(token).as_tuple().exponent))
+    except DecimalException as cause:
+        raise SpectrumReadError(
+            "Cannot read the processed JCAMP-DX spectrum because an X checkpoint "
+            "has an exponent outside the supported numeric range.",
+        ) from cause
+    if not np.isfinite(checkpoint) or not np.isfinite(precision):
+        _reject("an X checkpoint or its written precision is outside the finite numeric range")
+    return checkpoint, precision
 
 
 def _referenced_ppm_axis(parameters: dict, x_axis: np.ndarray) -> np.ndarray:
@@ -332,16 +447,9 @@ def _validate_affn_xydata(
             _reject("an XYDATA row does not contain an X checkpoint and Y values")
         if any(_AFFN_NUMBER.fullmatch(field) is None for field in fields):
             _reject("XYDATA is not plain numeric AFFN data")
-        checkpoint_decimal = Decimal(fields[0])
-        checkpoint = float(checkpoint_decimal)
-        if not np.isfinite(checkpoint):
-            _reject("an XYDATA X checkpoint is not finite")
-
+        checkpoint, checkpoint_tolerance = _x_checkpoint(fields[0])
         expected_checkpoint = first_x + decoded_points * delta_x
         # A checkpoint is authoritative only to the precision written in the file.
-        checkpoint_tolerance = float(
-            Decimal("0.5").scaleb(checkpoint_decimal.as_tuple().exponent),
-        )
         if not np.isclose(
             checkpoint,
             expected_checkpoint,
