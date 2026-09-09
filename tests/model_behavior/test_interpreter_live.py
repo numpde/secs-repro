@@ -13,7 +13,7 @@ import unittest
 from zipfile import ZipFile
 
 from secs_inference.provider.config import CONFIG_PATH, decode_provider_config
-from secs_inference.provider.input_operations import CannotAnalyse, JcampSelection, SourceRef
+from secs_inference.provider.input_operations import BrukerSelection, CannotAnalyse, JcampSelection, SourceRef
 from secs_inference.provider.interpreter import InterpretationSession
 from secs_inference.provider.job_input import JobSpecification
 from secs_inference.provider.job_upload import JobUpload
@@ -67,6 +67,23 @@ class LiveInterpreterTests(unittest.TestCase):
         session = self.session("Find the structure with molecular formula C7H8ClN.", self.uploads)
         self.assert_proton_selection(session.select())
         self.assertIn(SourceRef("upload:fixture", "experiment2/spectrum.jdx"), self.inspected)
+
+    def test_selects_bruker_processed_pair(self):
+        """Require real Bruker tool arguments; the separate reader tests decode it."""
+        archive = Path(self.temporary.name) / "bruker.zip"
+        with ZipFile(archive, "w") as output:
+            for name in ("1r", "procs"):
+                output.write(Path("/fixtures/bruker") / name, "NMR-test-1/pdata/1/" + name)
+        self.access.files["upload:bruker"] = archive
+        uploads = (JobUpload("upload:bruker", "Archive of an NMR experiment; inspect the processed data.", archive.stat().st_size, None),)
+        session = self.session("Find the structure with molecular formula C21H22N2O2.", uploads)
+        outcome = session.select()
+        self.assertIsInstance(outcome, BrukerSelection, session.rejections)
+        self.assertEqual(outcome.upload_ref, "upload:bruker")
+        self.assertEqual(outcome.pdata_directory, "NMR-test-1/pdata/1")
+        self.assertEqual(outcome.formula, "C21H22N2O2")
+        self.assertTrue(outcome.explanation.strip())
+        self.assertIn(SourceRef("upload:bruker", "NMR-test-1/pdata/1/procs"), self.inspected)
 
     def test_reader_rejection_is_explained_in_the_same_conversation(self):
         """Inject a structural rejection, not an outage that the worker would fail.

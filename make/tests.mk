@@ -148,6 +148,8 @@ interpreter/model-behavior:
 		"$${ca_mount[@]}" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/tests/model_behavior,dst=/tests,readonly" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/tests/fixtures/jcamp/4-chlorobenzylamine/4-chlorobenzylamine.jdx,dst=/fixtures/proton.jdx,readonly" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/tests/fixtures/bruker/F3697/1/pdata/1/procs,dst=/fixtures/bruker/procs,readonly" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/tests/fixtures/bruker/F3697/1/pdata/1/1r,dst=/fixtures/bruker/1r,readonly" \
 		--entrypoint python "$$provider_image" -P /tests/test_interpreter_live.py --failfast
 
 .PHONY: test/provider/e2e
