@@ -100,7 +100,9 @@ INPUT_OPERATIONS = (
 
 def interpreter_tools() -> list[dict]:
     """Render the same supported operations in Chat Completions tool syntax."""
+    # Strict generation constrains argument shape at the producer. Choosing the
+    # source and formula remains the interpreter's job, not a schema decision.
     return [{"type": "function", "function": {
         "name": operation.name, "description": operation.description,
-        "parameters": operation.parameters,
+        "parameters": operation.parameters, "strict": True,
     }} for operation in INPUT_OPERATIONS]

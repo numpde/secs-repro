@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from secs_inference.provider.chat import ChatEndpoint, InterpreterError
-from secs_inference.provider.input_operations import BrukerSelection, CannotAnalyse, JcampSelection, SourceRef
+from secs_inference.provider.input_operations import BrukerSelection, CannotAnalyse, JcampSelection, SourceRef, interpreter_tools
 from secs_inference.provider.interpreter import InterpretationSession
 from secs_inference.provider.job_input import JobSpecification
 from secs_inference.provider.job_upload import JobUpload
@@ -37,6 +37,14 @@ class ScriptedChat:
 
 
 class InterpreterTests(unittest.TestCase):
+    def test_endpoint_is_asked_to_generate_schema_conforming_tool_arguments(self):
+        response = json.dumps({"choices": [{"message": tool("report_input_problem", {"explanation": "No input."})}]}).encode()
+        with patch.object(ChatEndpoint, "_post", return_value=response) as post:
+            ChatEndpoint("https://model.test/chat", "model", "key").complete(
+                [], interpreter_tools(), deadline=monotonic() + 1)
+        request = json.loads(post.call_args.args[0])
+        self.assertTrue(all(item["function"]["strict"] is True for item in request["tools"]))
+
     def test_reasoning_effort_is_explicit_or_absent_not_inferred_from_model(self):
         response = json.dumps({"choices": [{"message": tool("report_input_problem", {"explanation": "No input."})}]}).encode()
         for effort in (None, "none", "low"):
