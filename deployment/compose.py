@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 
 _ID = re.compile(r"[0-9a-f]{64}")
@@ -81,7 +81,7 @@ class ComposeProject:
                 or labels.get("com.docker.compose.project.working_dir") != str(self.repository)
                 or not isinstance(record.get("State", {}).get("Running"), bool)
             ):
-                raise ValueError("Project contains a foreign or ambiguous container; no changes made.")
+                raise ValueError("Project contains a foreign or ambiguous container.")
             seen.add(identity)
             services[role] = record
         return services
@@ -97,27 +97,27 @@ class ComposeProject:
             raise ValueError("Deployment is already running; use down before applying configuration.")
         for service in plan["services"].values():
             self.command("image", "inspect", service["image"])
-        with TemporaryDirectory(prefix="provider-compose-") as temporary:
-            path = Path(temporary) / "compose.json"
-            # Compose will parse this normalized document again. Preserve
-            # literal dollars in paths instead of interpolating them twice.
-            path.write_text(json.dumps(plan).replace("$", "$$"))
-            try:
+        try:
+            with TemporaryDirectory(prefix="provider-compose-") as temporary:
+                path = Path(temporary) / "compose.json"
+                # Compose will parse this normalized document again. Preserve
+                # literal dollars in paths instead of interpolating them twice.
+                path.write_text(json.dumps(plan).replace("$", "$$"))
                 self.command(
                     "compose", "--env-file", "/dev/null", "--project-name", self.name,
                     "--project-directory", str(self.repository), "--file", str(path),
                     "up", "--detach", "--wait", "--wait-timeout", "60",
                     "--no-build", "--pull", "never", "--force-recreate", timeout=90,
                 )
-            except (OSError, RuntimeError) as error:
-                error.add_note("Startup is unconfirmed; containers may remain. Inspect status and logs.")
-                raise
-        records = self.inventory()
-        if set(records) != set(plan["services"]) or not all(
-            record["State"]["Running"] and record["Image"] == plan["services"][role]["image"]
-            for role, record in records.items()
-        ):
-            raise RuntimeError("Startup is unconfirmed: expected containers are not running with the selected images.")
+            records = self.inventory()
+            if set(records) != set(plan["services"]) or not all(
+                record["State"]["Running"] and record["Image"] == plan["services"][role]["image"]
+                for role, record in records.items()
+            ):
+                raise RuntimeError("Expected containers are not running with the selected images.")
+        except (OSError, ValueError, RuntimeError) as error:
+            error.add_note("Startup is unconfirmed; containers may remain. Inspect status and logs.")
+            raise
         return records
 
     def stop(self) -> dict[str, dict]:
@@ -135,15 +135,22 @@ class ComposeProject:
                     f"Container {record['Id']} has no finite shutdown grace period; "
                     "no containers stopped."
                 )
-        for role in self.stop_order:
-            record = records.get(role)
-            if record is not None and record["State"]["Running"]:
-                # The running container owns its grace period, even if the
-                # recipe has since changed. Let Docker apply that same value.
-                self.command("stop", record["Id"], timeout=record["Config"]["StopTimeout"] + 30)
-        stopped = self.inventory()
-        if any(record["State"]["Running"] for record in stopped.values()):
-            raise RuntimeError("Shutdown is unconfirmed: a project container is still running.")
+        try:
+            for role in self.stop_order:
+                record = records.get(role)
+                if record is not None and record["State"]["Running"]:
+                    # The running container owns its grace period, even if the
+                    # recipe has since changed. Let Docker apply that same value.
+                    self.command("stop", record["Id"], timeout=record["Config"]["StopTimeout"] + 30)
+            stopped = self.inventory()
+            if any(record["State"]["Running"] for record in stopped.values()):
+                raise RuntimeError("A project container is still running.")
+        except (OSError, ValueError, RuntimeError) as error:
+            error.add_note(
+                "Shutdown is unconfirmed; some containers may already be stopped. "
+                "Inspect status before retrying."
+            )
+            raise
         return stopped
 
     def logs(self) -> None:
@@ -162,13 +169,31 @@ class ComposeProject:
                 stderr=subprocess.PIPE if capture else None,
             )
         except subprocess.TimeoutExpired as error:
-            raise RuntimeError(f"Docker {arguments[0]} did not finish within {timeout} seconds.") from error
+            raise _command_error(
+                f"Docker {arguments[0]} did not finish within {timeout} seconds.", error.stderr,
+            ) from error
         if result.returncode:
-            # Engine diagnostics can contain interpolated config. Keep them out
-            # of exceptions; normal provider logs remain a separate operator action.
             missing = re.search(rb"required variable ([A-Z][A-Z0-9_]*) is missing", result.stderr or b"")
             if arguments[0] == "compose" and missing:
                 variable = missing[1].decode("ascii")
                 raise RuntimeError(f"Cannot render deployment: set {variable} in deployment.env.")
-            raise RuntimeError(f"Docker {arguments[0]} failed (exit {result.returncode}).")
+            raise _command_error(f"Docker {arguments[0]} failed (exit {result.returncode}).", result.stderr)
         return result.stdout or b""
+
+
+def _command_error(message: str, diagnostics: bytes | None) -> RuntimeError:
+    """Keep Docker's cause available privately without printing interpolated configuration."""
+    error = RuntimeError(message)
+    if diagnostics:
+        try:
+            # NamedTemporaryFile creates mode 0600; retain evidence after this
+            # command exits, but never make the operator's terminal its sink.
+            with NamedTemporaryFile(prefix="provider-docker-", suffix=".log", delete=False) as output:
+                error.add_note(
+                    f"Private Docker diagnostic: {output.name}. "
+                    "May contain sensitive configuration; remove after inspection."
+                )
+                output.write(diagnostics)
+        except OSError:
+            error.add_note("Could not retain the complete Docker diagnostic.")
+    return error
