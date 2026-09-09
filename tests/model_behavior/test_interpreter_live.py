@@ -1,8 +1,8 @@
 """Opt-in live interpreter qualification, adapted from Magnet's model-behavior lane.
 
 Ported from magnet-deploy/tests/model_behavior/run_e01_interpreter.py (26931fb):
-real configured endpoint, semantic outcome checks, and forced conversational
-repair. Use SECS's production configuration, tools, session and source inspector.
+real configured endpoint, semantic outcome checks, and retained-conversation
+feedback. Use SECS's production configuration, tools, session and source inspector.
 Only the supplied archive is a fixture. No Job API, GPU or scientific run occurs.
 """
 
@@ -68,14 +68,20 @@ class LiveInterpreterTests(unittest.TestCase):
         self.assert_proton_selection(session.select())
         self.assertIn(SourceRef("upload:fixture", "experiment2/spectrum.jdx"), self.inspected)
 
-    def test_forced_reader_rejection_uses_the_same_conversation(self):
-        """Port Magnet's forced-repair check; this is not a real reader failure."""
+    def test_reader_rejection_is_explained_in_the_same_conversation(self):
+        """Inject a structural rejection, not an outage that the worker would fail.
+
+        SECS may explain that no usable input remains; unlike Magnet's
+        argument-repair case, an unreadable spectrum cannot be corrected by
+        resubmitting the same selection. No scientific reader runs here.
+        """
         session = self.session("Find the structure with molecular formula C7H8ClN.", self.uploads)
         self.assert_proton_selection(session.select())
         remaining = session.remaining_turns
-        session.reject("The reader could not read the selected input because of a temporary reader failure. The input bytes have not changed.")
+        session.reject("Cannot read the processed JCAMP-DX spectrum because the file does not contain an XYDATA table.")
         outcome = session.select()
-        self.assert_proton_selection(outcome)
+        self.assertIsInstance(outcome, CannotAnalyse)
+        self.assertIn("xydata", outcome.explanation.lower())
         self.assertLess(session.remaining_turns, remaining)
 
     def assert_proton_selection(self, outcome):
