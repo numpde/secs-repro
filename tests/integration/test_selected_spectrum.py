@@ -3,7 +3,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from zipfile import ZipFile
 
 import numpy as np
@@ -11,6 +11,7 @@ import numpy as np
 from secs_inference.provider.input_operations import BrukerSelection, JcampSelection, SourceRef
 from secs_inference.provider.source_access import SourceAccess
 from secs_inference.provider.spectrum_input import prepare_selected_spectrum
+from secs_inference.provider.worker_model import ScientificHandler, ScientificWorkerConfig
 from secs_inference.spectra.bruker import read_bruker_pdata
 from secs_inference.spectra.errors import SpectrumReadError
 from secs_inference.spectra.jcamp import read_jcamp_spectrum
@@ -24,6 +25,42 @@ JCAMP = FIXTURES / "jcamp/4-chlorobenzylamine/4-chlorobenzylamine.jdx"
 
 
 class SelectedSpectrumTests(unittest.TestCase):
+    def test_candidate_retrieval_bug_remains_an_operational_failure(self):
+        inference = Mock(embed_spectrum=Mock(return_value=np.array([1., 0.], dtype=np.float32)))
+        candidates = Mock(propose=Mock(side_effect=ValueError("private retrieval detail")))
+        worker = ScientificHandler(inference, candidates, ScientificWorkerConfig("unused", "unused", device="cpu"))
+        with TemporaryDirectory() as directory:
+            response = worker({"operation": "analyse", "files": {"upload:chosen": str(JCAMP)},
+                "directory": directory, "selection": {"reader": "jcamp",
+                "source": {"upload_ref": "upload:chosen", "member": None}, "formula": "C7H8ClN",
+                "explanation": "The selected file is the proton spectrum."}})
+        self.assertEqual(response["outcome"], "failed")
+        self.assertEqual(response["exception_type"], "ValueError")
+        self.assertNotIn("private retrieval detail", str(response))
+
+    def test_empty_retrieval_returns_an_explained_search_result_not_a_worker_fault(self):
+        import faiss
+        from secs.elucidation import FaissCandidateSource
+
+        inference = Mock(embed_spectrum=Mock(return_value=np.array([1., 0.], dtype=np.float32)))
+        index = faiss.IndexFlatIP(2)
+        index.add(np.array([[1., 0.]], dtype=np.float32))
+        candidates = FaissCandidateSource(index, ["C" * 30], ["C30H62"], n_neighbours=1)
+        worker = ScientificHandler(inference, candidates,
+            ScientificWorkerConfig("unused", "unused", device="cpu", neighbours=1))
+        with TemporaryDirectory() as directory:
+            response = worker({"operation": "analyse", "files": {"upload:chosen": str(JCAMP)},
+                "directory": directory, "selection": {"reader": "jcamp",
+                "source": {"upload_ref": "upload:chosen", "member": None}, "formula": "C7H8ClN",
+                "explanation": "The selected file is the proton spectrum."}})
+        self.assertEqual(response["outcome"], "analysed")
+        self.assertEqual(response["analysis"]["candidates"], [])
+        search = response["analysis"]["search"]
+        self.assertEqual(search["outcome"], "no_starting_candidates")
+        self.assertEqual((search["generations"], search["evaluated"]), (0, 0))
+        self.assertIn("Graph GA was not run", search["explanation"])
+        self.assertIn("does not establish", search["explanation"])
+
     def test_explicit_jcamp_member_matches_the_direct_reader(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

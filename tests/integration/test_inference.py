@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from secs.elucidation import GraphGAOptimizer, StaticCandidateSource
+from secs.elucidation.optimizers.base import OptimizerResult
 from secs_inference import SecsInference
 from secs_inference.elucidation import SecsElucidator
 
@@ -131,5 +132,6 @@ class SecsIntegrationTest(unittest.TestCase):
 
         result = elucidator.elucidate(spectrum, "C2H6O")
 
+        self.assertIsInstance(result, OptimizerResult)
         self.assertTrue(result.population)
         self.assertEqual(result.generations, 1)

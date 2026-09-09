@@ -5,8 +5,8 @@ import unittest
 import numpy as np
 
 from secs.elucidation.optimizers.base import OptimizerResult
-from secs_inference.elucidation import FormulaError, SecsElucidator
-from unittest.mock import patch
+from secs_inference.elucidation import FormulaError, NoStartingCandidates, SecsElucidator
+from unittest.mock import Mock, patch
 
 
 class _Inference:
@@ -38,6 +38,19 @@ class _Optimizer:
 
 
 class ElucidationFormulaTests(unittest.TestCase):
+    def test_empty_retrieval_does_not_start_an_objective_or_optimizer(self):
+        inference = _Inference()
+        candidates = Mock(spec=_Candidates, propose=Mock(return_value=[]))
+        optimizer = Mock(spec=_Optimizer)
+        elucidator = SecsElucidator(inference, candidates, optimizer, initial_population_size=32)
+        with patch("secs_inference.elucidation.spectral_objective") as objective:
+            result = elucidator.elucidate([0.0], "C2H6O")
+        self.assertIsInstance(result, NoStartingCandidates)
+        self.assertEqual(inference.spectrum_calls, 1)
+        candidates.propose.assert_called_once()
+        objective.assert_not_called()
+        optimizer.run.assert_not_called()
+
     def test_canonical_formula_reaches_candidate_retrieval(self) -> None:
         inference = _Inference()
         candidates = _Candidates()
@@ -48,9 +61,11 @@ class ElucidationFormulaTests(unittest.TestCase):
             initial_population_size=32,
         )
 
-        elucidator.elucidate([0.0], "H6C2O")
+        result = elucidator.elucidate([0.0], "H6C2O")
 
         self.assertEqual(candidates.formulas, ["C2H6O"])
+        self.assertIsInstance(result, OptimizerResult)
+        self.assertEqual(result.population, [("CCO", 0.0)])
 
     def test_malformed_formula_is_rejected_before_model_or_candidate_work(self) -> None:
         inference = _Inference()
