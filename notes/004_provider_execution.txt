@@ -114,7 +114,8 @@ Install the two owner-only secret files separately, using their existing paths:
 
 Config only renders the recipe. Up creates private workspaces and starts existing
 images; it never builds or downloads. Running containers do not establish API
-acceptance or scientific readiness: check hello and Job polling in provider logs.
+acceptance or scientific readiness. Provider logs report hello publication and
+failures, but not each successful Job poll.
 Down stops the provider before its worker, retaining containers and all data:
 
   make provider/deployment/down DEPLOYMENT=<name>

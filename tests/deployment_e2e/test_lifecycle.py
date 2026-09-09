@@ -1,7 +1,8 @@
 """Exercise real Compose lifecycle with offline, disposable services.
 
-This proves deployment mechanics, not chemistry or API authentication. The
-separate provider E2E lane owns those proofs with its real model worker.
+This checks startup, stop/restart, and retained state. The separate provider E2E
+lane exercises scientific execution against API fixtures; neither proves live
+API authentication.
 """
 
 import json
