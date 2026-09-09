@@ -4,6 +4,7 @@ services:
   provider:
     image: "${PROVIDER_IMAGE_REF:?set the built provider image ID}"
     pull_policy: never
+    restart: unless-stopped
     init: true
     user: "${PROVIDER_UID:?set the owning nonroot UID}:${PROVIDER_GID:?set its GID}"
     read_only: true
@@ -55,6 +56,7 @@ services:
   worker:
     image: "${WORKER_IMAGE_REF:?set the built GPU package image ID}"
     pull_policy: never
+    restart: unless-stopped
     init: true
     user: "${PROVIDER_UID:?set the owning nonroot UID}:${PROVIDER_GID:?set its GID}"
     network_mode: none
