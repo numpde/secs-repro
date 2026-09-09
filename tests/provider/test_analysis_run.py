@@ -25,6 +25,53 @@ GRANT = UploadReadCapability(UPLOAD.upload_ref, 4, "sha256:" + "b" * 64,
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_reader_rejection_survives_exhausted_interpretation_budget(self):
+        api = Mock()
+        api.specification.return_value = JobSpecification("job:test", "C21H22N2O2")
+        api.uploads.return_value = (UPLOAD,)
+        api.capability.return_value = GRANT
+        chat = ScriptedChat(tool("read_bruker", {"upload_ref": UPLOAD.upload_ref,
+            "pdata_directory": "pdata/1", "formula": "C21H22N2O2", "explanation": "Proton."}))
+        worker = Mock()
+        worker.request.return_value = {"outcome": "input_rejected", "reason": "Cannot decode the processed spectrum."}
+        with TemporaryDirectory() as directory, patch("secs_inference.provider.analysis_run.download_upload",
+                return_value=Path(directory) / "verified"):
+            with self.assertRaises(InterpreterError) as caught:
+                run_analysis(api=api, active=None, chat=chat, worker=worker, store=None,
+                    directory=Path(directory) / "current", work_deadline=monotonic() + 10,
+                    interpretation_seconds=5, max_turns=1, max_total_bytes=100)
+        evidence = caught.exception.diagnostic
+        self.assertEqual(evidence["input_choices"][0]["reading_error"], worker.request.return_value["reason"])
+        self.assertEqual(evidence["interpretation_rejections"], [])
+        self.assertEqual(evidence["acquired_uploads"][UPLOAD.upload_ref]["content_hash"], GRANT.content_hash)
+
+    def test_invalid_bruker_call_is_evidence_not_a_reader_failure(self):
+        for explains in (True, False):
+            with self.subTest(explains=explains), TemporaryDirectory() as directory:
+                api = Mock()
+                api.specification.return_value = JobSpecification("job:test", "C21H22N2O2")
+                api.uploads.return_value = (UPLOAD,)
+                malformed = tool("read_bruker", {"source": {"upload_ref": UPLOAD.upload_ref, "member": "pdata/1"},
+                    "formula": "C21H22N2O2", "explanation": "Proton."})
+                chat = ScriptedChat(malformed, tool("report_input_problem", {"explanation": "The reader rejected the directory."}))
+                worker = Mock()
+                def run():
+                    return run_analysis(api=api, active=None, chat=chat, worker=worker, store=None,
+                        directory=Path(directory) / "current", work_deadline=monotonic() + 10,
+                        interpretation_seconds=5, max_turns=2 if explains else 1, max_total_bytes=100)
+                if explains:
+                    report = run()
+                    self.assertEqual(report["input_choices"], [])
+                    evidence = report["interpretation_rejections"]
+                else:
+                    with self.assertRaises(InterpreterError) as caught:
+                        run()
+                    evidence = caught.exception.diagnostic["interpretation_rejections"]
+                self.assertEqual(evidence[0]["stage"], "tool_call")
+                self.assertIn("upload_ref, pdata_directory, formula, explanation", evidence[0]["reason"])
+                worker.request.assert_not_called()
+                api.capability.assert_not_called()
+
     def test_inspection_budget_feedback_explains_why_a_second_upload_was_not_downloaded(self):
         second = JobUpload("upload:sha256:" + "c" * 64, "Other experiment", 4, None)
         api = Mock()

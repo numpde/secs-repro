@@ -126,7 +126,7 @@ def run_analysis(
     max_total_bytes: int,
     check_running=lambda: None,
 ) -> dict:
-    """An explained scientific inability is a report; outages and bugs are not."""
+    """Return an observed outcome; the execution owner maps it to API status."""
     specification = api.specification(active)
     uploads = api.uploads(active)
     with AttemptSources(api, active, uploads, store, directory,
@@ -150,11 +150,21 @@ def run_analysis(
         choices = []
         while True:
             check_running()
-            decision = session.select()
+            try:
+                decision = session.select()
+            except InterpreterError as error:
+                # Preserve actual feedback even when the model never reaches a
+                # decision. Do not substitute its prose for provider evidence.
+                error.diagnostic = (error.diagnostic or {}) | {
+                    "interpretation_rejections": session.rejections, "input_choices": choices,
+                    "acquired_uploads": _upload_evidence(sources),
+                }
+                raise
             check_running()
             if isinstance(decision, CannotAnalyse):
                 return {"schema_id": RESULT_SCHEMA_ID, "outcome": "cannot_analyse",
                         "explanation": decision.explanation, "input_choices": choices,
+                        "interpretation_rejections": session.rejections,
                         "acquired_uploads": _upload_evidence(sources)}
             if isinstance(decision, JcampSelection):
                 reader, ref = "jcamp", decision.source.upload_ref
@@ -181,6 +191,7 @@ def run_analysis(
                 continue
             choice["used"] = True
             return {"schema_id": RESULT_SCHEMA_ID, "outcome": "analysed", "explanation": decision.explanation,
+                    "interpretation_rejections": session.rejections,
                     "input_choices": choices, "acquired_uploads": _upload_evidence(sources), "analysis": response["analysis"]}
 
 

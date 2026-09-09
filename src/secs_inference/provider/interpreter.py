@@ -44,6 +44,9 @@ class InterpretationSession:
         self.deadline = deadline
         self.remaining_turns = max_turns
         self.pending_call = None
+        # Keep provider-issued rejections, not raw arguments or inspected file
+        # contents. They distinguish a bad tool call from a reader that ran.
+        self.rejections = []
         self.messages = [
             {"role": "system", "content": _INSTRUCTIONS},
             {"role": "user", "content": json.dumps({
@@ -78,19 +81,23 @@ class InterpretationSession:
                 raise InterpreterError("Cannot interpret this Job: the model returned an unusable tool-call envelope")
             self.messages.append({"role": "assistant", "content": None, "tool_calls": calls})
             if len(calls) != 1:
+                reason = "Choose exactly one tool per turn; no operations were performed."
+                self.rejections.append({"stage": "tool_call", "reason": reason})
                 for call in calls:
-                    self._feedback(call["id"], "Choose exactly one tool per turn; no operations were performed.")
+                    self._feedback(call["id"], reason)
                 continue
             call = calls[0]
             try:
                 action = _decode_call(call)
             except _InvalidArguments as error:
+                self.rejections.append({"stage": "tool_call", "reason": str(error)})
                 self._feedback(call["id"], f"{error}. Correct this call.")
                 continue
             if isinstance(action, SourceRef):
                 try:
                     facts = self.inspect(action)
                 except InputReadError as error:
+                    self.rejections.append({"stage": "inspection", "reason": str(error)})
                     self._feedback(call["id"], str(error))
                 else:
                     self._feedback(call["id"], json.dumps(facts, ensure_ascii=False))
@@ -125,7 +132,7 @@ def _decode_call(call: dict):
     except (ValueError, RecursionError) as error:
         raise _InvalidArguments("Tool arguments are not readable JSON") from error
     if set(arguments) != set(operation.parameters["required"]):
-        raise _InvalidArguments("Arguments do not match the input operation")
+        raise _InvalidArguments(f"The {operation.name} operation requires exactly these arguments: {', '.join(operation.parameters['required'])}")
     for key in ("formula", "explanation", "upload_ref", "pdata_directory"):
         if key in arguments:
             value = arguments[key]

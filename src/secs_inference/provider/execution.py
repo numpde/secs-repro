@@ -78,8 +78,15 @@ class ExecutionLoop:
         self.journal.save(active)
         # Journal uncertainty must escape, never become an Attempt failure.
         # Only analysis and report construction belong to this translation.
+        failed_report = None
         try:
-            terminal = complete_command(active, self.analyse(active))
+            report = self.analyse(active)
+            if report.get("outcome") == "cannot_analyse":
+                terminal = fail_command(active, "cannot_analyse",
+                    "No analysis was produced. Interpreter explanation: " + report["explanation"])
+                failed_report = report
+            else:
+                terminal = complete_command(active, report)
         except WorkerStopUnconfirmed:
             # The source workspace and active record survive for recovery.
             raise
@@ -94,6 +101,10 @@ class ExecutionLoop:
         except Exception as error:
             self.diagnose(active, error)
             terminal = fail_command(active, *_public_failure(error))
+        # The API failure endpoint cannot attach a result. Keep the full report
+        # privately before publication; storage uncertainty must escape here.
+        if failed_report is not None:
+            self.journal.record_report(active, failed_report)
         self.journal.save(terminal)
         self._publish(terminal)
         return True

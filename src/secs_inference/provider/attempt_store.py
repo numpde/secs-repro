@@ -100,8 +100,7 @@ class AttemptStore:
             raise
 
     def diagnose(self, active: ActiveAttempt, error: Exception) -> None:
-        """Retain frames and boundary-redacted diagnostics under the Attempt identity."""
-        self._require_usable()
+        """Retain frames and selected boundary evidence under the Attempt identity."""
         document = {
             "execution_attempt_ref": active.execution_attempt_ref,
             "exception_type": type(error).__name__,
@@ -113,7 +112,16 @@ class AttemptStore:
                 document["interpreter"] = error.diagnostic
         elif hasattr(error, "diagnostic"):
             document["worker"] = error.diagnostic
-        name = active.execution_attempt_ref.removeprefix("execution_attempt:sha256:") + ".diagnostic.json"
+        self._write_evidence(active, "diagnostic", document)
+
+    def record_report(self, active: ActiveAttempt, report: dict) -> None:
+        """Retain the full inability report that the API failure cannot attach."""
+        self._write_evidence(active, "report", report)
+
+    def _write_evidence(self, active: ActiveAttempt, kind: str, document: dict) -> None:
+        """Create private Attempt evidence once, without replacing earlier facts."""
+        self._require_usable()
+        name = active.execution_attempt_ref.removeprefix("execution_attempt:sha256:") + f".{kind}.json"
         descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self._directory_fd)
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(canonical_json_bytes(document))
