@@ -35,11 +35,21 @@
     The GUI is a separate application, not the interface to this API provider;
     its supported inputs and results may differ.</p>
 
-  <h2>What to upload</h2>
-  <p>Submit through a compatible NMR API client; this page is a guide, not an
-    upload form. Choose the SECS provider for the analysis kind
+  <h2>Submit a job</h2>
+  <p>You need access to an NMR API deployment that offers SECS. Use the client
+    supplied by its operator; ask the operator for the client address and access
+    if you do not have them. This page is documentation, not an upload form.</p>
+  <p>Choose the SECS provider and the analysis kind
     <code>mol_from_1h_spectrum_formula</code>. Attach a supported spectrum and
-    put its molecular formula in the job instructions.</p>
+    put its molecular formula in the job instructions. If SECS is not listed,
+    ask the deployment operator whether it is available.</p>
+  <p>For every job, a language-model interpreter receives the job instructions
+    and attachment descriptions to choose the spectrum, reader, and formula.
+    It can also inspect archive listings and excerpts from attached files.
+    These are sent to the deployment's configured language-model service;
+    check with the operator before submitting confidential information.</p>
+
+  <h2>Supported uploads</h2>
   <ul>
     <li><strong>Bruker:</strong> upload a ZIP containing a processed
       <code>pdata</code> directory. Keep <code>1r</code> and <code>procs</code>
@@ -63,8 +73,8 @@
   <pre>Analyse the sole processed 1H spectrum in the attached ZIP.
 Molecular formula: C21H22N2O2.</pre>
   <p>If you upload several files or experiments, explain which sample and
-    experiment you intend. A language-model interpreter can inspect the attachments and
-    chooses a source, reader, and formula, with a reason for its choice.</p>
+    experiment you intend. The interpreter explains its selection in the result;
+    check that it chose the experiment and formula you intended.</p>
 
   <h2>What the result means</h2>
   <p>SECS retrieves candidates from a molecular index and refines them with a
@@ -73,15 +83,18 @@ Molecular formula: C21H22N2O2.</pre>
     formula, selection explanations, and search settings.</p>
   <p>Higher scores rank better within a search; they are not probabilities that a structure is
     correct. These are candidates for chemical review, not validated structure
-    assignments. The Bruker regression test checks that conversion, retrieval,
-    and refinement run; it does not require recovery of strychnine.</p>
-  <p>If the interpreter cannot establish a usable spectrum and formula, the
-    result explains why. Rejected input choices and their reading errors are
-    retained in the selection history. Check that the chosen experiment and
-    formula are the ones you intended. If input is missing or unusable, correct
-    the attachment or instructions before submitting a new job.
-    Operational failures are reported as
-    failed attempts, separately from an input that cannot be analysed.</p>
+    assignments. The example above demonstrates input preparation, not a
+    guarantee of recovering strychnine.</p>
+  <p>A completed attempt can instead contain a <code>cannot_analyse</code>
+    result: the interpreter explains why it could not select usable input.
+    Completed results retain rejected input choices and their reading errors.
+    Use that explanation to correct the files or instructions before submitting
+    a new job; completion alone does not mean structures were found.</p>
+  <p>A failed attempt reports an error or interruption, for example an outage
+    or an interpretation limit. It does not establish whether computation finished.
+    Read its failure message and share the job and attempt identifiers with the
+    deployment operator if you need help. Do not assume that it means the spectrum
+    is invalid, or that selection history will be available.</p>
 
   <h2>Credit the original work</h2>
   <p>Adrian Mirza, Luc Patiny, and Kevin Maik Jablonka (2026),
@@ -104,8 +117,9 @@ Molecular formula: C21H22N2O2.</pre>
   <p>Dependencies and external
     model/data artifacts retain their own licenses. Provided without warranty;
     see the license for terms.</p>
-  <p>For development and deployment commands, run <code>make help</code> in the
-    source repository. This page is maintained in <code>docs/index.html</code>
+  <p>For build and test commands, run <code>make help</code> in the source repository.
+    See the <a href="https://github.com/numpde/secs-repro/blob/main/notes/004_provider_execution.txt">deployment instructions</a>
+    to run a provider. This page is maintained in <code>docs/index.html</code>
     and published from <code>main</code> → <code>/docs</code>.</p>
 </footer>
 </body>
