@@ -1,8 +1,10 @@
-"""Initialize private named configurations from one committed Git snapshot.
+"""Publish private deployment inputs without replacing existing files.
 
 Adapted from numpde/nmrpeak-repro's deployment/provider_deployment.py at
 ae53376b9bb1dc572d3d7bce6592358080e08b18. The caller selects the templates;
 this module owns publication, permissions, and concurrent initializer exclusion.
+Configuration templates come from one committed snapshot; individual secrets
+and ownership records are published only after their complete bytes are synced.
 It neither knows model layouts nor contacts Docker or the API.
 """
 
@@ -155,6 +157,21 @@ def _write_new_file(path: Path, content: bytes) -> None:
         output.write(content)
         output.flush()
         os.fsync(output.fileno())
+
+
+def _publish_new_file(path: Path, content: bytes) -> None:
+    """Publish complete owner-only bytes in an existing private parent, without replacement."""
+    with TemporaryDirectory(prefix=".install-", dir=path.parent) as temporary:
+        staged = Path(temporary) / path.name
+        _write_new_file(staged, content)
+        # A failed write must not reserve the destination with partial bytes.
+        # Linking also preserves an existing credential or ownership record.
+        os.link(staged, path)
+        try:
+            _sync_directory(path.parent)
+        except OSError as error:
+            error.add_note(f"File is visible at {path}; crash durability is unconfirmed.")
+            raise
 
 
 def _sync_directory(path: Path) -> None:

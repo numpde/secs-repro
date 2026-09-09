@@ -14,12 +14,11 @@ import re
 import stat
 import sys
 import tomllib
-from tempfile import TemporaryDirectory
 
 from deployment.compose import ComposeProject
 from deployment.templates import (
     configuration_directory, initialize_configuration, _ensure_private_parent,
-    _locked_parent, _write_new_file, _sync_directory,
+    _locked_parent, _publish_new_file,
 )
 
 
@@ -98,17 +97,7 @@ def install_secret(repository: Path, name: str, filename: str, source: Path) -> 
     content = _private_file(source.resolve(strict=True))
     state = _state_root(repository, name)
     destination = state / filename
-    with TemporaryDirectory(prefix=".install-", dir=state) as temporary:
-        staged = Path(temporary) / filename
-        _write_new_file(staged, content)
-        # Link a complete private file into place without replacing an existing
-        # name. A failed or interrupted write never installs a partial key.
-        os.link(staged, destination)
-        try:
-            _sync_directory(state)
-        except OSError as error:
-            error.add_note(f"Secret is visible at {destination}; crash durability is unconfirmed.")
-            raise
+    _publish_new_file(destination, content)
     return destination
 
 
@@ -165,8 +154,7 @@ def _bind_attempt_owner(state: Path, config: Path) -> None:
         journal = state / "state"
         if journal.exists() and any(journal.iterdir()):
             raise ValueError("Cannot adopt existing attempt files without their API/provider ownership record.")
-        _write_new_file(binding, content)
-        _sync_directory(state)
+        _publish_new_file(binding, content)
 
 
 def _status(records: dict) -> dict:

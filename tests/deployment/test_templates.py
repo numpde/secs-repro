@@ -191,6 +191,16 @@ class InitializationTests(unittest.TestCase):
         self.assertIn("initialization failed", output.getvalue())
         self.assertIn("Configuration is visible", output.getvalue())
 
+    def test_file_publication_survives_failed_directory_sync(self):
+        with TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "owner.json"
+            with patch.object(templates, "_sync_directory", side_effect=OSError("sync failed")):
+                with self.assertRaisesRegex(OSError, "sync failed") as failure:
+                    templates._publish_new_file(destination, b"complete ownership record")
+            self.assertEqual(destination.read_bytes(), b"complete ownership record")
+            self.assertIn("is visible", failure.exception.__notes__[0])
+            self.assertIn("durability is unconfirmed", failure.exception.__notes__[0])
+
 
 if __name__ == "__main__":
     unittest.main()
