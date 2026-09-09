@@ -190,3 +190,15 @@ This proves local workflow integration. It does not measure live interpreter
 selection quality, full-index ranking quality, GPU speed, or deployed API
 acceptance. The fixture observes emitted signing headers; cryptographic
 conformance is covered by the separate provider signing tests.
+
+Live interpreter qualification (opt-in; makes paid model requests):
+
+  make interpreter/model-behavior CONFIG_DIR=<provider-config-directory> KEY_FILE=<interpreter-key>
+
+Ported from Magnet's model-behavior lane. This uses the production interpreter
+configuration, key loader, tool definitions and conversation loop against the
+real model endpoint. It checks missing-input reporting, selection of a proton
+spectrum among archive distractors, and response to a forced reader rejection.
+Only fixture inputs are sent. Each case is bounded to at most eight turns and
+120 seconds, or the deployment's smaller limits. It does not create Jobs,
+publish hello, access a GPU, or prove scientific ranking quality.
