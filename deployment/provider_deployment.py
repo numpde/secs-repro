@@ -66,9 +66,9 @@ def render_deployment(repository: Path, name: str) -> dict:
 
 
 def _project(repository: Path, name: str) -> ComposeProject:
-    """SECS stops Job admission before its scientific worker, retaining the current grace periods."""
+    """SECS stops Job admission before its scientific worker."""
     configuration_directory(repository, name)
-    return ComposeProject(repository, f"secs-{name}", (("provider", 1900), ("worker", 20)))
+    return ComposeProject(repository, f"secs-{name}", ("provider", "worker"))
 
 
 def _private_directory(path: Path) -> None:
