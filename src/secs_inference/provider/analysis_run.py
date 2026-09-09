@@ -57,14 +57,15 @@ class AttemptSources:
         return self
 
     def __exit__(self, exc_type, error, traceback):
+        """Release sources without replacing the analysis outcome with cleanup."""
         if isinstance(error, WorkerStopUnconfirmed):
             return False
         try:
             shutil.rmtree(self.directory)
         except OSError as cleanup:
+            # Admission retries leftovers before accepting another Attempt.
+            # Cleanup cannot undo a completed analysis or explain its failure.
             _LOG.error("Cannot remove the private source workspace (%s); cleanup is required before another Attempt", type(cleanup).__name__)
-            if error is None:
-                raise
         return False
 
     def acquire(self, ref: str, *, deadline: float | None = None) -> Path:

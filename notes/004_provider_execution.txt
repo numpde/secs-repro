@@ -75,7 +75,8 @@ may never have arrived, so replay can create a new Attempt.
 
 After restart, leftover sources are removed only after a new ready worker
 connection proves the old child was reaped. A healthy idle worker can also
-release leftovers from its completed operation. Failed cleanup blocks the next
+release leftovers from its completed operation. Cleanup failure is logged without
+discarding an already produced result or replacing its error. It blocks the next
 remote start rather than consuming another Job.
 
 Signals stop admission. In-flight network operations finish or reach their
