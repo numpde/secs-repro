@@ -52,6 +52,8 @@ class LifecycleEndToEndTests(unittest.TestCase):
             env.chmod(0o600)
             plan = render_deployment(root, "example")
             provider, worker = plan["services"]["provider"], plan["services"]["worker"]
+            self.assertEqual(provider["restart"], "unless-stopped")
+            self.assertEqual(worker["restart"], "unless-stopped")
             self.assertEqual(worker["network_mode"], "none")
             self.assertNotIn("ports", provider)
             self.assertNotIn("ports", worker)
