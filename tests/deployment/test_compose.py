@@ -1,11 +1,16 @@
 """Preserve NMRPeak's project ownership and ordered-stop behavior across providers."""
 
 import json
+from contextlib import nullcontext, redirect_stderr
+from io import StringIO
 from pathlib import Path
+import subprocess
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
 from deployment.compose import ComposeProject
+from deployment.provider_deployment import main
 
 
 def record(project, role, number, *, running=True, grace=47):
@@ -101,6 +106,50 @@ class ComposeTests(unittest.TestCase):
         with patch.object(ComposeProject, "command", side_effect=RuntimeError("engine unavailable")):
             with self.assertRaisesRegex(RuntimeError, "engine unavailable"):
                 self.project.inventory()
+
+    def test_post_effect_inspection_failure_reports_uncertainty(self):
+        plan = {"services": {"provider": {"image": "sha256:" + "a" * 64}}}
+        initial = {"provider": record(self.project, "provider", 1)}
+        for operation, before, invoke in (
+            ("Startup", {}, lambda: self.project.start(plan)),
+            ("Shutdown", initial, self.project.stop),
+        ):
+            with self.subTest(operation=operation):
+                with patch.object(ComposeProject, "inventory", side_effect=(before, ValueError("foreign container"))):
+                    with patch.object(ComposeProject, "command", return_value=b"") as command:
+                        with self.assertRaises(ValueError) as failure:
+                            invoke()
+                self.assertTrue(command.called)
+                self.assertIn(f"{operation} is unconfirmed", failure.exception.__notes__[0])
+
+    def test_cli_keeps_docker_diagnostics_private_for_exits_and_timeouts(self):
+        secret = b"Docker could not use interpolated-config-secret"
+        for result in (subprocess.CompletedProcess([], 1, b"", secret),
+                       subprocess.TimeoutExpired("docker", 60, stderr=secret)):
+            with self.subTest(result=type(result).__name__), TemporaryDirectory() as temporary:
+                output = StringIO()
+                behavior = {"side_effect": result} if isinstance(result, Exception) else {"return_value": result}
+                with patch("tempfile.tempdir", temporary), patch("deployment.compose.subprocess.run", **behavior):
+                    with patch("deployment.provider_deployment._private_directory"), patch(
+                        "deployment.provider_deployment._locked_parent", return_value=nullcontext(),
+                    ), redirect_stderr(output):
+                        self.assertEqual(main(["status", "production"]), 1)
+                files = list(Path(temporary).iterdir())
+                self.assertEqual(len(files), 1)
+                self.assertEqual(files[0].read_bytes(), secret)
+                self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
+                self.assertIn(str(files[0]), output.getvalue())
+                self.assertNotIn(secret.decode(), output.getvalue())
+                self.assertIn("Deployment status failed", output.getvalue())
+
+    def test_diagnostic_retention_failure_preserves_docker_failure(self):
+        result = subprocess.CompletedProcess([], 7, b"", b"private diagnostic")
+        with patch("deployment.compose.subprocess.run", return_value=result), patch(
+            "deployment.compose.NamedTemporaryFile", side_effect=OSError("storage unavailable"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Docker ps failed .*exit 7") as failure:
+                self.project.command("ps")
+        self.assertIn("Could not retain", failure.exception.__notes__[0])
 
     def test_malformed_inspection_cannot_select_a_stop_target(self):
         for records in (["wrong"], [record(self.project, "provider", 2)]):
