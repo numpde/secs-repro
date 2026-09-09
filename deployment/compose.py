@@ -32,7 +32,7 @@ class ComposeProject:
 
     repository: Path
     name: str
-    stop_order: tuple[tuple[str, int], ...]
+    stop_order: tuple[str, ...]
 
     def render(self, recipe: Path, env_file: Path, environment: dict[str, str]) -> dict:
         """Normalize the maintained recipe; do not build, pull, or start services."""
@@ -43,9 +43,7 @@ class ComposeProject:
             "config", "--format", "json", environment=environment,
         )
         plan = json.loads(raw)
-        if not isinstance(plan, dict) or set(plan.get("services", {})) != {
-            role for role, _ in self.stop_order
-        }:
+        if not isinstance(plan, dict) or set(plan.get("services", {})) != set(self.stop_order):
             raise ValueError("Compose rendered a different service set from this provider's recipe.")
         for role, service in plan["services"].items():
             if not _IMAGE.fullmatch(service.get("image", "")) or "build" in service:
@@ -77,7 +75,7 @@ class ComposeProject:
             identity = record.get("Id")
             if (
                 identity not in identifiers or identity in seen
-                or role not in dict(self.stop_order) or role in services
+                or role not in self.stop_order or role in services
                 or labels.get("com.docker.compose.project") != self.name
                 or labels.get("com.docker.compose.oneoff") != "False"
                 or labels.get("com.docker.compose.project.working_dir") != str(self.repository)
@@ -130,10 +128,19 @@ class ComposeProject:
         This operation needs neither deployment config nor credential contents.
         """
         records = self.inventory()
-        for role, seconds in self.stop_order:
+        for record in records.values():
+            grace = record["Config"].get("StopTimeout")
+            if record["State"]["Running"] and (type(grace) is not int or grace < 0):
+                raise ValueError(
+                    f"Container {record['Id']} has no finite shutdown grace period; "
+                    "no containers stopped."
+                )
+        for role in self.stop_order:
             record = records.get(role)
             if record is not None and record["State"]["Running"]:
-                self.command("stop", "--time", str(seconds), record["Id"], timeout=seconds + 30)
+                # The running container owns its grace period, even if the
+                # recipe has since changed. Let Docker apply that same value.
+                self.command("stop", record["Id"], timeout=record["Config"]["StopTimeout"] + 30)
         stopped = self.inventory()
         if any(record["State"]["Running"] for record in stopped.values()):
             raise RuntimeError("Shutdown is unconfirmed: a project container is still running.")

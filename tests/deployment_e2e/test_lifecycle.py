@@ -72,7 +72,7 @@ class LifecycleEndToEndTests(unittest.TestCase):
             marker = state / "retained-attempt"
             marker.write_text("must survive shutdown")
             project = ComposeProject(root, "provider-test-" + uuid4().hex[:12],
-                                     (("provider", 5), ("worker", 5)))
+                                     ("provider", "worker"))
             service = {
                 "image": "${TEST_IMAGE:?set the existing local image}",
                 "entrypoint": ["python", "-c", "import time; time.sleep(3600)"],
@@ -80,6 +80,7 @@ class LifecycleEndToEndTests(unittest.TestCase):
                 "user": f"{os.getuid()}:{os.getgid()}",
                 "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],
                 "pids_limit": 32, "mem_limit": "128m", "cpus": 0.5,
+                "stop_grace_period": "5s",
                 "logging": {"driver": "json-file", "options": {
                     "max-size": "1m", "max-file": "1", "compress": "false"}},
                 "volumes": [{"type": "bind", "source": str(state), "target": "/state",
