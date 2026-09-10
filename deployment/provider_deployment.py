@@ -160,7 +160,12 @@ def _bind_attempt_owner(state: Path, config: Path) -> None:
 def _status(records: dict) -> dict:
     """Expose lifecycle evidence, not Docker environment or credential-bearing metadata."""
     return {role: {"id": record["Id"], "status": record["State"]["Status"],
-                   "image": record["Image"]} for role, record in records.items()}
+                   "image": record["Image"], "restart_count": record["RestartCount"],
+                   "exit_code": record["State"]["ExitCode"],
+                   "oom_killed": record["State"]["OOMKilled"],
+                   **({"health": record["State"]["Health"]["Status"]}
+                      if "Health" in record["State"] else {})}
+            for role, record in records.items()}
 
 
 def main(arguments: list[str] | None = None) -> int:

@@ -12,11 +12,24 @@ import unittest
 from unittest.mock import patch
 
 from deployment.compose import ComposeProject
-from deployment.provider_deployment import _bind_attempt_owner, install_secret, main
+from deployment.provider_deployment import _bind_attempt_owner, _status, install_secret, main
 from deployment.templates import _locked_parent
 
 
 class ProviderDeploymentTests(unittest.TestCase):
+    def test_status_exposes_restart_and_oom_evidence_without_private_metadata(self):
+        for health in (None, "unhealthy"):
+            with self.subTest(health=health):
+                state = {"Status": "restarting", "ExitCode": 137, "OOMKilled": True}
+                expected = {"id": "container-id", "image": "image-id", "status": "restarting",
+                            "restart_count": 4, "exit_code": 137, "oom_killed": True}
+                if health is not None:
+                    state["Health"] = {"Status": health, "Log": ["private-output"]}
+                    expected["health"] = health
+                record = {"Id": "container-id", "Image": "image-id", "RestartCount": 4,
+                          "State": state, "Config": {"Env": ["private-secret"]}}
+                self.assertEqual(_status({"worker": record}), {"worker": expected})
+
     def test_installation_reports_publication_when_staging_cleanup_fails(self):
         for sync_fails in (False, True):
             with self.subTest(sync_fails=sync_fails), TemporaryDirectory() as temporary:

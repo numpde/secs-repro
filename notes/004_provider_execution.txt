@@ -63,6 +63,12 @@ exact terminal command. A lost result receipt retries those exact bytes; it
 does not repeat inference. A restarted active Attempt is reported interrupted.
 Terminal publication retries are not cut off by the scientific work deadline.
 
+Temporary failures reading Job inputs retry within the original work deadline;
+they do not restart admission or interpretation. Model connection failures get
+at most two retries, within the interpretation deadline, only before any HTTP
+request was sent. TLS trust failures, failed socket cleanup, and uncertain
+request delivery are not retried automatically.
+
 Observed Job cancellation stops work. Closing a Job does not. A temporarily
 unavailable lifecycle read is retried while the existing work deadline remains
 in force. Only the supervisor may confirm that the scientific child exited.
@@ -78,11 +84,23 @@ release leftovers from its completed operation. Cleanup failure is logged withou
 discarding an already produced result or replacing its error. It blocks the next
 remote start rather than consuming another Job.
 
+Before another Attempt starts, the loaded scientific child must answer a
+readiness request. The provider tries to replace a confirmed dead child within
+the startup budget.
+This detects idle failure; it cannot guarantee that the next analysis will succeed.
+
 Signals stop admission. In-flight network operations finish or reach their
 deadline; active scientific waits check shutdown at five-second intervals.
-Keep the container stop grace longer than the configured work/startup budgets.
+Allow enough container stop grace for in-flight network deadlines and worker cleanup.
 The example uses 1,900 seconds for its 1,800-second work budget. Forced process
 termination still leaves the last confirmed journal record for recovery.
+
+Docker restarts exited containers unless deliberately stopped. Deployment status
+reports restart counts, exit codes and OOM evidence; a running container alone
+does not prove Job pickup or scientific readiness. Host networking and any SSH
+tunnel remain separate deployment dependencies. Private Attempt diagnostics and
+inability reports are retained without automatic expiry; container log rotation
+does not limit their disk use. Do not delete the active journal to free space.
 
 Deployment inputs
 -----------------
