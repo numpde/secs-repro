@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from secs_inference.provider.api import ProviderApi
 from secs_inference.provider.attempt_state import ActiveAttempt, StartPending, TerminalPending
-from secs_inference.provider.attempt_store import AttemptStore
+from secs_inference.provider.attempt_store import AttemptStore, JournalError
 from secs_inference.provider.execution import ExecutionLoop, AnalysisCancelled, AttemptNoLongerActive
 from secs_inference.provider.job_api import ApiError, ApiUnavailable, AttemptSnapshot, JobApi, complete_command, fail_command
 from secs_inference.provider.job_input import SelectedJobInput
@@ -286,7 +286,7 @@ class ExecutionTests(unittest.TestCase):
             api = FakeApi()
             loop = ExecutionLoop(api, store, lambda _: REPORT, lambda *_: None)
             with patch("secs_inference.provider.attempt_store.os.fsync", side_effect=OSError("disk failed")):
-                with self.assertRaises(OSError):
+                with self.assertRaises(JournalError):
                     loop.step()
             self.assertEqual(api.calls, ["feed"])
             with self.assertRaises(RuntimeError):
