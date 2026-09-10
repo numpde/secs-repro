@@ -57,21 +57,46 @@ class AttemptStore:
             self._lock_fd = os.open("owner.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=self._directory_fd)
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BaseException:
-            self.close()
+            self._close_after_failure()
             raise
 
     def __enter__(self):
         return self
 
-    def __exit__(self, *exc_info):
-        self.close()
+    def __exit__(self, exc_type, error, traceback):
+        if error is None:
+            self.close()
+        else:
+            self._close_after_failure()
 
     def close(self) -> None:
         """Release ownership without changing the retained obligation."""
-        for descriptor in (self._lock_fd, self._directory_fd):
-            if descriptor >= 0:
-                os.close(descriptor)
+        descriptors = (("ownership lock", self._lock_fd), ("journal directory", self._directory_fd))
+        # Linux can release an fd even when close reports an error. Detach both
+        # before closing either: retrying a stale number could close a new file.
         self._lock_fd = self._directory_fd = -1
+        self._usable = False
+        failures = []
+        for role, descriptor in descriptors:
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except OSError as error:
+                    failures.append((role, error))
+        if failures:
+            reasons = "; ".join(f"{role}: {os.strerror(error.errno) if error.errno is not None else 'unclassified operating-system error'}"
+                                for role, error in failures)
+            cause = failures[0][1] if len(failures) == 1 else ExceptionGroup("Journal descriptor release failures", [error for _, error in failures])
+            raise JournalError(f"Cannot confirm release of the Attempt journal resources: {reasons}. "
+                               "Previously confirmed record durability is unchanged; this owner cannot continue.") from cause
+
+    def _close_after_failure(self) -> None:
+        """Keep the initiating failure authoritative while reporting failed release."""
+        try:
+            self.close()
+        except JournalError as error:
+            _LOG.error("Attempt journal release also failed while stopping: %s",
+                       json.dumps(exception_evidence(error, boundary_details=provider_error_details)))
 
     def load(self) -> AttemptState | None:
         """Read the last complete record; malformed state requires operator repair."""
