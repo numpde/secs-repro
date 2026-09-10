@@ -28,6 +28,28 @@ GRANT = UploadReadCapability(UPLOAD.upload_ref, 4, "sha256:" + "b" * 64,
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_owned_analysis_context_preserves_the_original_exception_and_cause(self):
+        api = Mock()
+        api.specification.return_value = JobSpecification("job:test", "C2H6O")
+        api.uploads.return_value = ()
+        original = RuntimeError("private-message")
+        original.__cause__ = OSError("private-cause")
+        cause = original.__cause__
+        chat = Mock()
+        chat.complete.side_effect = original
+        with TemporaryDirectory() as directory:
+            with self.assertRaises(RuntimeError) as caught:
+                run_analysis(api=api, active=ACTIVE, chat=chat, worker=None, store=None,
+                    directory=Path(directory) / "current", work_deadline=monotonic() + 10,
+                    interpretation_seconds=5, max_turns=1, max_total_bytes=100)
+            self.assertIs(caught.exception, original)
+            self.assertIs(original.__cause__, cause)
+            with AttemptStore(Path(directory) / "journal") as journal:
+                journal.diagnose(ACTIVE, original)
+                evidence = json.loads(next(journal.directory.glob("*.diagnostic.json")).read_bytes())
+        self.assertEqual(evidence["analysis"], {"interpretation_rejections": [], "input_choices": [], "acquired_uploads": {}})
+        self.assertNotIn("private-", json.dumps(evidence))
+
     def test_worker_response_and_failed_stop_both_survive_without_releasing_sources(self):
         for response in ({"outcome": "failed", "exception_type": "ValueError", "frames": []}, {"outcome": "unknown"}):
             with self.subTest(outcome=response["outcome"]), TemporaryDirectory() as directory:
@@ -148,9 +170,9 @@ class AcquisitionTests(unittest.TestCase):
                     directory=Path(directory) / "current", work_deadline=monotonic() + 10,
                     interpretation_seconds=5, max_turns=1, max_total_bytes=100)
         evidence = caught.exception.analysis_context
-        self.assertEqual(evidence["input_choices"][0]["reading_error"], worker.request.return_value["reason"])
-        self.assertEqual(evidence["interpretation_rejections"], [])
-        self.assertEqual(evidence["acquired_uploads"][UPLOAD.upload_ref]["content_hash"], GRANT.content_hash)
+        self.assertEqual(evidence.input_choices[0]["reading_error"], worker.request.return_value["reason"])
+        self.assertEqual(evidence.interpretation_rejections, [])
+        self.assertEqual(evidence.acquired_uploads[UPLOAD.upload_ref]["content_hash"], GRANT.content_hash)
 
     def test_invalid_bruker_call_is_evidence_not_a_reader_failure(self):
         for explains in (True, False):
@@ -173,7 +195,7 @@ class AcquisitionTests(unittest.TestCase):
                 else:
                     with self.assertRaises(InterpreterError) as caught:
                         run()
-                    evidence = caught.exception.analysis_context["interpretation_rejections"]
+                    evidence = caught.exception.analysis_context.interpretation_rejections
                 self.assertEqual(evidence[0]["stage"], "tool_call")
                 self.assertIn("upload_ref, pdata_directory, formula, explanation", evidence[0]["reason"])
                 worker.request.assert_not_called()

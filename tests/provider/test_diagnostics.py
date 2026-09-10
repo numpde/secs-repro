@@ -72,6 +72,7 @@ class DiagnosticTests(unittest.TestCase):
     def test_attempt_diagnostics_do_not_adopt_third_party_diagnostic_attributes(self):
         error = ValueError("private-message")
         error.diagnostic = {"private": "third-party-value"}
+        error.analysis_context = {"private": "third-party-value"}
         with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as journal:
             journal.diagnose(ACTIVE, error)
             evidence = json.loads(next(journal.directory.glob("*.diagnostic.json")).read_bytes())
