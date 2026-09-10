@@ -1,15 +1,19 @@
-"""Real HTTPS, ZIP decoding, warm model/FAISS/GA and durable result replay.
+"""Real HTTPS and durable replay, with separate scientific and failure proofs.
 
 API and Chat peers are deterministic fixtures. The scientific child runs in a
 separate networkless container with real checkpoint weights and eight candidate
 molecules. This proves the workflow, not full-index quality or live LLM choice.
+The failure-only lane uses a lightweight supervised child and forbids science.
 """
 
 from base64 import b64encode, b64decode
+from contextlib import ExitStack
+from functools import partial
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
+import os
 from pathlib import Path
 import socket
 import ssl
@@ -17,6 +21,7 @@ from tempfile import TemporaryDirectory
 from threading import Event, Thread, Timer
 from time import monotonic, sleep
 import unittest
+from unittest.mock import patch
 from zipfile import ZipFile
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -31,6 +36,7 @@ from secs_inference.provider.job_input import SelectedJobInput
 from secs_inference.provider.main import prepare_configured_hello
 from secs_inference.provider.runtime import run_services
 from secs_inference.provider.upload_download import UploadStore
+from secs_inference.provider.worker import _serve_session
 from tls_fixture import _write_test_certificates
 
 
@@ -254,3 +260,137 @@ class WireScenario:
         else:
             raise AssertionError(f"Unexpected test request: {method} {path}")
         return json.dumps(document).encode(), "application/json"
+
+
+def load_no_science_handler(root):
+    """The real child proves readiness, but any scientific call fails this test."""
+    (root / "child.pid").write_text(str(os.getpid()))
+    def unexpected(command):
+        (root / "science-called").touch()
+        raise AssertionError("No scientific operation is allowed after model rejection")
+    return unexpected
+
+
+class RejectedInterpretationScenario(WireScenario):
+    """The model rejects the request; the API loses its first failure receipt."""
+
+    def __init__(self, journal):
+        super().__init__(b"unread fixture bytes")
+        self.journal = journal
+        self.failure_bodies = []
+
+    def handler(self):
+        scenario = self
+        class Handler(super().handler()):
+            def do_POST(self):
+                if self.path != "/chat":
+                    return super().do_POST()
+                assert self.headers["Authorization"] == "Bearer model-key"
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                assert json.loads(body)["model"] == "rejected-model"
+                scenario.turns += 1
+                reply = b'{"error":{"message":"private incomplete model detail"}}'
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("x-request-id", "model-rejection-request")
+                self.send_header("Content-Length", str(len(reply) + 1))
+                self.end_headers()
+                self.wfile.write(reply)
+        return Handler
+
+    def reply(self, method, path, body, headers):
+        if (method, path) == ("GET", "/provider/v1/execution-attempts/" + ATTEMPT):
+            raw, media = super().reply(method, path, body, headers)
+            document = json.loads(raw)
+            document["state"] = "failed" if self.failure_bodies else "in_progress"
+            return json.dumps(document).encode(), media
+        if (method, path) != ("POST", "/provider/v1/execution-attempts/fail"):
+            return super().reply(method, path, body, headers)
+        command = json.loads(body)
+        assert command["schema_id"] == "nmr.provider.execution_attempt_fail_request.v1"
+        assert command["execution_attempt_ref"] == ATTEMPT
+        retained = json.loads((self.journal / "attempt.json").read_bytes())
+        assert b64decode(retained["body_base64"]) == body
+        self.failure_bodies.append(body)
+        if len(self.failure_bodies) == 1:
+            return None, None
+        self.stop.set()
+        receipt = {name: command[name] for name in ("execution_attempt_ref", "failure_code", "failure_message")}
+        receipt.update(schema_id="nmr.provider.execution_attempt_fail_response.v1", replayed=True,
+                       committed_at="2026-09-10T00:00:00Z")
+        return json.dumps(receipt).encode(), "application/json"
+
+
+class ProviderFailureWireTests(unittest.TestCase):
+    def test_model_rejection_is_failed_and_replayed_without_scientific_work(self):
+        """Prove controller composition, not model inference or scientific quality."""
+        with TemporaryDirectory() as directory, socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener, ExitStack() as cleanup:
+            root = Path(directory)
+            socket_path = root / "worker.sock"
+            listener.bind(str(socket_path))
+            listener.listen(1)
+            listener.settimeout(5)
+            worker_errors = []
+            def serve():
+                try:
+                    connection, _ = listener.accept()
+                    with connection:
+                        _serve_session(connection, partial(load_no_science_handler, root))
+                except BaseException as error:
+                    worker_errors.append(error)
+            worker_thread = Thread(target=serve, daemon=True)
+            worker_thread.start()
+            cleanup.callback(worker_thread.join, 6)
+            _write_test_certificates(root)
+            wire = RejectedInterpretationScenario(root / "journal")
+            server = ThreadingHTTPServer(("127.0.0.1", 0), wire.handler())
+            cleanup.callback(server.server_close)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(root / "server.pem", root / "server-key.pem")
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            wire.origin = f"https://localhost:{server.server_port}"
+            server_thread = Thread(target=server.serve_forever, daemon=True)
+            server_thread.start()
+            cleanup.callback(server_thread.join, 5)
+            cleanup.callback(server.shutdown)
+            watchdog = Timer(15, wire.stop.set)
+            watchdog.start()
+            try:
+                provider = ProviderApi(HttpsEndpoint(wire.origin, "dev-local", 2, 3, root / "ca.pem"),
+                    "provider:test", "credential:test", Ed25519PrivateKey.from_private_bytes(bytes(range(32))))
+                chat = ChatEndpoint(wire.origin + "/chat", "rejected-model", "model-key", root / "ca.pem")
+                store = UploadStore(wire.origin, 1024, ca_file=root / "ca.pem")
+                config = ProviderConfig(None, HelloPolicy("Test", "Controller failure proof", 3600, 1),
+                    ExecutionConfig(chat.url, chat.model, store.origin, worker_startup_seconds=5, poll_seconds=0.01))
+                with patch("secs_inference.provider.runtime.WORKER_SOCKET", socket_path), \
+                     patch("secs_inference.provider.runtime.SOURCE_DIRECTORY", root / "current"), \
+                     patch("secs_inference.provider.runtime.JOURNAL_DIRECTORY", wire.journal):
+                    run_services(api=provider, prepared=prepare_configured_hello(config), config=config,
+                                 chat=chat, upload_store=store, stop=wire.stop)
+                self.assertEqual((wire.starts, wire.turns, wire.downloads, wire.capabilities), (1, 1, 0, 0))
+                self.assertEqual(len(wire.failure_bodies), 2)
+                self.assertEqual(wire.failure_bodies[0], wire.failure_bodies[1])
+                failure = json.loads(wire.failure_bodies[0])
+                self.assertEqual(failure["failure_code"], "interpretation_failed")
+                self.assertIn("rejected-model", failure["failure_message"])
+                self.assertIn("HTTP 400", failure["failure_message"])
+                self.assertFalse((root / "science-called").exists())
+                self.assertFalse((root / "current").exists())
+                self.assertFalse((wire.journal / "attempt.json").exists())
+                active = ActiveAttempt(StartPending("provider:test", SelectedJobInput(
+                    "job:test", "nmr.job.specification.text.v1", "sha256:" + sha256(TEXT).hexdigest(), len(TEXT),
+                ), wire.start_key), ATTEMPT)
+                self.assertEqual(JobApi(provider).snapshot(active), AttemptSnapshot("failed", "closed"))
+                evidence = json.loads(next(wire.journal.glob("*.diagnostic.json")).read_bytes())
+                self.assertEqual(evidence["interpreter"]["request_id"], "model-rejection-request")
+                self.assertIn("declared bytes", evidence["interpreter"]["detail_unavailable"])
+                for secret in ("model-key", "private incomplete model detail"):
+                    self.assertNotIn(secret, json.dumps(evidence) + failure["failure_message"])
+                worker_thread.join(5)
+                self.assertFalse(worker_thread.is_alive())
+                self.assertEqual(worker_errors, [])
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(int((root / "child.pid").read_text()), 0)
+            finally:
+                watchdog.cancel()
+                watchdog.join()
