@@ -39,7 +39,7 @@ def parse_job_upload_set_response(
     raw: bytes, *, expected_job_ref: str,
 ) -> tuple[JobUpload, ...]:
     """Preserve all current descriptions; the interpreter decides relevance."""
-    document = _response(raw, "nmr.provider.job_upload_set.read.response.v1")
+    document = _response(raw, "nmr.provider.job_upload_set.read.response.v1", "list the Job's Uploads")
     if document.get("job_ref") != expected_job_ref:
         raise UploadResponseError("Cannot read Uploads: the response names another Job")
     items = document.get("uploads")
@@ -78,7 +78,7 @@ def parse_upload_read_capability_response(
     raw: bytes, *, selected: JobUpload,
 ) -> UploadReadCapability:
     """Bind a grant once; a pending Upload may now have its finalized hash."""
-    document = _response(raw, "nmr.upload.read_capability.response.v1")
+    document = _response(raw, "nmr.upload.read_capability.response.v1", "obtain permission to download the selected Upload")
     if (
         document.get("method") != "GET"
         or document.get("upload_ref") != selected.upload_ref
@@ -103,13 +103,13 @@ def parse_upload_read_capability_response(
     )
 
 
-def _response(raw: bytes, schema: str) -> dict:
+def _response(raw: bytes, schema: str, operation: str) -> dict:
     try:
         document = response_object(raw)
     except (UnicodeError, ValueError, RecursionError):
-        raise UploadResponseError("Cannot read Upload response: the API returned ambiguous or unreadable JSON") from None
+        raise UploadResponseError(f"Cannot {operation}: the API returned ambiguous or unreadable JSON") from None
     if document.get("schema_id") != schema:
-        raise UploadResponseError("Cannot read Upload response: the API returned a different schema")
+        raise UploadResponseError(f"Cannot {operation}: the API response does not declare the required {schema!r} schema")
     return document
 
 

@@ -37,6 +37,20 @@ def grant(**changes):
 
 
 class JobUploadTests(unittest.TestCase):
+    def test_schema_errors_distinguish_listing_from_download_permission(self):
+        raw = b'{"schema_id":"private response text"}'
+        for parse, operation, schema in (
+            (lambda: parse_job_upload_set_response(raw, expected_job_ref="job:chosen"),
+             "list the Job's Uploads", "nmr.provider.job_upload_set.read.response.v1"),
+            (lambda: parse_upload_read_capability_response(raw, selected=UPLOAD),
+             "obtain permission to download", "nmr.upload.read_capability.response.v1"),
+        ):
+            with self.subTest(operation=operation), self.assertRaises(ValueError) as caught:
+                parse()
+            self.assertIn(operation, str(caught.exception))
+            self.assertIn(schema, str(caught.exception))
+            self.assertNotIn("private response text", str(caught.exception))
+
     def test_current_set_preserves_description_and_may_be_empty(self):
         for expected in ((), (UPLOAD,)):
             raw = upload_set(*(asdict(item) for item in expected))

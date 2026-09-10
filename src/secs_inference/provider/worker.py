@@ -53,7 +53,7 @@ class WorkerClient:
             ready = self._receive_next(startup_deadline, check_running)
             self._accept_stop(ready)
             if ready.get("outcome") != "ready":
-                error = WorkerError("The scientific worker could not load its configured artifacts; inspect worker diagnostics")
+                error = WorkerError("The SECS scientific worker could not finish loading its configured model and candidate index; inspect worker diagnostics")
                 error.diagnostic = ready
                 raise error
         except BaseException:

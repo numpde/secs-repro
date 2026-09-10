@@ -15,14 +15,14 @@ def socket_deadline(transport: socket.socket, deadline: float):
     """Join the interrupter before the caller closes or reuses its socket."""
     remaining = deadline - monotonic()
     if remaining <= 0:
-        raise TimeoutError("The HTTP exchange deadline has elapsed")
+        raise TimeoutError("The socket exchange deadline has elapsed")
     timer = Timer(remaining, _interrupt, args=(transport,))
     timer.daemon = True
     timer.start()
     try:
         yield
         if monotonic() >= deadline:
-            raise TimeoutError("The HTTP exchange deadline elapsed before completion")
+            raise TimeoutError("The socket exchange deadline elapsed before completion")
     finally:
         timer.cancel()
         timer.join()

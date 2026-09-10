@@ -17,9 +17,10 @@ from secs_inference.provider.response_json import response_object
 class ApiError(RuntimeError):
     """The API exchange needs reconciliation or operator correction."""
 
-    def __init__(self, message: str, *, status: int | None = None):
+    def __init__(self, message: str, *, status: int | None = None, diagnostic: dict | None = None):
         super().__init__(message)
         self.status = status
+        self.diagnostic = diagnostic
 
 
 class ApiUnavailable(ApiError):
@@ -127,7 +128,7 @@ class JobApi:
         except (ValueError, UnicodeError, RecursionError):
             raise ApiError(f"Cannot confirm the Provider API request to {operation.action}: its response JSON is unreadable") from None
         if document.get("schema_id") != schema:
-            raise ApiError(f"Cannot confirm the Provider API request to {operation.action}: its response schema differs from the requested operation")
+            raise ApiError(f"Cannot confirm the Provider API request to {operation.action}: its response schema differs from the required {schema!r}")
         return document
 
 

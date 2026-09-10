@@ -46,6 +46,21 @@ class ResponseRejection(Enum):
     INVALID_CONTENT_LENGTH = "invalid_content_length"
     RESPONSE_BODY_TOO_LARGE = "response_body_too_large"
 
+    @property
+    def explanation(self) -> str:
+        """Describe the rejected header/body contract without remote values."""
+        return {
+            self.UNDECLARED_STATUS: "the HTTP status is not supported for this operation",
+            self.INVALID_CONTENT_TYPE: "Content-Type does not identify the required JSON response",
+            self.CONTENT_ENCODING_NOT_ADMITTED: "Content-Encoding is present, but this API requires unencoded response bytes",
+            self.INVALID_CACHE_CONTROL: "Cache-Control must be no-store",
+            self.INVALID_TOPOLOGY: "Nmr-Api-Topology does not match the configured API deployment",
+            self.INVALID_REQUEST_ID: "the error reply has no usable X-Request-ID for diagnosis",
+            self.DUPLICATE_REQUEST_ID: "the reply repeats X-Request-ID, so its request identity is ambiguous",
+            self.INVALID_CONTENT_LENGTH: "Content-Length is not one valid byte count",
+            self.RESPONSE_BODY_TOO_LARGE: "the reply exceeds this operation's response-byte limit",
+        }[self]
+
 
 @dataclass(frozen=True, slots=True)
 class HttpResponse:
@@ -67,7 +82,9 @@ class RequestUnavailable:
 
 @dataclass(frozen=True, slots=True)
 class TlsRejected:
-    """TLS identity or protocol verification failed before HTTP delivery."""
+    """TLS setup failed before HTTP delivery; retain its cause, not its text."""
+
+    cause: ssl.SSLError = field(compare=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +130,8 @@ class HttpsEndpoint:
         try:
             context = ssl.create_default_context(cafile=ca_file)
         except OSError as error:
-            reason = type(error).__name__ if isinstance(error, ssl.SSLError) or error.errno is None else os.strerror(error.errno)
+            reason = ("TLS could not load the CA certificates" if isinstance(error, ssl.SSLError) else
+                      os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason")
             raise ValueError(f"Cannot load Provider API TLS trust from {ca_file or 'the system CA store'}: {reason}") from error
         context.check_hostname = True
         context.verify_mode = ssl.CERT_REQUIRED
@@ -180,8 +198,8 @@ def send_provider_request(
     try:
         try:
             connection.connect()
-        except (ssl.SSLCertVerificationError, ssl.SSLError):
-            return TlsRejected()
+        except ssl.SSLError as error:
+            return TlsRejected(error)
         except (OSError, TimeoutError) as error:
             return RequestUnavailable(RequestDelivery.NOT_SENT, error)
 

@@ -6,6 +6,8 @@ from hashlib import sha256
 from base64 import b64decode
 from pathlib import Path
 import os
+import socket
+import ssl
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
@@ -47,6 +49,41 @@ class FakeApi:
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_unknown_timeout_text_is_not_published_as_owned_deadline_evidence(self):
+        with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as journal:
+            api = FakeApi()
+            def analyse(_):
+                raise TimeoutError("private arbitrary timeout detail")
+            ExecutionLoop(api, journal, analyse, journal.diagnose).step()
+        result = json.loads(api.calls[-1])
+        self.assertEqual(result["failure_code"], "work_deadline_exceeded")
+        self.assertNotIn("private", result["failure_message"])
+        self.assertNotIn("worker was stopped", result["failure_message"])
+
+    def test_api_transport_failure_keeps_cause_and_delivery_without_private_text(self):
+        transport = ProviderApi(HttpsEndpoint("https://api.test", "web", 1, 1), START.provider_ref,
+                               "credential:test", Ed25519PrivateKey.from_private_bytes(bytes(range(32))))
+        for delivery, cause, reason in (
+            (RequestDelivery.NOT_SENT, socket.gaierror(-2, "private hostname"), "address could not be resolved"),
+            (RequestDelivery.POSSIBLE, ConnectionResetError("private URL"), "connection was reset"),
+        ):
+            with self.subTest(delivery=delivery), TemporaryDirectory() as directory:
+                with AttemptStore(Path(directory) / "journal") as store, patch(
+                        "secs_inference.provider.api.send_provider_request",
+                        return_value=RequestUnavailable(delivery, cause)):
+                    api = FakeApi()
+                    ExecutionLoop(api, store, JobApi(transport).specification, store.diagnose).step()
+                result = json.loads(api.calls[-1])
+                self.assertIn("read the Job specification", result["failure_message"])
+                self.assertIn(reason, result["failure_message"])
+                self.assertIn("not sent" if delivery is RequestDelivery.NOT_SENT else "outcome is unknown", result["failure_message"])
+                retained = json.loads(next((Path(directory) / "journal").glob("*.diagnostic.json")).read_bytes())
+                self.assertEqual(retained["api"]["delivery"], delivery.value)
+                self.assertEqual(retained["api"]["exception_type"], type(cause).__name__)
+                self.assertNotIn("worker", retained)
+                self.assertNotIn("private", json.dumps(retained))
+                self.assertNotIn("private", result["failure_message"])
+
     def test_attempt_snapshot_accepts_a_read_reply_and_rejects_other_operations(self):
         transport = Mock(provider_ref=START.provider_ref)
         api = JobApi(transport)
@@ -61,8 +98,9 @@ class ExecutionTests(unittest.TestCase):
 
         response["schema_id"] = "nmr.provider.execution_attempt_start_response.v1"
         transport.request.return_value = json.dumps(response).encode()
-        with self.assertRaisesRegex(ApiError, "response schema differs"):
+        with self.assertRaisesRegex(ApiError, "response schema differs") as caught:
             api.snapshot(ACTIVE)
+        self.assertIn("nmr.provider.execution_attempt_read_response.v1", str(caught.exception))
 
     def test_inability_is_failed_with_private_evidence_and_identical_publication_replay(self):
         report = {"schema_id": REPORT["schema_id"], "outcome": "cannot_analyse",
@@ -120,9 +158,10 @@ class ExecutionTests(unittest.TestCase):
         cases = (
             (HttpResponse(200, None, b"secret malformed JSON"), jobs.specification, "selected Job input"),
             (HttpResponse(200, None, b"secret malformed JSON"), jobs.uploads, "unreadable JSON"),
-            (TlsRejected(), jobs.specification, "read the Job specification: TLS verification failed before the request was sent"),
-            (ResponseRejected(ResponseRejection.INVALID_CONTENT_TYPE, 200), jobs.specification, "invalid_content_type"),
-            (RequestUnavailable(RequestDelivery.POSSIBLE, OSError("secret transport detail")), jobs.specification, "delivery was possible"),
+            (TlsRejected(ssl.SSLCertVerificationError("secret certificate")), jobs.specification, "TLS certificate could not be verified; the request was not sent"),
+            (TlsRejected(ssl.SSLError("secret protocol")), jobs.specification, "encrypted connection failed; the request was not sent"),
+            (ResponseRejected(ResponseRejection.INVALID_CONTENT_TYPE, 200), jobs.specification, "Content-Type does not identify the required JSON response"),
+            (RequestUnavailable(RequestDelivery.POSSIBLE, OSError("secret transport detail")), jobs.specification, "request may have reached the API"),
             (RequestUnavailable(RequestDelivery.RESPONSE_RECEIVED, status=502), jobs.specification, "HTTP 502 did not yield an admitted API response"),
             (HttpResponse(503, "request-test", b"secret response"), jobs.specification, "HTTP 503 for request request-test"),
             (HttpResponse(404, "request-test", b"secret invalid problem"), jobs.specification, "HTTP 404 for request request-test"),

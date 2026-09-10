@@ -87,7 +87,8 @@ class ProviderHttpTests(unittest.TestCase):
                 request=_signed_hello(endpoint.authority, b"{}"),
             )
 
-        self.assertEqual(outcome, TlsRejected())
+        self.assertIsInstance(outcome, TlsRejected)
+        self.assertIsInstance(outcome.cause, ssl.SSLCertVerificationError)
         self.assertEqual(server.requests, [])
 
     def test_upload_read_and_capability_post_have_no_content_headers(self):

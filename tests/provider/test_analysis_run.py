@@ -28,6 +28,29 @@ GRANT = UploadReadCapability(UPLOAD.upload_ref, 4, "sha256:" + "b" * 64,
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_worker_errors_name_inspection_or_search_in_the_published_failure(self):
+        for operation, description in (("inspect", "input inspection"), ("analyse", "SECS structure search")):
+            for failure in ({"outcome": "failed", "exception_type": "ValueError", "frames": []},
+                            WorkerError("The scientific worker disconnected; its exit was confirmed"),
+                            TimeoutError("private timeout text")):
+                with self.subTest(operation=operation, failure=type(failure).__name__), TemporaryDirectory() as directory:
+                    api = FakeApi()
+                    worker = Mock()
+                    worker.request.side_effect = [failure]
+                    sources = SimpleNamespace(api=api, active=None, acquired={}, directory=Path(directory))
+                    with AttemptStore(Path(directory) / "journal") as journal:
+                        ExecutionLoop(api, journal, lambda _: _worker_request(
+                            worker, sources, {"operation": operation}, monotonic() + 10,
+                        ), journal.diagnose).step()
+                    result = json.loads(api.calls[-1])
+                    self.assertIn(description, result["failure_message"])
+                    if isinstance(failure, TimeoutError):
+                        self.assertEqual(result["failure_code"], "work_deadline_exceeded")
+                        self.assertIn("scientific worker was stopped", result["failure_message"])
+                    else:
+                        self.assertEqual(result["failure_code"], "scientific_execution_failed")
+                    self.assertNotIn("private timeout text", result["failure_message"])
+
     def test_cleanup_failure_does_not_discard_completed_analysis(self):
         api = Mock()
         api.specification.return_value = JobSpecification("job:test", "C2H6O")
@@ -281,11 +304,11 @@ class AcquisitionTests(unittest.TestCase):
                 check_active()
                 return {"outcome": "inspected", "facts": {}}
         api.snapshot.side_effect = ApiUnavailable("outage")
-        self.assertEqual(_worker_request(Worker(), sources, {}, monotonic() + 5)["outcome"], "inspected")
+        self.assertEqual(_worker_request(Worker(), sources, {"operation": "inspect"}, monotonic() + 5)["outcome"], "inspected")
         api.snapshot.side_effect = None
         api.snapshot.return_value = AttemptSnapshot("in_progress", "cancelled")
         with self.assertRaisesRegex(AnalysisCancelled, "cancelled"):
-            _worker_request(Worker(), sources, {}, monotonic() + 5)
+            _worker_request(Worker(), sources, {"operation": "inspect"}, monotonic() + 5)
         api.snapshot.return_value = AttemptSnapshot("expired", "open")
         with self.assertRaisesRegex(AttemptNoLongerActive, "already expired"):
-            _worker_request(Worker(), sources, {}, monotonic() + 5)
+            _worker_request(Worker(), sources, {"operation": "inspect"}, monotonic() + 5)
