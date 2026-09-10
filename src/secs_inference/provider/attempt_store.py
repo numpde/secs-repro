@@ -26,6 +26,7 @@ from secs_inference.provider.response_json import response_object
 from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.worker import WorkerError
 from secs_inference.provider.configuration_error import ConfigurationError
+from secs_inference.provider.analysis_evidence import AnalysisContext
 
 
 _LOG = logging.getLogger(__name__)
@@ -126,8 +127,9 @@ class AttemptStore:
         """Retain frames and selected boundary evidence under the Attempt identity."""
         document = {"execution_attempt_ref": active.execution_attempt_ref,
                     **exception_evidence(error, boundary_details=provider_error_details)}
-        if hasattr(error, "analysis_context"):
-            document["analysis"] = error.analysis_context
+        context = getattr(error, "analysis_context", None)
+        if isinstance(context, AnalysisContext):
+            document["analysis"] = asdict(context)
         self._write_evidence(active, "diagnostic", document)
 
     def record_report(self, active: ActiveAttempt, report: dict) -> None:

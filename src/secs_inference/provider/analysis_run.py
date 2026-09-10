@@ -15,6 +15,7 @@ from secs_inference.provider.job_api import ApiError, ApiUnavailable
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.upload_download import UploadDownloadError, UploadUnavailable, download_upload
 from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
+from secs_inference.provider.analysis_evidence import AnalysisContext
 
 
 RESULT_SCHEMA_ID = "secs.elucidation.result.v1"
@@ -192,10 +193,7 @@ def run_analysis(
             # Selection and transfer facts belong to this run, regardless of
             # which component failed. Keep them separate from that component's
             # diagnostic, and leave exception classification unchanged.
-            error.analysis_context = {
-                "interpretation_rejections": session.rejections, "input_choices": choices,
-                "acquired_uploads": _upload_evidence(sources),
-            }
+            error.analysis_context = AnalysisContext(session.rejections, choices, _upload_evidence(sources))
             raise
 
 
