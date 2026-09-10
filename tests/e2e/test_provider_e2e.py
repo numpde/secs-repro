@@ -3,19 +3,21 @@
 API and Chat peers are deterministic fixtures. The scientific child runs in a
 separate networkless container with real checkpoint weights and eight candidate
 molecules. This proves the workflow, not full-index quality or live LLM choice.
-The failure-only lane uses a lightweight supervised child and forbids science.
+The failure-only lane uses a lightweight supervised child without scientific dependencies.
 """
 
 from base64 import b64encode, b64decode
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from functools import partial
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
+import errno
 import os
 from pathlib import Path
 import socket
+import shutil
 import ssl
 from tempfile import TemporaryDirectory
 from threading import Event, Thread, Timer
@@ -37,6 +39,7 @@ from secs_inference.provider.main import prepare_configured_hello
 from secs_inference.provider.runtime import run_services
 from secs_inference.provider.upload_download import UploadStore
 from secs_inference.provider.worker import _serve_session
+from secs_inference.provider.diagnostics import exception_evidence
 from tls_fixture import _write_test_certificates
 
 
@@ -271,32 +274,32 @@ def load_no_science_handler(root):
     return unexpected
 
 
-class RejectedInterpretationScenario(WireScenario):
-    """The model rejects the request; the API loses its first failure receipt."""
+def load_failed_inspection_handler(root):
+    """Return a real causal diagnostic through the supervised child's protocol."""
+    (root / "child.pid").write_text(str(os.getpid()))
+    def inspect(command):
+        assert command["operation"] == "inspect"
+        assert Path(command["files"][UPLOAD]).read_bytes() == b"unread fixture bytes"
+        # Exclusive creation makes an accidental second inspection fail.
+        with (root / "inspection-called").open("x"):
+            pass
+        try:
+            try:
+                raise OSError(errno.EIO, "private-worker-source")
+            except OSError as cause:
+                raise RuntimeError("private-worker-wrapper") from cause
+        except RuntimeError as error:
+            return {"outcome": "failed", **exception_evidence(error)}
+    return inspect
+
+
+class FailedAttemptScenario(WireScenario):
+    """The API loses its first failure receipt after retaining the command."""
 
     def __init__(self, journal):
         super().__init__(b"unread fixture bytes")
         self.journal = journal
         self.failure_bodies = []
-
-    def handler(self):
-        scenario = self
-        class Handler(super().handler()):
-            def do_POST(self):
-                if self.path != "/chat":
-                    return super().do_POST()
-                assert self.headers["Authorization"] == "Bearer model-key"
-                body = self.rfile.read(int(self.headers["Content-Length"]))
-                assert json.loads(body)["model"] == "rejected-model"
-                scenario.turns += 1
-                reply = b'{"error":{"message":"private incomplete model detail"}}'
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("x-request-id", "model-rejection-request")
-                self.send_header("Content-Length", str(len(reply) + 1))
-                self.end_headers()
-                self.wfile.write(reply)
-        return Handler
 
     def reply(self, method, path, body, headers):
         if (method, path) == ("GET", "/provider/v1/execution-attempts/" + ATTEMPT):
@@ -321,9 +324,71 @@ class RejectedInterpretationScenario(WireScenario):
         return json.dumps(receipt).encode(), "application/json"
 
 
+class RejectedInterpretationScenario(FailedAttemptScenario):
+    """Reject interpretation before the provider acquires or inspects any Upload."""
+
+    def handler(self):
+        scenario = self
+        class Handler(super().handler()):
+            def do_POST(self):
+                if self.path != "/chat":
+                    return super().do_POST()
+                assert self.headers["Authorization"] == "Bearer model-key"
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                assert json.loads(body)["model"] == "scripted-failure"
+                scenario.turns += 1
+                reply = b'{"error":{"message":"private incomplete model detail"}}'
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("x-request-id", "model-rejection-request")
+                self.send_header("Content-Length", str(len(reply) + 1))
+                self.end_headers()
+                self.wfile.write(reply)
+        return Handler
+
+
 class ProviderFailureWireTests(unittest.TestCase):
     def test_model_rejection_is_failed_and_replayed_without_scientific_work(self):
         """Prove controller composition, not model inference or scientific quality."""
+        with self.failure_lane(RejectedInterpretationScenario, load_no_science_handler) as (wire, root, evidence, failure):
+            self.assertEqual((wire.downloads, wire.capabilities), (0, 0))
+            self.assertEqual(failure["failure_code"], "interpretation_failed")
+            self.assertIn("scripted-failure", failure["failure_message"])
+            self.assertIn("HTTP 400", failure["failure_message"])
+            self.assertFalse((root / "science-called").exists())
+            self.assertEqual(evidence["interpreter"]["request_id"], "model-rejection-request")
+            self.assertIn("declared bytes", evidence["interpreter"]["detail_unavailable"])
+
+    def test_verified_upload_and_worker_failure_survive_lost_publication_receipt(self):
+        """The child fails inspection; verified input identity and both causes survive."""
+        remove = shutil.rmtree
+        removals = []
+        def remove_after_exit(path, *args, **kwargs):
+            source = Path(path)
+            if source.name == "current":
+                self.assertTrue(source.is_dir())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(int((source.parent / "child.pid").read_text()), 0)
+                removals.append(source)
+            return remove(path, *args, **kwargs)
+        with patch("secs_inference.provider.analysis_run.shutil.rmtree", side_effect=remove_after_exit), \
+             self.failure_lane(FailedAttemptScenario, load_failed_inspection_handler) as (wire, root, evidence, failure):
+            self.assertEqual((wire.downloads, wire.capabilities), (1, 1))
+            self.assertTrue((root / "inspection-called").exists())
+            self.assertEqual(failure["failure_code"], "scientific_execution_failed")
+            self.assertIn("input inspection", failure["failure_message"])
+            self.assertEqual(evidence["worker"]["exception_type"], "RuntimeError")
+            self.assertEqual(evidence["worker"]["cause"]["exception_type"], "OSError")
+            self.assertEqual(evidence["worker"]["cause"]["errno"], errno.EIO)
+            self.assertEqual(evidence["worker"]["cause"]["reason"], "Input/output error")
+            self.assertEqual(evidence["analysis"]["acquired_uploads"], {
+                UPLOAD: {"byte_length": len(wire.archive), "content_hash": "sha256:" + sha256(wire.archive).hexdigest()},
+            })
+            self.assertEqual(removals, [root / "current"])
+
+    @contextmanager
+    def failure_lane(self, scenario_type, load_handler):
+        """Exercise real HTTPS, a spawned child, durable failure and exact replay."""
         with TemporaryDirectory() as directory, socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener, ExitStack() as cleanup:
             root = Path(directory)
             socket_path = root / "worker.sock"
@@ -335,14 +400,14 @@ class ProviderFailureWireTests(unittest.TestCase):
                 try:
                     connection, _ = listener.accept()
                     with connection:
-                        _serve_session(connection, partial(load_no_science_handler, root))
+                        _serve_session(connection, partial(load_handler, root))
                 except BaseException as error:
                     worker_errors.append(error)
             worker_thread = Thread(target=serve, daemon=True)
             worker_thread.start()
             cleanup.callback(worker_thread.join, 6)
             _write_test_certificates(root)
-            wire = RejectedInterpretationScenario(root / "journal")
+            wire = scenario_type(root / "journal")
             server = ThreadingHTTPServer(("127.0.0.1", 0), wire.handler())
             cleanup.callback(server.server_close)
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -358,7 +423,7 @@ class ProviderFailureWireTests(unittest.TestCase):
             try:
                 provider = ProviderApi(HttpsEndpoint(wire.origin, "dev-local", 2, 3, root / "ca.pem"),
                     "provider:test", "credential:test", Ed25519PrivateKey.from_private_bytes(bytes(range(32))))
-                chat = ChatEndpoint(wire.origin + "/chat", "rejected-model", "model-key", root / "ca.pem")
+                chat = ChatEndpoint(wire.origin + "/chat", "scripted-failure", "model-key", root / "ca.pem")
                 store = UploadStore(wire.origin, 1024, ca_file=root / "ca.pem")
                 config = ProviderConfig(None, HelloPolicy("Test", "Controller failure proof", 3600, 1),
                     ExecutionConfig(chat.url, chat.model, store.origin, worker_startup_seconds=5, poll_seconds=0.01))
@@ -367,14 +432,10 @@ class ProviderFailureWireTests(unittest.TestCase):
                      patch("secs_inference.provider.runtime.JOURNAL_DIRECTORY", wire.journal):
                     run_services(api=provider, prepared=prepare_configured_hello(config), config=config,
                                  chat=chat, upload_store=store, stop=wire.stop)
-                self.assertEqual((wire.starts, wire.turns, wire.downloads, wire.capabilities), (1, 1, 0, 0))
+                self.assertEqual((wire.starts, wire.turns), (1, 1))
                 self.assertEqual(len(wire.failure_bodies), 2)
                 self.assertEqual(wire.failure_bodies[0], wire.failure_bodies[1])
                 failure = json.loads(wire.failure_bodies[0])
-                self.assertEqual(failure["failure_code"], "interpretation_failed")
-                self.assertIn("rejected-model", failure["failure_message"])
-                self.assertIn("HTTP 400", failure["failure_message"])
-                self.assertFalse((root / "science-called").exists())
                 self.assertFalse((root / "current").exists())
                 self.assertFalse((wire.journal / "attempt.json").exists())
                 active = ActiveAttempt(StartPending("provider:test", SelectedJobInput(
@@ -382,15 +443,14 @@ class ProviderFailureWireTests(unittest.TestCase):
                 ), wire.start_key), ATTEMPT)
                 self.assertEqual(JobApi(provider).snapshot(active), AttemptSnapshot("failed", "closed"))
                 evidence = json.loads(next(wire.journal.glob("*.diagnostic.json")).read_bytes())
-                self.assertEqual(evidence["interpreter"]["request_id"], "model-rejection-request")
-                self.assertIn("declared bytes", evidence["interpreter"]["detail_unavailable"])
-                for secret in ("model-key", "private incomplete model detail"):
+                for secret in ("model-key", "store-bearer", "private incomplete model detail", "private-worker"):
                     self.assertNotIn(secret, json.dumps(evidence) + failure["failure_message"])
                 worker_thread.join(5)
                 self.assertFalse(worker_thread.is_alive())
                 self.assertEqual(worker_errors, [])
                 with self.assertRaises(ProcessLookupError):
                     os.kill(int((root / "child.pid").read_text()), 0)
+                yield wire, root, evidence, failure
             finally:
                 watchdog.cancel()
                 watchdog.join()
