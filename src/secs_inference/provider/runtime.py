@@ -1,13 +1,15 @@
 """Compose one durable Attempt owner with hello and an offline scientific worker."""
 
 import logging
+import json
 from pathlib import Path
 import shutil
 from threading import Thread
 from time import monotonic
 
 from secs_inference.provider.analysis_run import run_analysis
-from secs_inference.provider.attempt_store import AttemptStore
+from secs_inference.provider.attempt_store import AttemptStore, provider_error_details
+from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.execution import ExecutionLoop, ProviderStopping
 from secs_inference.provider.job_api import ApiUnavailable, JobApi
 from secs_inference.provider.process import publish_hello_until_stopped
@@ -34,11 +36,14 @@ def run_execution(*, api, config, chat, upload_store, stop, journal):
         if stop.is_set():
             raise ProviderStopping("The provider is shutting down")
 
-    def before_start():
+    def before_start(start):
         nonlocal worker
         check_running()
         if worker is None or worker.stopped:
-            deadline = monotonic() + config.worker_startup_seconds
+            started = monotonic()
+            deadline = started + config.worker_startup_seconds
+            _LOG.info("Job %s: waiting for scientific worker readiness; startup budget %g seconds",
+                      start.selected.job_ref, config.worker_startup_seconds)
             while True:
                 check_running()
                 try:
@@ -48,6 +53,10 @@ def run_execution(*, api, config, chat, upload_store, stop, journal):
                     if monotonic() >= deadline:
                         raise WorkerError("Cannot start analysis: the offline worker socket is unavailable; start the worker before restarting the provider") from None
                     stop.wait(min(1, max(0, deadline - monotonic())))
+            _LOG.info("Job %s: scientific worker readiness confirmed after %.2f seconds",
+                      start.selected.job_ref, monotonic() - started)
+        else:
+            _LOG.info("Job %s: reusing the ready scientific worker", start.selected.job_ref)
         # A completed operation also establishes idleness. Retry any cleanup
         # left by that operation before another remote Attempt can be started.
         if SOURCE_DIRECTORY.exists():
@@ -70,7 +79,8 @@ def run_execution(*, api, config, chat, upload_store, stop, journal):
             try:
                 worked = loop.step()
             except ApiUnavailable as error:
-                _LOG.warning("Retrying the unavailable Provider API operation; any pending Attempt state is retained: %s", error)
+                _LOG.warning("Retrying the unavailable Provider API operation in %g seconds; any pending Attempt state is retained: %s | %s",
+                             retry_seconds, error, json.dumps(exception_evidence(error, boundary_details=provider_error_details)))
                 stop.wait(retry_seconds)
                 retry_seconds = min(300, retry_seconds * 2)
             else:
@@ -102,10 +112,16 @@ def run_services(*, api, prepared, config, chat, upload_store, stop):
         thread = Thread(target=hello, name="provider-hello")
         thread.start()
         try:
-            run_execution(api=api, config=config.execution, chat=chat,
-                          upload_store=upload_store, stop=stop, journal=journal)
-        finally:
-            stop.set()
-            thread.join()
+            try:
+                run_execution(api=api, config=config.execution, chat=chat,
+                              upload_store=upload_store, stop=stop, journal=journal)
+            finally:
+                stop.set()
+                thread.join()
+        except BaseException:
+            if hello_errors:
+                _LOG.error("Provider hello also failed while execution was stopping: %s",
+                           json.dumps(exception_evidence(hello_errors[0], boundary_details=provider_error_details)))
+            raise
         if hello_errors:
             raise hello_errors[0]
