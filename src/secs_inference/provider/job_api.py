@@ -1,6 +1,7 @@
 """Bind execution API replies to the Job and exact command being handled."""
 
 from base64 import b64decode, b64encode
+from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 import re
@@ -8,8 +9,8 @@ import re
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.attempt_state import ActiveAttempt, StartPending, TerminalPending
 from secs_inference.provider.canonical_json import canonical_json_bytes, parse_canonical_json_bytes
-from secs_inference.provider.job_input import SelectedJobInput, parse_job_input_read_response, selected_job_input
-from secs_inference.provider.job_upload import parse_job_upload_set_response, parse_upload_read_capability_response
+from secs_inference.provider.job_input import JobInputError, SelectedJobInput, parse_job_input_read_response, selected_job_input
+from secs_inference.provider.job_upload import UploadResponseError, parse_job_upload_set_response, parse_upload_read_capability_response
 from secs_inference.provider.operations import Operation
 from secs_inference.provider.response_json import response_object
 
@@ -42,20 +43,20 @@ class JobApi:
 
     def next_job(self) -> SelectedJobInput | None:
         """Read the current unattempted feed; no cursor is a durable work queue."""
-        document = self._read(Operation.JOBS, query="analysis_kind_ref=" + ANALYSIS_KIND_REF)
-        if (document.get("analysis_kind_ref") != ANALYSIS_KIND_REF
-                or document.get("has_provider_execution_attempt") is not False
-                or type(document.get("jobs")) is not list):
-            raise ApiError("Cannot select a Job: the feed does not describe this offering's unattempted Jobs")
-        if not document["jobs"]:
-            return None
-        item = document["jobs"][0]
-        try:
-            if item["analysis_kind_ref"] != ANALYSIS_KIND_REF:
-                raise ValueError
-            return selected_job_input(item)
-        except (TypeError, ValueError, KeyError):
-            raise ApiError("Cannot select a Job: the feed item has no usable input identity") from None
+        with self._read(Operation.JOBS, query="analysis_kind_ref=" + ANALYSIS_KIND_REF) as document:
+            if (document.get("analysis_kind_ref") != ANALYSIS_KIND_REF
+                    or document.get("has_provider_execution_attempt") is not False
+                    or type(document.get("jobs")) is not list):
+                raise ApiError("Cannot select a Job: the feed does not describe this offering's unattempted Jobs")
+            if not document["jobs"]:
+                return None
+            item = document["jobs"][0]
+            try:
+                if item["analysis_kind_ref"] != ANALYSIS_KIND_REF:
+                    raise ValueError
+                return selected_job_input(item)
+            except (TypeError, ValueError, KeyError):
+                raise ApiError("Cannot select a Job: the feed item has no usable input identity") from None
 
     def start(self, pending: StartPending) -> tuple[ActiveAttempt, str]:
         """Replay retained start facts; only the API may assign the Attempt."""
@@ -64,39 +65,39 @@ class JobApi:
             "job_ref": pending.selected.job_ref,
             "provider_attempt_key": pending.provider_attempt_key,
         })
-        document = self._read(Operation.START, body=body)
-        if (document.get("job_ref") != pending.selected.job_ref
-                or document.get("provider_ref") != pending.provider_ref
-                or document.get("analysis_kind_ref") != ANALYSIS_KIND_REF):
-            raise ApiError("Cannot confirm Attempt start: the receipt names different start facts")
-        ref = document.get("execution_attempt_ref")
-        if type(ref) is not str or re.fullmatch(r"execution_attempt:sha256:[0-9a-f]{64}", ref) is None:
-            raise ApiError("Cannot confirm Attempt start: the receipt has no usable Attempt identity")
-        return ActiveAttempt(pending, ref), _state(document)
+        with self._read(Operation.START, body=body) as document:
+            if (document.get("job_ref") != pending.selected.job_ref
+                    or document.get("provider_ref") != pending.provider_ref
+                    or document.get("analysis_kind_ref") != ANALYSIS_KIND_REF):
+                raise ApiError("Cannot confirm Attempt start: the receipt names different start facts")
+            ref = document.get("execution_attempt_ref")
+            if type(ref) is not str or re.fullmatch(r"execution_attempt:sha256:[0-9a-f]{64}", ref) is None:
+                raise ApiError("Cannot confirm Attempt start: the receipt has no usable Attempt identity")
+            return ActiveAttempt(pending, ref), _state(document)
 
     def snapshot(self, active: ActiveAttempt) -> AttemptSnapshot:
-        document = self._read(Operation.ATTEMPT, path=Operation.ATTEMPT.path.format(execution_attempt_ref=active.execution_attempt_ref))
-        if document.get("execution_attempt_ref") != active.execution_attempt_ref or document.get("job_ref") != active.start.selected.job_ref:
-            raise ApiError("Cannot reconcile the Attempt: the snapshot names another Attempt or Job")
-        job_state = document.get("job_state")
-        if type(job_state) is not str or job_state not in {"open", "closed", "cancelled"}:
-            raise ApiError("Cannot reconcile the Attempt: the Job lifecycle state is unreadable")
-        return AttemptSnapshot(_state(document), job_state)
+        with self._read(Operation.ATTEMPT, path=Operation.ATTEMPT.path.format(execution_attempt_ref=active.execution_attempt_ref)) as document:
+            if document.get("execution_attempt_ref") != active.execution_attempt_ref or document.get("job_ref") != active.start.selected.job_ref:
+                raise ApiError("Cannot reconcile the Attempt: the snapshot names another Attempt or Job")
+            job_state = document.get("job_state")
+            if type(job_state) is not str or job_state not in {"open", "closed", "cancelled"}:
+                raise ApiError("Cannot reconcile the Attempt: the Job lifecycle state is unreadable")
+            return AttemptSnapshot(_state(document), job_state)
 
     def specification(self, active: ActiveAttempt):
         selected = active.start.selected
-        raw = self.provider.request(Operation.INPUT, path=Operation.INPUT.path.format(job_ref=selected.job_ref), query="analysis_kind_ref=" + ANALYSIS_KIND_REF)
-        return parse_job_input_read_response(raw, selected=selected)
+        with self._response(Operation.INPUT, path=Operation.INPUT.path.format(job_ref=selected.job_ref), query="analysis_kind_ref=" + ANALYSIS_KIND_REF) as raw:
+            return parse_job_input_read_response(raw, selected=selected)
 
     def uploads(self, active: ActiveAttempt):
         ref = active.start.selected.job_ref
-        raw = self.provider.request(Operation.UPLOADS, path=Operation.UPLOADS.path.format(job_ref=ref))
-        return parse_job_upload_set_response(raw, expected_job_ref=ref)
+        with self._response(Operation.UPLOADS, path=Operation.UPLOADS.path.format(job_ref=ref)) as raw:
+            return parse_job_upload_set_response(raw, expected_job_ref=ref)
 
     def capability(self, active: ActiveAttempt, upload):
         path = Operation.CAPABILITY.path.format(job_ref=active.start.selected.job_ref, upload_ref=upload.upload_ref)
-        raw = self.provider.request(Operation.CAPABILITY, path=path)
-        return parse_upload_read_capability_response(raw, selected=upload)
+        with self._response(Operation.CAPABILITY, path=path) as raw:
+            return parse_upload_read_capability_response(raw, selected=upload)
 
     def publish(self, terminal: TerminalPending) -> None:
         """Confirm exact result/failure facts, not merely a matching terminal state."""
@@ -113,23 +114,40 @@ class JobApi:
                         "result_byte_length": len(result), "result_fingerprint": "sha256:" + sha256(result).hexdigest()}
         else:
             expected = {name: command[name] for name in ("execution_attempt_ref", "failure_code", "failure_message")}
-        receipt = self._read(operation, body=terminal.body)
-        if any(type(receipt.get(key)) is not type(value) or receipt[key] != value for key, value in expected.items()):
-            raise ApiError("Cannot confirm Attempt publication: the receipt does not match the retained terminal command")
+        with self._read(operation, body=terminal.body) as receipt:
+            if any(type(receipt.get(key)) is not type(value) or receipt[key] != value for key, value in expected.items()):
+                raise ApiError("Cannot confirm Attempt publication: the receipt does not match the retained terminal command")
 
-    def _read(self, operation, **kwargs) -> dict:
-        raw = self.provider.request(operation, **kwargs)
+    @contextmanager
+    def _response(self, operation, **kwargs):
+        """Keep request correlation through decoding and receipt checks.
+
+        Only our public reader errors are safe to describe. A rejected HTTP
+        200 receipt is not a confirmed operation outcome or a retry grant.
+        """
+        response = self.provider.request(operation, **kwargs)
+        try:
+            yield response.body
+        except (ApiError, JobInputError, UploadResponseError) as error:
+            request = f"response request ID {response.request_id}" if response.request_id is not None else "response has no request ID"
+            raise ApiError(f"{error} (Provider API: {operation.action}; {request})",
+                           diagnostic={"operation": operation.action, "status": response.status,
+                                       "request_id": response.request_id}) from error
+
+    @contextmanager
+    def _read(self, operation, **kwargs):
         schema = {
             Operation.JOBS: "nmr.provider.jobs.list.response.v1",
             Operation.ATTEMPT: "nmr.provider.execution_attempt_read_response.v1",
         }.get(operation, "nmr.provider.execution_attempt_" + operation.name.lower() + "_response.v1")
-        try:
-            document = response_object(raw)
-        except (ValueError, UnicodeError, RecursionError):
-            raise ApiError(f"Cannot confirm the Provider API request to {operation.action}: its response JSON is unreadable") from None
-        if document.get("schema_id") != schema:
-            raise ApiError(f"Cannot confirm the Provider API request to {operation.action}: its response schema differs from the required {schema!r}")
-        return document
+        with self._response(operation, **kwargs) as raw:
+            try:
+                document = response_object(raw)
+            except (ValueError, UnicodeError, RecursionError):
+                raise ApiError(f"Cannot confirm the Provider API request to {operation.action}: its response JSON is unreadable") from None
+            if document.get("schema_id") != schema:
+                raise ApiError(f"Cannot confirm the Provider API request to {operation.action}: its response schema differs from the required {schema!r}")
+            yield document
 
 
 def complete_command(active: ActiveAttempt, report: dict) -> TerminalPending:

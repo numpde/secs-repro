@@ -94,6 +94,7 @@ class HelloReceiptRejected:
     """A successful HTTP response that cannot prove hello acceptance."""
 
     reason: HelloReceiptRejection
+    request_id: str | None = None
 
 
 def prepare_hello(

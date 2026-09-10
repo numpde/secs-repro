@@ -56,7 +56,7 @@ class ProviderApi:
     credential_ref: str
     private_key: Ed25519PrivateKey = field(repr=False, compare=False)
 
-    def request(self, operation: Operation, *, path: str | None = None, query: str = "", body: bytes | None = None) -> bytes:
+    def request(self, operation: Operation, *, path: str | None = None, query: str = "", body: bytes | None = None) -> HttpResponse:
         """Send once with fresh authentication; execution policy owns all retries."""
         signed = sign_request(
             private_key=self.private_key, credential_ref=self.credential_ref,
@@ -92,7 +92,7 @@ class ProviderApi:
                 "status": outcome.status, **(network_failure_evidence(outcome.cause) if outcome.cause is not None else {}),
             })
         if outcome.status == 200:
-            return outcome.body
+            return outcome
         request = " without a request ID" if outcome.request_id is None else f" for request {outcome.request_id}"
         explanation, diagnostic = describe_problem(outcome)
         diagnostic = {"operation": operation.action, **diagnostic}
@@ -138,7 +138,7 @@ class ProviderApi:
             )
             if type(receipt) is HelloAccepted:
                 return receipt
-            return HelloUnavailable(receipt)
+            return HelloUnavailable(HelloReceiptRejected(receipt.reason, outcome.request_id))
         if is_fixed_hello_problem(
             outcome.body,
             status=outcome.status,

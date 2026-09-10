@@ -85,7 +85,8 @@ def _evidence_message(evidence: HttpOutcome | HelloReceiptRejected) -> str:
     if type(evidence) is HttpResponse:
         return describe_problem(evidence)[0]
     if type(evidence) is HelloReceiptRejected:
-        return f"HTTP 200 did not confirm hello acceptance: {evidence.reason.explanation}"
+        request = f"; response request ID {evidence.request_id}" if evidence.request_id is not None else ""
+        return f"HTTP 200 did not confirm hello acceptance: {evidence.reason.explanation}{request}"
     if type(evidence) is ResponseRejected:
         request = f"; response request ID {evidence.request_id}" if evidence.request_id is not None else ""
         return (
