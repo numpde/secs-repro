@@ -19,7 +19,7 @@ from secs_inference.provider.job_upload import JobUpload, UploadReadCapability
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
 from test_interpreter import ScriptedChat, tool
-from test_execution import FakeApi
+from test_execution import FakeApi, ACTIVE, START
 
 
 UPLOAD = JobUpload("upload:sha256:" + "a" * 64, "Proton experiment", 4, None)
@@ -28,6 +28,35 @@ GRANT = UploadReadCapability(UPLOAD.upload_ref, 4, "sha256:" + "b" * 64,
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_worker_response_and_failed_stop_both_survive_without_releasing_sources(self):
+        for response in ({"outcome": "failed", "exception_type": "ValueError", "frames": []}, {"outcome": "unknown"}):
+            with self.subTest(outcome=response["outcome"]), TemporaryDirectory() as directory:
+                root = Path(directory)
+                api = FakeApi()
+                worker = Mock()
+                worker.request.return_value = response
+                stopped = WorkerStopUnconfirmed("Scientific worker exit could not be confirmed")
+                worker.stop.side_effect = stopped
+                def analyse(active):
+                    with AttemptSources(api, active, (), None, root / "current", deadline=monotonic() + 5,
+                                        max_total_bytes=100) as sources:
+                        return _worker_request(worker, sources, {"operation": "analyse"}, monotonic() + 5)
+                with AttemptStore(root / "journal") as journal:
+                    journal.save(START)
+                    with self.assertRaises(WorkerStopUnconfirmed) as caught:
+                        ExecutionLoop(api, journal, analyse, journal.diagnose).step()
+                    self.assertIs(caught.exception, stopped)
+                    self.assertEqual(journal.load(), ACTIVE)
+                self.assertTrue((root / "current").exists())
+                self.assertFalse(any(isinstance(call, bytes) for call in api.calls))
+                evidence = json.loads(next((root / "journal").glob("*.diagnostic.json")).read_bytes())
+                self.assertEqual(evidence["context"]["exception_type"], "WorkerError")
+                if response["outcome"] == "failed":
+                    self.assertEqual(evidence["context"]["worker"], response)
+                else:
+                    self.assertIn("unrecognized operation outcome", evidence["context"]["message"])
+                worker.stop.assert_called_once()
+
     def test_worker_errors_name_inspection_or_search_in_the_published_failure(self):
         for operation, description in (("inspect", "input inspection"), ("analyse", "SECS structure search")):
             for failure in ({"outcome": "failed", "exception_type": "ValueError", "frames": []},

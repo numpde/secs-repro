@@ -1,6 +1,7 @@
 """A stopped wait must never masquerade as a stopped scientific process."""
 
 from contextlib import contextmanager
+import errno
 import os
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ from tempfile import TemporaryDirectory
 from threading import Event, Thread
 from time import monotonic, sleep
 import unittest
+from unittest.mock import Mock, patch
 
 from secs_inference.provider.worker import WorkerClient, WorkerError, WorkerStopUnconfirmed, serve_worker, _serve_session, _send, _receive
 
@@ -61,6 +63,41 @@ def worker_connection(load_handler=load_test_handler):
 
 
 class WorkerTests(unittest.TestCase):
+    def test_socket_cleanup_cannot_change_supervisor_exit_confirmation(self):
+        for acknowledged in (False, True):
+            with self.subTest(acknowledged=acknowledged):
+                transport = Mock()
+                with patch("secs_inference.provider.worker.socket.socket", return_value=transport), \
+                     patch.object(WorkerClient, "_receive_next", return_value={"outcome": "ready"}):
+                    worker = WorkerClient(Path("/worker.sock"), startup_deadline=monotonic() + 5)
+                transport.close.side_effect = OSError(errno.EIO, "private-close")
+                receive_error = EOFError("private-receive")
+                receive = {"return_value": {"outcome": "stopped"}} if acknowledged else {"side_effect": receive_error}
+                with patch.object(worker, "_receive_next", **receive), \
+                     self.assertLogs("secs_inference.provider.worker", level="ERROR") as captured:
+                    if acknowledged:
+                        worker.stop()
+                    else:
+                        with self.assertRaises(WorkerStopUnconfirmed) as caught:
+                            worker.stop()
+                        self.assertIs(caught.exception.__context__, receive_error)
+                self.assertEqual(worker.stopped, acknowledged)
+                self.assertIn(f'"errno": {errno.EIO}', "\n".join(captured.output))
+                self.assertNotIn("private-", "\n".join(captured.output))
+
+    def test_deadline_acknowledgement_survives_socket_close_failure(self):
+        transport = Mock()
+        with patch("secs_inference.provider.worker.socket.socket", return_value=transport), \
+             patch.object(WorkerClient, "_receive_next", return_value={"outcome": "ready"}):
+            worker = WorkerClient(Path("/worker.sock"), startup_deadline=monotonic() + 5)
+        transport.close.side_effect = OSError(errno.EIO, "private-close")
+        with patch.object(worker, "_receive_next", return_value={"outcome": "stopped", "reason": "deadline"}), \
+             self.assertLogs("secs_inference.provider.worker", level="ERROR"):
+            with self.assertRaisesRegex(TimeoutError, "child was stopped"):
+                worker.request({"operation": "analyse"}, deadline=monotonic() + 5)
+        self.assertTrue(worker.stopped)
+        transport.close.assert_called_once()
+
     def test_non_regular_supervisor_lock_cannot_block_worker_startup(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

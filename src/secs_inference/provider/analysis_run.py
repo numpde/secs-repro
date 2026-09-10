@@ -230,14 +230,18 @@ def _worker_request(worker, sources, request, deadline, check_running=lambda: No
         if hasattr(cause, "diagnostic"):
             error.diagnostic = cause.diagnostic
         raise error from cause
-    if response.get("outcome") == "failed":
-        error = WorkerError(f"Cannot finish {operation}: the SECS worker encountered an internal error; inspect this Attempt's operator diagnostics")
-        error.diagnostic = response
+    try:
+        if response.get("outcome") == "failed":
+            error = WorkerError(f"Cannot finish {operation}: the SECS worker encountered an internal error; inspect this Attempt's operator diagnostics")
+            error.diagnostic = response
+            raise error
+        if response.get("outcome") not in {"inspected", "input_rejected", "analysed"}:
+            raise WorkerError(f"Cannot confirm {operation}: the SECS worker returned an unrecognized operation outcome")
+    except WorkerError:
+        # Raise the response failure first so a failed stop retains it as
+        # context. Stop uncertainty still controls source retention and admission.
         worker.stop()
-        raise error
-    if response.get("outcome") not in {"inspected", "input_rejected", "analysed"}:
-        worker.stop()
-        raise WorkerError(f"Cannot confirm {operation}: the SECS worker returned an unrecognized operation outcome")
+        raise
     return response
 
 
