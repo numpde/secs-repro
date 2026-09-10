@@ -52,7 +52,7 @@ def read_jcamp_spectrum(spectrum_file: str | Path) -> SourceSpectrum:
         return _read_xydata(spectrum_path, parameters, intensities)
     if data_class == "NTUPLES":
         return _read_ntuples(spectrum_path, parameters, intensities)
-    _reject(f"DATA CLASS {data_class!r} is unsupported")
+    _reject("DATA CLASS must identify XYDATA or NTUPLES")
 
 
 def _read_xydata(
