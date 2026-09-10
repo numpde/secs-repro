@@ -6,6 +6,7 @@ Deployment owns the container and its devices; this module cannot launch Docker.
 """
 
 import json
+import logging
 import fcntl
 import math
 import os
@@ -22,6 +23,7 @@ from secs_inference.provider.diagnostics import exception_evidence
 
 
 _MAX_MESSAGE_BYTES = 2 * 1024 * 1024
+_LOG = logging.getLogger(__name__)
 
 
 class WorkerError(RuntimeError):
@@ -45,7 +47,7 @@ class WorkerClient:
         try:
             self.socket.connect(str(path))
         except BaseException:
-            self.socket.close()
+            self._close_socket()
             raise
         self.stopped = False
         self._incoming = _FrameBuffer()
@@ -79,7 +81,7 @@ class WorkerClient:
         if response.get("outcome") != "stopped":
             return
         self.stopped = True
-        self.socket.close()
+        self._close_socket()
         if response.get("reason") == "deadline":
             raise TimeoutError("The scientific work deadline elapsed and its child was stopped")
         if response.get("reason") == "relay_failure":
@@ -101,11 +103,19 @@ class WorkerClient:
                 pass
             while self._receive_next(deadline).get("outcome") != "stopped":
                 pass
+            self.stopped = True
         except BaseException:
             raise WorkerStopUnconfirmed("Scientific worker exit could not be confirmed; retain its source files and stop accepting Jobs") from None
         finally:
+            self._close_socket()
+
+    def _close_socket(self) -> None:
+        """Socket cleanup cannot revise the supervisor's process-exit evidence."""
+        try:
             self.socket.close()
-        self.stopped = True
+        except OSError as error:
+            _LOG.error("Cannot close the scientific worker's control socket; worker-exit confirmation is unchanged: %s",
+                       json.dumps(exception_evidence(error)))
 
     def _receive_next(self, deadline, check_active=None):
         """Keep partial frames across timeout so a raced result cannot hide stop."""
