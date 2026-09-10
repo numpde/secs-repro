@@ -1,7 +1,11 @@
 """Retain bounded exception structure without messages, source text or local values."""
 
 from collections import deque
+import errno
+import os
 from pathlib import Path
+import socket
+import ssl
 import traceback
 
 
@@ -33,6 +37,10 @@ def exception_evidence(error: BaseException, *, boundary_details=None) -> dict:
             evidence["omitted_frame_count"] = frame_count - len(frames)
         if isinstance(current, OSError) and type(current.errno) is int:
             evidence["errno"] = current.errno
+            # TLS and resolver codes are not POSIX errno values. Explain known
+            # OS codes without reading exception-supplied strerror or filenames.
+            if current.errno in errno.errorcode and not isinstance(current, (ssl.SSLError, socket.gaierror, socket.herror)):
+                evidence["reason"] = os.strerror(current.errno)
         if boundary_details is not None:
             evidence.update(boundary_details(current))
         if current.__cause__ is not None:

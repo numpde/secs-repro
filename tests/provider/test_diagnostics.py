@@ -2,6 +2,8 @@
 
 import errno
 import json
+import socket
+import ssl
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -28,8 +30,18 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(evidence["exception_type"], "RuntimeError")
         self.assertEqual(evidence["context"]["exception_type"], "OSError")
         self.assertEqual(evidence["context"]["errno"], errno.ENOSPC)
+        self.assertEqual(evidence["context"]["reason"], "No space left on device")
         self.assertTrue(evidence["context"]["frames"])
         self.assertNotIn("private", json.dumps(evidence))
+
+    def test_non_os_codes_are_not_misrepresented_as_posix_failures(self):
+        for error in (ssl.SSLError(1, "private"), socket.gaierror(1, "private"),
+                      socket.herror(1, "private"), OSError(10 ** 100, "private")):
+            with self.subTest(exception_type=type(error).__name__):
+                evidence = exception_evidence(error)
+                self.assertEqual(evidence["errno"], error.errno)
+                self.assertNotIn("reason", evidence)
+                self.assertNotIn("private", json.dumps(evidence))
 
     def test_explicit_cause_is_not_conflated_with_unrelated_context(self):
         error = RuntimeError()
