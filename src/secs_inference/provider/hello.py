@@ -11,6 +11,7 @@ import re
 from secs_inference.provider.canonical_json import JsonValue, canonical_json_bytes
 from secs_inference.provider.credential import validate_provider_ref
 from secs_inference.provider.operations import Operation
+from secs_inference.provider.problem import is_display_diagnostic
 
 
 HELLO_PATH = Operation.HELLO.path
@@ -23,11 +24,6 @@ _TIMESTAMP = re.compile(
     r"[0-5][0-9]:[0-5][0-9](?:\.(?!000000)[0-9]{6})?Z"
 )
 _VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,128}")
-_EDGE_SPACE = re.compile(r"[ \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]")
-_FORBIDDEN_DIAGNOSTIC = re.compile(
-    r"[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f"
-    r"\u2028-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]"
-)
 _FIXED_PROBLEM_PROFILES = {
     400: (
         "urn:nmr-api:problem:bad-request",
@@ -225,7 +221,7 @@ def is_fixed_hello_problem(
         and type(code) is str
         and code in diagnostic_codes
         and type(detail) is str
-        and _is_safe_diagnostic(detail)
+        and is_display_diagnostic(detail)
     )
 
 
@@ -248,18 +244,6 @@ def _is_timestamp(value: object) -> bool:
     except ValueError:
         return False
     return True
-
-
-def _is_safe_diagnostic(value: str) -> bool:
-    try:
-        encoded = value.encode("utf-8", errors="strict")
-    except UnicodeEncodeError:
-        return False
-    if not value or len(value) > 1_024 or len(encoded) > 1_024:
-        return False
-    if _EDGE_SPACE.fullmatch(value[0]) or _EDGE_SPACE.fullmatch(value[-1]):
-        return False
-    return _FORBIDDEN_DIAGNOSTIC.search(value) is None
 
 
 def _decode_response_object(raw: bytes) -> dict[str, object]:

@@ -30,6 +30,7 @@ from secs_inference.provider.operations import Operation
 from secs_inference.provider.job_api import ApiError, ApiUnavailable
 from secs_inference.provider.response_json import response_object
 from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
+from secs_inference.provider.problem import describe_problem
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +89,8 @@ class ProviderApi:
         if outcome.status == 200:
             return outcome.body
         request = " without a request ID" if outcome.request_id is None else f" for request {outcome.request_id}"
+        explanation, diagnostic = describe_problem(outcome)
+        diagnostic = {"operation": operation.action, **diagnostic}
         # Only these problem meanings authorize retirement or reconciliation.
         # A status line alone, even over TLS, is not their application receipt.
         if outcome.status in {404, 409}:
@@ -97,9 +100,11 @@ class ProviderApi:
             except (ValueError, UnicodeError, RecursionError):
                 problem = {}
             if problem.get("type") != "urn:nmr-api:problem:" + meaning or problem.get("status") != outcome.status:
-                raise ApiError(f"Cannot reconcile {operation_name} HTTP {outcome.status}{request}: its problem meaning is unreadable")
+                raise ApiError(f"Cannot reconcile {operation_name} HTTP {outcome.status}{request}: its problem meaning is unreadable",
+                               diagnostic=diagnostic)
         error_type = ApiUnavailable if outcome.status in {408, 503} else ApiError
-        raise error_type(f"{operation_name} returned HTTP {outcome.status}{request}", status=outcome.status)
+        raise error_type(f"{operation_name} returned {explanation}", status=outcome.status,
+                         diagnostic=diagnostic)
 
     def publish_hello(
         self,
