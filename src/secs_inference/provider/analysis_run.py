@@ -190,7 +190,7 @@ def run_analysis(
                     session.reject(response["reason"])
                     continue
                 choice["used"] = True
-                return {"schema_id": RESULT_SCHEMA_ID, "outcome": "analysed", "explanation": decision.explanation,
+                return {"schema_id": RESULT_SCHEMA_ID, "outcome": "analysed",
                         "interpretation_rejections": session.rejections,
                         "input_choices": choices, "acquired_uploads": _upload_evidence(sources), "analysis": response["analysis"]}
         except (WorkerStopUnconfirmed, ProviderStopping, AnalysisCancelled, AttemptNoLongerActive):
