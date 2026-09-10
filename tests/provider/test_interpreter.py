@@ -208,7 +208,7 @@ class InterpreterTests(unittest.TestCase):
     def test_unreadable_rejection_detail_does_not_hide_http_status(self):
         raw = b'{"error":{"message":"partial reason"}}'
         cases = (
-            ({"response_body": b"<html>private proxy page</html>"}, "JSONDecodeError"),
+            ({"response_body": b"<html>private proxy page</html>"}, "readable JSON"),
             ({"response_body": b"x" * 16385}, "16384-byte"),
             ({"response_body": raw, "declared_response_length": len(raw) + 1}, "declared bytes"),
             ({"response_body": raw, "response_headers": {"Content-Encoding": "gzip"}}, "encoded"),
@@ -229,8 +229,22 @@ class InterpreterTests(unittest.TestCase):
                     detail = raised.exception.diagnostic
                     self.assertEqual(detail["status"], 400)
                     self.assertIn(evidence, detail["detail_unavailable"])
+                    if evidence == "readable JSON":
+                        self.assertEqual(detail["detail_parse_failure"]["exception_type"], "JSONDecodeError")
                     self.assertNotIn("message", detail)
                     self.assertNotIn("private proxy page", str(raised.exception))
+
+    def test_rejection_body_network_failure_remains_secondary_and_inspectable(self):
+        endpoint = ChatEndpoint("https://model.test/chat", "chosen-model", "model-secret")
+        response = Mock(status=400, headers={"x-request-id": "request-test"})
+        response.read1.side_effect = ConnectionResetError(errno.ECONNRESET, "private-model-secret")
+        rejection = endpoint._rejection(response, ())
+        self.assertIn("HTTP 400", str(rejection))
+        self.assertIn("chosen-model", str(rejection))
+        self.assertEqual(rejection.diagnostic["status"], 400)
+        self.assertEqual(rejection.diagnostic["detail_read_failure"]["errno"], errno.ECONNRESET)
+        self.assertIn("connection was reset", rejection.diagnostic["detail_unavailable"])
+        self.assertNotIn("private-model-secret", json.dumps(rejection.diagnostic))
 
     def test_rejection_redacts_before_bounding_and_removes_controls(self):
         from secs_inference.provider.chat import _diagnostic_text

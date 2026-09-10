@@ -35,6 +35,28 @@ class StopAfterWaits(Event):
 
 
 class ProviderProcessTests(unittest.TestCase):
+    def test_each_failed_hello_keeps_its_status_cause_and_request_identity(self):
+        replies = (
+            RequestUnavailable(RequestDelivery.RESPONSE_RECEIVED, EOFError("private-body"), 200),
+            RequestUnavailable(RequestDelivery.RESPONSE_RECEIVED, ConnectionResetError("private-host"), 503),
+            HttpResponse(503, "request-one", b"private-response"),
+            HttpResponse(503, "request-two", b"private-response"),
+        )
+        stop = StopAfterWaits(len(replies))
+        with patch("secs_inference.provider.api.send_hello_request", side_effect=replies), \
+             self.assertLogs("secs_inference.provider.process", level="WARNING") as captured:
+            publish_hello_until_stopped(api=self.api, prepared=self.prepared, policy=self.policy, stop=stop)
+        self.assertEqual(stop.waits, [5, 10, 20, 40])
+        self.assertEqual(len(captured.output), 4)
+        self.assertIn("HTTP 200", captured.output[0])
+        self.assertIn("before completion", captured.output[0])
+        self.assertIn("acceptance could not be confirmed", captured.output[0])
+        self.assertIn("HTTP 503", captured.output[1])
+        self.assertIn("connection was reset", captured.output[1])
+        self.assertIn("request-one", captured.output[2])
+        self.assertIn("request-two", captured.output[3])
+        self.assertNotIn("private-", "\n".join(captured.output))
+
     def test_invalid_receipt_explains_why_registration_is_unconfirmed(self):
         # Exercise receipt admission and the operator log together, rather than
         # manufacturing a rejection that may not match the received reply.
@@ -113,13 +135,15 @@ class ProviderProcessTests(unittest.TestCase):
         self.assertEqual(stop.waits, [5, 10, 3600])
         self.assertEqual(
             [line.split(":", 1)[0] for line in logs.output],
-            ["WARNING", "INFO"],
+            ["WARNING", "WARNING", "INFO"],
         )
         self.assertIn("unavailable", logs.output[0])
         self.assertIn("unreadable HTTP response", logs.output[0])
         self.assertIn("acceptance is unknown", logs.output[0])
         self.assertNotIn("peer-controlled-marker", logs.output[0])
-        self.assertIn("recovered", logs.output[1])
+        self.assertIn("retrying in 5 seconds", logs.output[0])
+        self.assertIn("retrying in 10 seconds", logs.output[1])
+        self.assertIn("recovered", logs.output[2])
 
     def test_fixed_request_rejection_stops_without_retry(self):
         stop = StopAfterWaits(1)

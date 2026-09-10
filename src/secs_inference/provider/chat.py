@@ -188,10 +188,15 @@ class ChatEndpoint:
         except InterpreterError as error:
             diagnostic["detail_unavailable"] = str(error)
             fields = {}
-        except (OSError, http.client.HTTPException, ValueError, RecursionError) as error:
+        except (OSError, http.client.HTTPException) as error:
             # Body delivery/parsing is secondary: the received status remains
             # the reason this turn failed, including when its deadline expires.
-            diagnostic["detail_unavailable"] = f"Could not read the error response ({type(error).__name__})."
+            diagnostic["detail_unavailable"] = "Could not read the error response: " + network_failure_reason(error) + "."
+            diagnostic["detail_read_failure"] = network_failure_evidence(error)
+            fields = {}
+        except (ValueError, RecursionError) as error:
+            diagnostic["detail_unavailable"] = "The error response did not contain readable JSON."
+            diagnostic["detail_parse_failure"] = {"exception_type": type(error).__name__}
             fields = {}
         for name in ("message", "type", "code", "param"):
             if isinstance(fields.get(name), str):
