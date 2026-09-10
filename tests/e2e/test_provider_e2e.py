@@ -22,9 +22,12 @@ from zipfile import ZipFile
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.api import ProviderApi
+from secs_inference.provider.attempt_state import ActiveAttempt, StartPending
 from secs_inference.provider.chat import ChatEndpoint
 from secs_inference.provider.config import ExecutionConfig, HelloPolicy, ProviderConfig
 from secs_inference.provider.http import HttpsEndpoint
+from secs_inference.provider.job_api import AttemptSnapshot, JobApi
+from secs_inference.provider.job_input import SelectedJobInput
 from secs_inference.provider.main import prepare_configured_hello
 from secs_inference.provider.runtime import run_services
 from secs_inference.provider.upload_download import UploadStore
@@ -35,6 +38,34 @@ UPLOAD = "upload:sha256:" + "a" * 64
 DISTRACTOR = "upload:sha256:" + "0" * 64
 ATTEMPT = "execution_attempt:sha256:" + "b" * 64
 TEXT = b"Use the proton spectrum and formula C7H8ClN. The archive has several experiments."
+
+
+class WireScenarioTests(unittest.TestCase):
+    def test_wrong_method_target_query_or_body_is_not_answered(self):
+        wire = WireScenario(b"")
+        for method, path, body in (
+            ("POST", "/provider/v1/jobs/job:test/uploads", b""),
+            ("GET", "/wrong/jobs/job:test/uploads", b""),
+            ("GET", "/provider/v1/jobs/job:other/uploads", b""),
+            ("GET", "/provider/v1/jobs?analysis_kind_ref=wrong", b""),
+            ("GET", "/provider/v1/jobs/job:test/uploads", b"{}"),
+            ("POST", "/provider/v1/execution-attempts/start", b'{"schema_id":"wrong"}'),
+        ):
+            with self.subTest(method=method, path=path, body=body), self.assertRaises(AssertionError):
+                wire.reply(method, path, body, {})
+
+    def test_attempt_read_reports_the_observed_completion_stage(self):
+        wire = WireScenario(b"")
+        for completed_sends, state in ((0, "in_progress"), (1, "succeeded"), (2, "succeeded")):
+            with self.subTest(completed_sends=completed_sends):
+                wire.complete_bodies = [b"retained command"] * completed_sends
+                raw, media = wire.reply("GET", "/provider/v1/execution-attempts/" + ATTEMPT, b"", {})
+                self.assertEqual(media, "application/json")
+                self.assertEqual(json.loads(raw), {
+                    "schema_id": "nmr.provider.execution_attempt_read_response.v1",
+                    "execution_attempt_ref": ATTEMPT, "job_ref": "job:test",
+                    "job_state": "closed", "state": state,
+                })
 
 
 class ProviderEndToEndTests(unittest.TestCase):
@@ -80,6 +111,13 @@ class ProviderEndToEndTests(unittest.TestCase):
                 self.assertEqual(len(wire.complete_bodies), 2)
                 retained = wire.complete_bodies[0]
                 self.assertEqual(wire.complete_bodies, [retained, retained])
+                # Exercise the wire read even when science finishes before the
+                # worker's periodic state check. No artificial model delay needed.
+                active = ActiveAttempt(StartPending("provider:test", SelectedJobInput(
+                    "job:test", "nmr.job.specification.text.v1",
+                    "sha256:" + sha256(TEXT).hexdigest(), len(TEXT),
+                ), wire.start_key), ATTEMPT)
+                self.assertEqual(JobApi(provider).snapshot(active), AttemptSnapshot("succeeded", "closed"))
                 self.assertEqual(wire.downloads, 1)
                 self.assertEqual(wire.capabilities, 1)
                 report = json.loads(b64decode(json.loads(retained)["canonical_result_base64"]))
@@ -126,7 +164,7 @@ class WireScenario:
                 body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 if self.path.startswith("/provider/"):
                     scenario.provider_signed.append(bool(self.headers.get("Signature")))
-                response, media = scenario.reply(self.path, body, self.headers)
+                response, media = scenario.reply(self.command, self.path, body, self.headers)
                 if response is None:
                     self.connection.shutdown(socket.SHUT_RDWR)
                     self.close_connection = True
@@ -142,8 +180,11 @@ class WireScenario:
                 self.wfile.write(response)
         return Handler
 
-    def reply(self, path, body, headers):
-        if path == "/chat":
+    def reply(self, method, path, body, headers):
+        route = (method, path)
+        if method == "GET":
+            assert not body
+        if route == ("POST", "/chat"):
             assert headers["Authorization"] == "Bearer model-key"
             prompt = json.loads(body)
             self.turns += 1
@@ -158,49 +199,58 @@ class WireScenario:
                                                 "explanation": "The selected experiment provides the proton spectrum for the supplied formula."}
             document = {"choices": [{"message": {"role": "assistant", "tool_calls": [{"id": f"call-{self.turns}", "type": "function",
                          "function": {"name": name, "arguments": json.dumps(arguments)}}]}}]}
-        elif path == "/provider/v1/hello":
+        elif route == ("POST", "/provider/v1/hello"):
+            assert json.loads(body)["schema_id"] == "nmr.provider.hello_request.v1"
             self.hellos += 1
             document = {"schema_id": "nmr.provider.hello_response.v1", "provider_ref": "provider:test", "accepted_at": "2026-09-08T12:00:00Z"}
-        elif path.startswith("/upload/"):
+        elif route == ("GET", "/upload/v1/uploads/" + UPLOAD + "/bytes"):
             assert headers["Authorization"] == "Bearer store-bearer"
             assert "Signature" not in headers
             self.downloads += 1
             return self.archive, "application/octet-stream"
-        elif path.startswith("/provider/v1/jobs?"):
+        elif route == ("GET", "/provider/v1/jobs?analysis_kind_ref=" + ANALYSIS_KIND_REF):
             document = {"schema_id": "nmr.provider.jobs.list.response.v1", "analysis_kind_ref": ANALYSIS_KIND_REF,
                         "has_provider_execution_attempt": False, "next_cursor": None, "jobs": [{"job_ref": "job:test", "analysis_kind_ref": ANALYSIS_KIND_REF,
                         "input_schema_id": "nmr.job.specification.text.v1", "input_fingerprint": "sha256:" + sha256(TEXT).hexdigest(), "input_byte_length": len(TEXT),
                         "created_at": "2026-09-08T12:00:00Z"}]}
-        elif path.endswith("/start"):
+        elif route == ("POST", "/provider/v1/execution-attempts/start"):
+            command = json.loads(body)
+            assert command["schema_id"] == "nmr.provider.execution_attempt_start_request.v1"
+            assert command["job_ref"] == "job:test"
+            self.start_key = command["provider_attempt_key"]
             self.starts += 1
             document = {"schema_id": "nmr.provider.execution_attempt_start_response.v1", "execution_attempt_ref": ATTEMPT, "job_ref": "job:test",
                         "provider_ref": "provider:test", "analysis_kind_ref": ANALYSIS_KIND_REF, "state": "in_progress", "replayed": False, "started_at": "2026-09-08T12:00:00Z"}
-        elif "/input?" in path:
+        elif route == ("GET", "/provider/v1/jobs/job:test/input?analysis_kind_ref=" + ANALYSIS_KIND_REF):
             document = {"schema_id": "nmr.provider.job_input.read.response.v1", "job_ref": "job:test", "canonical_input_base64": b64encode(TEXT).decode(),
                         "input_schema_id": "nmr.job.specification.text.v1", "input_byte_length": len(TEXT), "input_fingerprint": "sha256:" + sha256(TEXT).hexdigest()}
-        elif path.endswith("/uploads"):
+        elif route == ("GET", "/provider/v1/jobs/job:test/uploads"):
             document = {"schema_id": "nmr.provider.job_upload_set.read.response.v1", "job_ref": "job:test", "uploads": [
                 {"upload_ref": DISTRACTOR, "description": "irrelevant carbon attachment", "byte_length": 4, "content_hash": None},
                 {"upload_ref": UPLOAD, "description": "Multiple experiments; find the proton spectrum.", "byte_length": len(self.archive), "content_hash": None}]}
-        elif path.endswith("/read-capability"):
+        elif route == ("POST", "/provider/v1/jobs/job:test/uploads/" + UPLOAD + "/read-capability"):
+            assert not body
             self.capabilities += 1
             document = {"schema_id": "nmr.upload.read_capability.response.v1", "upload_ref": UPLOAD, "method": "GET", "download_url": self.origin + "/upload/v1/uploads/" + UPLOAD + "/bytes",
                         "byte_length": len(self.archive), "content_hash": "sha256:" + sha256(self.archive).hexdigest(), "expires_at": "2030-01-01T00:00:00Z", "capability": "store-bearer"}
-        elif path.endswith("/complete"):
+        elif route == ("POST", "/provider/v1/execution-attempts/complete"):
+            command = json.loads(body)
+            assert command["schema_id"] == "nmr.provider.execution_attempt_complete_request.v1"
+            assert command["execution_attempt_ref"] == ATTEMPT
             retained = json.loads(Path("/state/journal/attempt.json").read_bytes())
             assert b64decode(retained["body_base64"]) == body
             self.complete_bodies.append(body)
             if len(self.complete_bodies) == 1:
                 return None, None
-            command = json.loads(body)
             self.stop.set()
             result = b64decode(command["canonical_result_base64"])
             document = {"schema_id": "nmr.provider.execution_attempt_complete_response.v1", "execution_attempt_ref": ATTEMPT,
                         "result_schema_id": command["result_schema_id"], "result_byte_length": len(result), "result_fingerprint": "sha256:" + sha256(result).hexdigest(),
                         "analysis_result_ref": "analysis_result:sha256:" + "c" * 64, "committed_at": "2026-09-08T12:30:00Z", "replayed": True}
-        elif path.startswith("/provider/v1/execution-attempts/execution_attempt:"):
-            document = {"schema_id": "nmr.provider.execution_attempt.read.response.v1", "execution_attempt_ref": ATTEMPT,
-                        "job_ref": "job:test", "job_state": "closed", "state": "in_progress"}
+        elif route == ("GET", "/provider/v1/execution-attempts/" + ATTEMPT):
+            document = {"schema_id": "nmr.provider.execution_attempt_read_response.v1", "execution_attempt_ref": ATTEMPT,
+                        "job_ref": "job:test", "job_state": "closed",
+                        "state": "succeeded" if self.complete_bodies else "in_progress"}
         else:
-            raise AssertionError("Unexpected test request: " + path)
+            raise AssertionError(f"Unexpected test request: {method} {path}")
         return json.dumps(document).encode(), "application/json"
