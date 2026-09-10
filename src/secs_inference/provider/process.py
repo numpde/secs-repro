@@ -27,6 +27,7 @@ from secs_inference.provider.http import (
 )
 from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
 from secs_inference.provider.job_api import ApiError
+from secs_inference.provider.problem import describe_problem
 
 
 _LOG = logging.getLogger(__name__)
@@ -55,10 +56,12 @@ def publish_hello_until_stopped(
             retry_seconds = min(policy.retry_initial_seconds, _MAX_RETRY_SECONDS)
             wait_seconds = policy.publication_interval_seconds
         elif type(outcome) is HelloCorrectionRequired:
+            explanation, diagnostic = describe_problem(outcome.response)
             raise ApiError(
                 "The Provider API rejected the hello request. Correct the "
                 "provider configuration or code before restarting: "
-                f"{_evidence_message(outcome.response)}"
+                + explanation,
+                diagnostic={"operation": "publish hello", **diagnostic},
             )
         else:
             # Backoff bounds log volume. Each request can reveal a different
@@ -80,12 +83,7 @@ def _evidence_message(evidence: HttpOutcome | HelloReceiptRejected) -> str:
     """Describe failure evidence without logging remote response bodies."""
 
     if type(evidence) is HttpResponse:
-        request = (
-            " without a request ID"
-            if evidence.request_id is None
-            else f" for request {evidence.request_id}"
-        )
-        return f"HTTP {evidence.status}{request}"
+        return describe_problem(evidence)[0]
     if type(evidence) is HelloReceiptRejected:
         return f"HTTP 200 did not confirm hello acceptance: {evidence.reason.explanation}"
     if type(evidence) is ResponseRejected:
