@@ -20,6 +20,7 @@ from secs_inference.provider.signing import (
 from secs_inference.provider.operations import Operation
 from secs_inference.provider.socket_deadline import socket_deadline
 from secs_inference.provider.connection import https_connection
+from secs_inference.provider.http_cleanup import close_http_resource
 from secs_inference.provider.configuration_error import ConfigurationError
 
 
@@ -224,7 +225,7 @@ def send_provider_request(
             delivery = RequestDelivery.POSSIBLE if status is None else RequestDelivery.RESPONSE_RECEIVED
             return RequestUnavailable(delivery, error, status)
     finally:
-        connection.close()
+        close_http_resource(connection, operation=f"Provider API request to {operation.action}", role="connection")
 
 
 def _exchange(
@@ -257,7 +258,7 @@ def _exchange(
             deadline=deadline, operation=operation,
         )
     finally:
-        response.close()
+        close_http_resource(response, operation=f"Provider API request to {operation.action}", role="response")
 
 
 def _validate_request(
