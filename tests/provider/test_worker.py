@@ -13,7 +13,7 @@ from time import monotonic, sleep
 import unittest
 from unittest.mock import Mock, patch
 
-from secs_inference.provider.worker import WorkerClient, WorkerError, WorkerStopUnconfirmed, serve_worker, _serve_session, _send, _receive
+from secs_inference.provider.worker import WorkerClient, WorkerError, WorkerStopUnconfirmed, serve_worker, _listen, _serve_session, _send, _receive
 
 
 def load_test_handler():
@@ -63,6 +63,64 @@ def worker_connection(load_handler=load_test_handler):
 
 
 class WorkerTests(unittest.TestCase):
+    def test_outer_supervisor_cleanup_preserves_unconfirmed_child_stop(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "worker.sock"
+            listener, client = Mock(), Mock()
+            listener.accept.return_value = (client, None)
+            listener.close.side_effect = OSError(errno.EIO, "private-listener")
+            client.close.side_effect = OSError(errno.EIO, "private-client")
+            original = WorkerStopUnconfirmed("Child exit is unconfirmed")
+            cause = RuntimeError("private-session")
+            original.__cause__ = cause
+            close = os.close
+            def failed_close(descriptor):
+                close(descriptor)
+                raise OSError(errno.EIO, "private-owner")
+            with patch("secs_inference.provider.worker.socket.socket", return_value=listener), \
+                 patch.object(Path, "chmod"), patch.object(Path, "unlink", side_effect=OSError(errno.EIO, "private-path")), \
+                 patch("secs_inference.provider.worker.os.close", side_effect=failed_close) as release, \
+                 patch("secs_inference.provider.worker._serve_session", side_effect=original), \
+                 self.assertLogs("secs_inference.provider.worker", level="ERROR") as captured:
+                with self.assertRaises(WorkerStopUnconfirmed) as caught:
+                    serve_worker(path, Mock())
+            self.assertIs(caught.exception, original)
+            self.assertIs(original.__cause__, cause)
+            release.assert_called_once()
+            client.close.assert_called_once()
+            listener.close.assert_called_once()
+            text = "\n".join(captured.output)
+            for role in ("accepted controller socket", "listening socket", "socket pathname", "ownership lock"):
+                self.assertIn(role, text)
+            self.assertNotIn("private-", text)
+
+    def test_failed_bind_does_not_authorize_removing_the_socket_path(self):
+        listener = Mock()
+        original = OSError(errno.EADDRINUSE, "private-bind")
+        listener.bind.side_effect = original
+        with patch("secs_inference.provider.worker.socket.socket", return_value=listener), patch.object(Path, "unlink") as remove:
+            with self.assertRaises(OSError) as caught:
+                _listen(Path("/unused/socket"), Mock())
+        self.assertIs(caught.exception, original)
+        listener.close.assert_called_once()
+        remove.assert_not_called()
+
+    def test_failed_listener_setup_releases_only_its_successfully_bound_path(self):
+        for phase in ("chmod", "listen"):
+            with self.subTest(phase=phase):
+                listener = Mock()
+                original = OSError(errno.EACCES, "private-setup")
+                if phase == "listen":
+                    listener.listen.side_effect = original
+                with patch("secs_inference.provider.worker.socket.socket", return_value=listener), \
+                     patch.object(Path, "chmod", side_effect=original if phase == "chmod" else None), \
+                     patch.object(Path, "unlink") as remove:
+                    with self.assertRaises(OSError) as caught:
+                        _listen(Path("/unused/socket"), Mock())
+                self.assertIs(caught.exception, original)
+                listener.close.assert_called_once()
+                remove.assert_called_once_with(missing_ok=True)
+
     def test_supervisor_releases_acquired_resources_when_child_startup_fails(self):
         for stage in ("construction", "start"):
             with self.subTest(stage=stage):

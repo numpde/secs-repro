@@ -39,7 +39,6 @@ from secs_inference.provider.main import prepare_configured_hello
 from secs_inference.provider.runtime import run_services
 from secs_inference.provider.upload_download import UploadStore
 from secs_inference.provider.worker import _serve_session
-from secs_inference.provider.diagnostics import exception_evidence
 from tls_fixture import _write_test_certificates
 
 
@@ -275,7 +274,7 @@ def load_no_science_handler(root):
 
 
 def load_failed_inspection_handler(root):
-    """Return a real causal diagnostic through the supervised child's protocol."""
+    """Raise an operation failure for the production child boundary to serialize."""
     (root / "child.pid").write_text(str(os.getpid()))
     def inspect(command):
         assert command["operation"] == "inspect"
@@ -284,12 +283,9 @@ def load_failed_inspection_handler(root):
         with (root / "inspection-called").open("x"):
             pass
         try:
-            try:
-                raise OSError(errno.EIO, "private-worker-source")
-            except OSError as cause:
-                raise RuntimeError("private-worker-wrapper") from cause
-        except RuntimeError as error:
-            return {"outcome": "failed", **exception_evidence(error)}
+            raise OSError(errno.EIO, "private-worker-source")
+        except OSError as cause:
+            raise RuntimeError("private-worker-wrapper") from cause
     return inspect
 
 

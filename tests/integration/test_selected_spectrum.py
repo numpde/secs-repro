@@ -27,16 +27,16 @@ JCAMP = FIXTURES / "jcamp/4-chlorobenzylamine/4-chlorobenzylamine.jdx"
 class SelectedSpectrumTests(unittest.TestCase):
     def test_candidate_retrieval_bug_remains_an_operational_failure(self):
         inference = Mock(embed_spectrum=Mock(return_value=np.array([1., 0.], dtype=np.float32)))
-        candidates = Mock(propose=Mock(side_effect=ValueError("private retrieval detail")))
+        failure = ValueError("private retrieval detail")
+        candidates = Mock(propose=Mock(side_effect=failure))
         worker = ScientificHandler(inference, candidates, ScientificWorkerConfig("unused", "unused", device="cpu"))
         with TemporaryDirectory() as directory:
-            response = worker({"operation": "analyse", "files": {"upload:chosen": str(JCAMP)},
-                "directory": directory, "selection": {"reader": "jcamp",
-                "source": {"upload_ref": "upload:chosen", "member": None}, "formula": "C7H8ClN",
-                "explanation": "The selected file is the proton spectrum."}})
-        self.assertEqual(response["outcome"], "failed")
-        self.assertEqual(response["exception_type"], "ValueError")
-        self.assertNotIn("private retrieval detail", str(response))
+            with self.assertRaises(ValueError) as caught:
+                worker({"operation": "analyse", "files": {"upload:chosen": str(JCAMP)},
+                    "directory": directory, "selection": {"reader": "jcamp",
+                    "source": {"upload_ref": "upload:chosen", "member": None}, "formula": "C7H8ClN",
+                    "explanation": "The selected file is the proton spectrum."}})
+        self.assertIs(caught.exception, failure)
 
     def test_empty_retrieval_returns_an_explained_search_result_not_a_worker_fault(self):
         import faiss
