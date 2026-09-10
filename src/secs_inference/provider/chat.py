@@ -16,7 +16,8 @@ from time import monotonic
 from urllib.parse import urlsplit
 
 from secs_inference.provider.socket_deadline import socket_deadline
-from secs_inference.provider.network_errors import network_failure_reason
+from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
+from secs_inference.provider.connection import https_connection
 
 
 _MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -109,7 +110,7 @@ class ChatEndpoint:
         remaining = deadline - monotonic()
         if remaining <= 0:
             raise self.failure("preparing the interpretation request", "the interpretation deadline has elapsed; this request was not sent", prompt_text=prompt_text)
-        connection = http.client.HTTPSConnection(
+        connection = https_connection(
             parsed.hostname, parsed.port or 443, timeout=min(10, remaining),
             context=self.tls_context,
         )
@@ -147,7 +148,7 @@ class ChatEndpoint:
                     response.close()
         except (OSError, http.client.HTTPException) as error:
             if monotonic() >= deadline:
-                reason = "the interpretation deadline elapsed"
+                reason = "the interpretation deadline elapsed; " + network_failure_reason(error)
             else:
                 reason = network_failure_reason(error)
             if phase == "connecting to the model service":
@@ -155,7 +156,7 @@ class ChatEndpoint:
             else:
                 reason += "; whether the service finished processing this request is unknown"
             raise self.failure(phase, reason, prompt_text=prompt_text,
-                               exception_type=type(error).__name__, errno=getattr(error, "errno", None)) from None
+                               **network_failure_evidence(error)) from None
         finally:
             connection.close()
 

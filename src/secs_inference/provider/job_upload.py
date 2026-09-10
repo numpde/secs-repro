@@ -25,7 +25,11 @@ class JobUpload:
 
 @dataclass(frozen=True, slots=True)
 class UploadReadCapability:
-    """A bound grant; its bearer and destination never belong in diagnostics."""
+    """Keep the bearer and capability URL private, including its path and query.
+
+    Operator connection diagnostics may identify the store's resolved TCP
+    address, but never the URL that grants access to an Upload.
+    """
 
     upload_ref: str
     byte_length: int

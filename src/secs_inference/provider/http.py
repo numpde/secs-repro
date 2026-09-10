@@ -19,6 +19,7 @@ from secs_inference.provider.signing import (
 )
 from secs_inference.provider.operations import Operation
 from secs_inference.provider.socket_deadline import socket_deadline
+from secs_inference.provider.connection import https_connection
 
 
 _VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,128}")
@@ -189,7 +190,7 @@ def send_provider_request(
 
     _validate_request(endpoint, request, operation)
 
-    connection = http.client.HTTPSConnection(
+    connection = https_connection(
         endpoint.host,
         endpoint.port,
         timeout=endpoint.connect_timeout_seconds,
