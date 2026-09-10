@@ -40,25 +40,44 @@ class AttemptStore:
     """Hold the controller's single-writer lock; retained state survives release."""
 
     def __init__(self, directory: Path):
-        directory.mkdir(mode=0o700, exist_ok=True)
-        parent_fd = os.open(directory.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(parent_fd)
-        finally:
-            os.close(parent_fd)
         self.directory = directory
-        self._directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        self._lock_fd = -1
-        self._usable = True
+        self._directory_fd = self._lock_fd = -1
+        self._usable = False
+        phase = "creating the private journal directory"
         try:
+            directory.mkdir(mode=0o700, exist_ok=True)
+            phase = "opening the parent directory"
+            parent_fd = os.open(directory.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                phase = "syncing the parent directory"
+                os.fsync(parent_fd)
+            except BaseException:
+                try:
+                    os.close(parent_fd)
+                except OSError as cleanup:
+                    _LOG.error("Cannot close the journal's parent directory after failed synchronization: %s",
+                               json.dumps(exception_evidence(cleanup)))
+                raise
+            else:
+                phase = "closing the parent directory"
+                os.close(parent_fd)
+            phase = "opening the journal directory"
+            self._directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             status = os.fstat(self._directory_fd)
             if status.st_uid != os.getuid() or status.st_mode & 0o077:
                 raise JournalError("Cannot own the Attempt journal: its directory must be private to the provider user")
+            phase = "opening the ownership lock"
             self._lock_fd = os.open("owner.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=self._directory_fd)
+            phase = "acquiring exclusive journal ownership"
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BaseException:
+        except BaseException as error:
             self._close_after_failure()
+            if isinstance(error, OSError):
+                reason = ("another provider process owns this journal" if phase == "acquiring exclusive journal ownership" and isinstance(error, BlockingIOError)
+                          else os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason")
+                raise JournalError(f"Cannot open the Attempt journal while {phase}: {reason}.") from error
             raise
+        self._usable = True
 
     def __enter__(self):
         return self
@@ -102,13 +121,17 @@ class AttemptStore:
         """Read the last complete record; malformed state requires operator repair."""
         self._require_usable()
         try:
-            descriptor = os.open("attempt.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self._directory_fd)
-        except FileNotFoundError:
-            return None
-        with os.fdopen(descriptor, "rb") as stream:
-            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-                raise JournalError("Cannot recover the Attempt: the journal record is not a regular file")
-            raw = stream.read(3 * 1024 * 1024 + 1)
+            try:
+                descriptor = os.open("attempt.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self._directory_fd)
+            except FileNotFoundError:
+                return None
+            with os.fdopen(descriptor, "rb") as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise JournalError("Cannot recover the Attempt: the journal record is not a regular file")
+                raw = stream.read(3 * 1024 * 1024 + 1)
+        except OSError as error:
+            reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
+            raise JournalError(f"Cannot read the retained Attempt journal record: {reason}.") from error
         if len(raw) > 3 * 1024 * 1024:
             raise JournalError("Cannot recover the Attempt: the journal record exceeds its byte limit")
         try:

@@ -326,8 +326,9 @@ class ExecutionTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory) / "journal"
             with AttemptStore(root):
-                with self.assertRaises(BlockingIOError):
+                with self.assertRaisesRegex(JournalError, "another provider process owns this journal") as caught:
                     AttemptStore(root)
+                self.assertIsInstance(caught.exception.__cause__, BlockingIOError)
 
     def test_only_an_exact_api_receipt_retires_retained_result_or_failure(self):
         for terminal, response_schema in (

@@ -16,6 +16,45 @@ from test_execution import ACTIVE, START, REPORT, FakeApi
 
 
 class JournalFailureTests(unittest.TestCase):
+    def test_parent_close_failure_does_not_replace_failed_synchronization(self):
+        with TemporaryDirectory() as directory:
+            close = os.close
+            def fail_close(descriptor):
+                close(descriptor)
+                raise OSError(errno.EIO, "private-close")
+            with patch("secs_inference.provider.attempt_store.os.fsync", side_effect=OSError(errno.ENOSPC, "private-sync")), \
+                 patch("secs_inference.provider.attempt_store.os.close", side_effect=fail_close), \
+                 self.assertLogs("secs_inference.provider.attempt_store", level="ERROR") as captured:
+                with self.assertRaises(JournalError) as caught:
+                    AttemptStore(Path(directory) / "journal")
+            self.assertEqual(caught.exception.__cause__.errno, errno.ENOSPC)
+            self.assertIn("syncing the parent directory", str(caught.exception))
+            self.assertIn(f'"errno": {errno.EIO}', "\n".join(captured.output))
+            self.assertNotIn("private-", str(caught.exception) + "\n".join(captured.output))
+
+    def test_journal_open_failures_name_the_phase_without_exception_payloads(self):
+        with TemporaryDirectory() as directory:
+            with patch("secs_inference.provider.attempt_store.os.fsync", side_effect=OSError(errno.EIO, "private-parent")):
+                with self.assertRaises(JournalError) as caught:
+                    AttemptStore(Path(directory) / "journal")
+            self.assertIn("parent directory", str(caught.exception))
+            self.assertIn("Input/output error", str(caught.exception))
+            self.assertNotIn("private-parent", str(caught.exception))
+            with AttemptStore(Path(directory) / "journal"):
+                pass
+
+    def test_failed_record_read_is_not_an_empty_journal_or_permission_to_call_api(self):
+        with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as store:
+            self.assertIsNone(store.load())
+            api = FakeApi()
+            with patch("secs_inference.provider.attempt_store.os.open", side_effect=OSError(errno.EACCES, "private-record")):
+                with self.assertRaises(JournalError) as caught:
+                    ExecutionLoop(api, store, lambda _: REPORT, store.diagnose).step()
+            self.assertEqual(api.calls, [])
+            self.assertIn("retained Attempt journal record", str(caught.exception))
+            self.assertIn("Permission denied", str(caught.exception))
+            self.assertNotIn("private-record", str(caught.exception))
+
     def test_failed_close_is_never_retried_against_a_reused_descriptor(self):
         with TemporaryDirectory() as directory:
             store = AttemptStore(Path(directory) / "journal")
