@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+from secs_inference.provider.network_errors import ConnectionFailed
 
 from secs_inference.provider.http import (
     HttpResponse,
@@ -154,7 +155,9 @@ class ProviderHttpTests(unittest.TestCase):
         )
 
         self.assertEqual(outcome, RequestUnavailable(RequestDelivery.NOT_SENT))
-        self.assertIsInstance(outcome.cause, ConnectionRefusedError)
+        self.assertIsInstance(outcome.cause, ConnectionFailed)
+        self.assertTrue(outcome.cause.attempts)
+        self.assertTrue(all(isinstance(item.cause, ConnectionRefusedError) for item in outcome.cause.attempts))
 
     def test_response_rejects_each_untrusted_envelope_fact(self):
         cases = (

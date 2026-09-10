@@ -16,7 +16,8 @@ from urllib.parse import urlsplit
 
 from secs_inference.provider.job_upload import UploadReadCapability
 from secs_inference.provider.socket_deadline import socket_deadline
-from secs_inference.provider.network_errors import network_failure_reason
+from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
+from secs_inference.provider.connection import https_connection
 
 
 _LOG = logging.getLogger(__name__)
@@ -132,7 +133,7 @@ def _transfer(store, capability, target, output, deadline):
     remaining = deadline - monotonic()
     if remaining <= 0:
         raise TimeoutError("Cannot obtain Upload bytes: the work deadline has elapsed")
-    connection = http.client.HTTPSConnection(
+    connection = https_connection(
         store.host, store.port, context=store.tls_context,
         timeout=min(store.connect_timeout_seconds, remaining),
     )
@@ -154,14 +155,16 @@ def _transfer(store, capability, target, output, deadline):
                 response.close()
     except ssl.SSLError as error:
         raise UploadDownloadError(f"{phase}: {network_failure_reason(error)}", diagnostic={
-            "phase": phase, "exception_type": type(error).__name__, "errno": error.errno,
+            "phase": phase, **network_failure_evidence(error),
         }) from None
     except (OSError, http.client.HTTPException) as error:
         # Exception text may contain a bearer or remote response line. Describe
         # only known transport causes and keep structured evidence private.
-        reason = "the acquisition deadline elapsed" if monotonic() >= deadline else network_failure_reason(error)
+        reason = network_failure_reason(error)
+        if monotonic() >= deadline:
+            reason = "the acquisition deadline elapsed; " + reason
         raise UploadUnavailable(f"{phase}: {reason}; no verified file was made available for analysis", diagnostic={
-            "phase": phase, "exception_type": type(error).__name__, "errno": getattr(error, "errno", None),
+            "phase": phase, **network_failure_evidence(error),
         }) from None
     finally:
         connection.close()

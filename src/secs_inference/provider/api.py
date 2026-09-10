@@ -29,7 +29,7 @@ from secs_inference.provider.signing import sign_request
 from secs_inference.provider.operations import Operation
 from secs_inference.provider.job_api import ApiError, ApiUnavailable
 from secs_inference.provider.response_json import response_object
-from secs_inference.provider.network_errors import network_failure_reason
+from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +66,8 @@ class ProviderApi:
         outcome = send_provider_request(endpoint=self.endpoint, request=signed, operation=operation)
         operation_name = f"Provider API request to {operation.action}"
         if isinstance(outcome, TlsRejected):
-            raise ApiError(f"Cannot finish {operation_name}: {network_failure_reason(outcome.cause)}; the request was not sent")
+            raise ApiError(f"Cannot finish {operation_name}: {network_failure_reason(outcome.cause)}; the request was not sent",
+                           diagnostic={"operation": operation.action, **network_failure_evidence(outcome.cause)})
         if isinstance(outcome, ResponseRejected):
             raise ApiError(f"Cannot confirm the outcome of the {operation_name}: HTTP {outcome.status} response was rejected because {outcome.reason.explanation}",
                            diagnostic={"operation": operation.action, "status": outcome.status, "response_rejection": outcome.reason.value})
@@ -81,8 +82,7 @@ class ProviderApi:
                       else "no complete response was received")
             raise ApiUnavailable(f"Cannot confirm the outcome of the {operation_name}: {reason}; {delivery}", diagnostic={
                 "operation": operation.action, "delivery": outcome.delivery.value,
-                "status": outcome.status, "exception_type": type(outcome.cause).__name__ if outcome.cause is not None else None,
-                "errno": getattr(outcome.cause, "errno", None),
+                "status": outcome.status, **(network_failure_evidence(outcome.cause) if outcome.cause is not None else {}),
             })
         if outcome.status == 200:
             return outcome.body
