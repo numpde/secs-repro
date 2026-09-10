@@ -117,6 +117,9 @@ class ChatEndpoint:
         try:
             connection.connect()
             with socket_deadline(connection.sock, deadline):
+                # The connect timeout must not cap model generation. The timer
+                # now owns the remaining budget across sending and all reads.
+                connection.sock.settimeout(None)
                 phase = "sending the interpretation request"
                 connection.request("POST", parsed.path or "/", body, {
                     "Authorization": "Bearer " + self.api_key,

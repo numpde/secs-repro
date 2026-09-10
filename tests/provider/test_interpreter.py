@@ -42,6 +42,19 @@ class ScriptedChat:
 
 
 class InterpreterTests(unittest.TestCase):
+    def test_model_reply_can_outlast_connection_timeout_within_interpretation_deadline(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_test_certificates(root)
+            message = tool("report_input_problem", {"explanation": "No spectrum supplied."})
+            body = json.dumps({"choices": [{"message": message}]}).encode()
+            # A real eleven-second pause catches the inherited ten-second
+            # socket timeout without replacing the transport under test.
+            with _tls_server(root, response_body=body, reply_delay_seconds=11) as server:
+                endpoint = ChatEndpoint(f"https://localhost:{server.port}/chat", "test-model", "key", root / "ca.pem")
+                self.assertEqual(endpoint.complete([], [], deadline=monotonic() + 30), message)
+                self.assertEqual(len(server.requests), 1)
+
     def test_transport_failure_names_model_phase_and_retains_only_safe_evidence(self):
         phases = (
             ("connect", "connecting to the model service"),
