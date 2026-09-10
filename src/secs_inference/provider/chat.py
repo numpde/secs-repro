@@ -16,6 +16,7 @@ from time import monotonic
 from urllib.parse import urlsplit
 
 from secs_inference.provider.socket_deadline import socket_deadline
+from secs_inference.provider.network_errors import network_failure_reason
 
 
 _MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -52,7 +53,8 @@ class ChatEndpoint:
         try:
             context = ssl.create_default_context(cafile=self.ca_file)
         except OSError as error:
-            reason = type(error).__name__ if isinstance(error, ssl.SSLError) or error.errno is None else os.strerror(error.errno)
+            reason = ("TLS could not load the CA certificates" if isinstance(error, ssl.SSLError) else
+                      os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason")
             raise ValueError(f"Cannot load interpreter TLS trust from {self.ca_file or 'the system CA store'}: {reason}") from error
         object.__setattr__(self, "tls_context", context)
 
@@ -68,7 +70,7 @@ class ChatEndpoint:
             request["reasoning_effort"] = self.reasoning_effort
         body = json.dumps(request, ensure_ascii=False, allow_nan=False).encode("utf-8")
         if len(body) > _MAX_REQUEST_BYTES:
-            raise InterpreterError(f"Cannot interpret this Job: its {len(body)}-byte input and inspection context exceeds this provider's {_MAX_REQUEST_BYTES}-byte model-request limit")
+            raise self.failure("preparing the interpretation request", f"its {len(body)}-byte input and inspection context exceeds this provider's {_MAX_REQUEST_BYTES}-byte model-request limit")
         prompt_text = tuple(m["content"] for m in messages if isinstance(m.get("content"), str) and m["content"])
         raw = self._post(body, deadline, prompt_text=prompt_text)
         try:
@@ -81,43 +83,76 @@ class ChatEndpoint:
                 raise ValueError("No assistant message")
             return message
         except (UnicodeError, ValueError, TypeError, KeyError, IndexError, RecursionError):
-            raise InterpreterError("Cannot interpret this Job: the model endpoint returned an unreadable completion") from None
+            raise self.failure("checking the model's reply", "the response does not contain one readable assistant message", prompt_text=prompt_text) from None
+
+    def failure(self, phase: str, reason: str, *, prompt_text: tuple[str, ...] = (), **evidence) -> InterpreterError:
+        """Name the selected model and operation without retaining request text.
+
+        Callers supply owned reasons and scalar evidence, never arbitrary
+        exception text. Model and endpoint configuration still need redaction.
+        """
+        secrets = (self.api_key, *prompt_text)
+        parsed = urlsplit(self.url)
+        model = _diagnostic_text(self.model, secrets, 128)
+        diagnostic = {
+            "endpoint": _diagnostic_text(f"{parsed.scheme}://{parsed.netloc}", secrets, 256),
+            "model": model, "phase": phase, **evidence,
+        }
+        return InterpreterError(
+            f"Job interpretation with model {model!r} failed while {phase}: {reason}.",
+            diagnostic=diagnostic,
+        )
 
     def _post(self, body: bytes, deadline: float, *, prompt_text: tuple[str, ...]) -> bytes:
         """Send once under the turn deadline, preserving rejection evidence without replay."""
         parsed = urlsplit(self.url)
         remaining = deadline - monotonic()
         if remaining <= 0:
-            raise InterpreterError("Cannot interpret this Job: the interpretation deadline has elapsed")
+            raise self.failure("preparing the interpretation request", "the interpretation deadline has elapsed; this request was not sent", prompt_text=prompt_text)
         connection = http.client.HTTPSConnection(
             parsed.hostname, parsed.port or 443, timeout=min(10, remaining),
             context=self.tls_context,
         )
+        phase = "connecting to the model service"
         try:
             connection.connect()
             with socket_deadline(connection.sock, deadline):
+                phase = "sending the interpretation request"
                 connection.request("POST", parsed.path or "/", body, {
                     "Authorization": "Bearer " + self.api_key,
                     "Content-Type": "application/json",
                 })
+                phase = "waiting for the model service to reply"
                 response = connection.getresponse()
+                phase = "reading the model's reply"
                 try:
                     if response.status != 200:
                         raise self._rejection(response, prompt_text)
                     if response.headers.get("Content-Encoding"):
-                        raise InterpreterError("Cannot interpret this Job: the model endpoint returned encoded content")
+                        raise self.failure(phase, "the service returned a Content-Encoding that this provider cannot decode", prompt_text=prompt_text)
                     result = bytearray()
                     while chunk := response.read1(min(64 * 1024, _MAX_RESPONSE_BYTES + 1 - len(result))):
                         result.extend(chunk)
                         if len(result) > _MAX_RESPONSE_BYTES:
-                            raise InterpreterError(f"Cannot interpret this Job: the completion exceeds this provider's {_MAX_RESPONSE_BYTES}-byte model-response limit")
+                            raise self.failure(phase, f"the completion exceeds this provider's {_MAX_RESPONSE_BYTES}-byte model-response limit", prompt_text=prompt_text)
+                    if monotonic() >= deadline:
+                        raise self.failure(phase, "the interpretation deadline elapsed before the reply could be accepted", prompt_text=prompt_text)
                     if response.length not in {None, 0}:
-                        raise InterpreterError("Cannot interpret this Job: the model response ended before its declared bytes arrived")
+                        raise self.failure(phase, "the reply ended before all its declared bytes arrived", prompt_text=prompt_text)
                     return bytes(result)
                 finally:
                     response.close()
         except (OSError, http.client.HTTPException) as error:
-            raise InterpreterError(f"Cannot interpret this Job: model response delivery failed ({type(error).__name__})") from None
+            if monotonic() >= deadline:
+                reason = "the interpretation deadline elapsed"
+            else:
+                reason = network_failure_reason(error)
+            if phase == "connecting to the model service":
+                reason += "; this request was not sent"
+            else:
+                reason += "; whether the service finished processing this request is unknown"
+            raise self.failure(phase, reason, prompt_text=prompt_text,
+                               exception_type=type(error).__name__, errno=getattr(error, "errno", None)) from None
         finally:
             connection.close()
 
@@ -129,12 +164,9 @@ class ChatEndpoint:
         request or response. This is not a detector for paraphrased input.
         """
         secrets = (self.api_key, *prompt_text)
-        parsed = urlsplit(self.url)
-        diagnostic = {
-            "endpoint": _diagnostic_text(f"{parsed.scheme}://{parsed.netloc}", secrets, 256),
-            "model": _diagnostic_text(self.model, secrets, 256),
-            "status": response.status,
-        }
+        rejection = self.failure("requesting an interpretation", f"the model endpoint returned HTTP {response.status}",
+                             prompt_text=prompt_text, status=response.status)
+        diagnostic = rejection.diagnostic
         request_id = response.headers.get("x-request-id")
         if request_id:
             diagnostic["request_id"] = _diagnostic_text(request_id, secrets, 128)
@@ -151,7 +183,7 @@ class ChatEndpoint:
         for name in ("message", "type", "code", "param"):
             if isinstance(fields.get(name), str):
                 diagnostic[name] = _diagnostic_text(fields[name], secrets, 2048 if name == "message" else 256)
-        message = f"Cannot interpret this Job: the model endpoint returned HTTP {response.status}."
+        message = str(rejection)
         if diagnostic.get("message"):
             message += " Endpoint reason: " + diagnostic["message"][:700]
         else:

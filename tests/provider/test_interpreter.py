@@ -1,10 +1,12 @@
 """Selection, inspection and correction share one explained conversation."""
 
 from copy import deepcopy
+from contextlib import nullcontext
+import errno
 import json
 from time import monotonic
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from secs_inference.provider.chat import ChatEndpoint, InterpreterError
 from secs_inference.provider.input_operations import BrukerSelection, CannotAnalyse, JcampSelection, SourceRef, interpreter_tools
@@ -35,8 +37,101 @@ class ScriptedChat:
         self.requests.append(deepcopy(messages))
         return next(self.turns)
 
+    def failure(self, phase, reason):
+        return ChatEndpoint("https://model.test/chat", "scripted-model", "key").failure(phase, reason)
+
 
 class InterpreterTests(unittest.TestCase):
+    def test_transport_failure_names_model_phase_and_retains_only_safe_evidence(self):
+        phases = (
+            ("connect", "connecting to the model service"),
+            ("request", "sending the interpretation request"),
+            ("getresponse", "waiting for the model service to reply"),
+            ("read1", "reading the model's reply"),
+        )
+        for failing_call, phase in phases:
+            with self.subTest(phase=phase), TemporaryDirectory() as directory:
+                connection = Mock()
+                response = connection.getresponse.return_value
+                response.status, response.headers = 200, {}
+                target = response if failing_call == "read1" else connection
+                getattr(target, failing_call).side_effect = OSError(errno.EIO, "private prompt model-secret")
+                endpoint = ChatEndpoint("https://model.test/chat", "test-model", "model-secret")
+                with (patch("secs_inference.provider.chat.http.client.HTTPSConnection", return_value=connection),
+                      patch("secs_inference.provider.chat.socket_deadline", return_value=nullcontext()),
+                      AttemptStore(Path(directory) / "journal") as store):
+                    api = FakeApi()
+                    ExecutionLoop(api, store, lambda _: endpoint.complete(
+                        [{"role": "user", "content": "private prompt"}], [], deadline=monotonic() + 10,
+                    ), store.diagnose).step()
+                public = json.loads(api.calls[-1])
+                self.assertEqual(public["failure_code"], "interpretation_failed")
+                self.assertIn("test-model", public["failure_message"])
+                self.assertIn(phase, public["failure_message"])
+                self.assertIn("Input/output error", public["failure_message"])
+                self.assertIn("request was not sent" if failing_call == "connect" else "processing this request is unknown", public["failure_message"])
+                private = json.loads(next((Path(directory) / "journal").glob("*.diagnostic.json")).read_bytes())
+                self.assertEqual(private["interpreter"]["phase"], phase)
+                self.assertEqual(private["interpreter"]["errno"], errno.EIO)
+                self.assertEqual(private["interpreter"]["exception_type"], "OSError")
+                for output in (json.dumps(private), public["failure_message"]):
+                    self.assertNotIn("private prompt", output)
+                    self.assertNotIn("model-secret", output)
+                self.assertEqual(connection.connect.call_count, 1)
+
+    def test_socket_timeout_and_interpretation_deadline_are_distinct(self):
+        for now, reason in ((1, "connection timed out"), (11, "interpretation deadline elapsed")):
+            with self.subTest(now=now):
+                connection = Mock()
+                connection.getresponse.side_effect = TimeoutError("private timeout detail")
+                endpoint = ChatEndpoint("https://model.test/chat", "test-model", "key")
+                with (patch("secs_inference.provider.chat.http.client.HTTPSConnection", return_value=connection),
+                      patch("secs_inference.provider.chat.socket_deadline", return_value=nullcontext()),
+                      patch("secs_inference.provider.chat.monotonic", side_effect=[0, now])):
+                    with self.assertRaises(InterpreterError) as caught:
+                        endpoint.complete([], [], deadline=10)
+                self.assertIn(reason, str(caught.exception))
+                self.assertIn("waiting for the model service", str(caught.exception))
+                self.assertNotIn("private timeout detail", str(caught.exception))
+
+    def test_real_deadline_interrupt_reports_whether_headers_or_body_were_pending(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_test_certificates(root)
+            for delays, phase in (({"header_drip_seconds": 0.03}, "waiting for the model service"),
+                                  ({"drip_seconds": 0.03}, "reading the model's reply")):
+                with self.subTest(phase=phase), _tls_server(root, response_body=b"x" * 100, **delays) as server:
+                    endpoint = ChatEndpoint(f"https://localhost:{server.port}/chat", "test-model", "key", root / "ca.pem")
+                    began = monotonic()
+                    with self.assertRaises(InterpreterError) as caught:
+                        endpoint.complete([], [], deadline=began + 0.2)
+                    self.assertLess(monotonic() - began, 1)
+                    self.assertIn("test-model", str(caught.exception))
+                    self.assertIn(phase, str(caught.exception))
+                    self.assertIn("deadline elapsed", str(caught.exception))
+                    self.assertEqual(len(server.requests), 1)
+
+    def test_deadline_eof_is_not_blame_for_a_truncated_model_reply(self):
+        for bytes_remaining in (0, 5):
+            with self.subTest(bytes_remaining=bytes_remaining):
+                connection = Mock()
+                response = connection.getresponse.return_value
+                response.status, response.headers, response.length = 200, {}, bytes_remaining
+                response.read1.return_value = b""
+                endpoint = ChatEndpoint("https://model.test/chat", "test-model", "key")
+                with (patch("secs_inference.provider.chat.http.client.HTTPSConnection", return_value=connection),
+                      patch("secs_inference.provider.chat.socket_deadline", return_value=nullcontext()),
+                      patch("secs_inference.provider.chat.monotonic", side_effect=[0, 11])):
+                    with self.assertRaisesRegex(InterpreterError, "deadline elapsed before the reply could be accepted"):
+                        endpoint.complete([], [], deadline=10)
+
+    def test_failure_model_name_is_bounded_redacted_and_printable(self):
+        endpoint = ChatEndpoint("https://model.test/chat", "test\nmodel-secret " + "x" * 500, "model-secret")
+        error = endpoint.failure("connecting to the model service", "connection refused")
+        self.assertNotIn("model-secret", str(error))
+        self.assertNotIn("\n", str(error))
+        self.assertLessEqual(len(error.diagnostic["model"]), 128)
+
     def test_endpoint_is_asked_to_generate_schema_conforming_tool_arguments(self):
         response = json.dumps({"choices": [{"message": tool("report_input_problem", {"explanation": "No input."})}]}).encode()
         with patch.object(ChatEndpoint, "_post", return_value=response) as post:
@@ -190,8 +285,21 @@ class InterpreterTests(unittest.TestCase):
 
     def test_budget_exhaustion_is_not_an_input_problem(self):
         chat = ScriptedChat(tool("invent_reader", {}))
-        with self.assertRaises(InterpreterError):
+        with self.assertRaises(InterpreterError) as caught:
             self._session(chat, max_turns=1).select()
+        self.assertIn("scripted-model", str(caught.exception))
+        self.assertIn("allowed model turns were exhausted", str(caught.exception))
+        self.assertIn("selecting an input and reader", str(caught.exception))
+
+    def test_expired_interpretation_budget_does_not_call_the_model(self):
+        chat = ScriptedChat()
+        session = self._session(chat)
+        session.deadline = monotonic() - 1
+        with self.assertRaises(InterpreterError) as caught:
+            session.select()
+        self.assertIn("scripted-model", str(caught.exception))
+        self.assertIn("interpretation deadline elapsed", str(caught.exception))
+        self.assertEqual(chat.requests, [])
 
     def test_repair_feedback_distinguishes_unknown_tools_and_text_constraints(self):
         valid = {"source": {"upload_ref": "upload:second", "member": None}, "formula": "C2H6O", "explanation": "Proton spectrum."}

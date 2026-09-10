@@ -9,7 +9,6 @@ from dataclasses import asdict
 import json
 from time import monotonic
 
-from secs_inference.provider.chat import InterpreterError
 from secs_inference.provider.input_operations import (
     INPUT_OPERATIONS, BrukerSelection, CannotAnalyse, JcampSelection, SourceRef,
     interpreter_tools,
@@ -68,9 +67,9 @@ class InterpretationSession:
                 type(call) is not dict or type(call.get("id")) is not str or not call["id"]
                 for call in calls
             ):
-                raise InterpreterError("Cannot interpret this Job: the model returned no identifiable tool call")
+                raise self.chat.failure("checking the model's requested action", "the reply contains no identifiable tool call")
             if len({call["id"] for call in calls}) != len(calls):
-                raise InterpreterError("Cannot interpret this Job: the model repeated a tool call identity")
+                raise self.chat.failure("checking the model's requested action", "the reply repeats a tool call identity")
             if any(
                 call.get("type") != "function" or type(call.get("function")) is not dict
                 or type(call["function"].get("name")) is not str
@@ -79,7 +78,7 @@ class InterpretationSession:
             ):
                 # An invalid carrier cannot be replayed as an assistant message
                 # for correction. Invalid JSON *inside* its text can be repaired.
-                raise InterpreterError("Cannot interpret this Job: the model returned an unusable tool-call envelope")
+                raise self.chat.failure("checking the model's requested action", "the reply does not identify a function and text arguments for each tool call")
             self.messages.append({"role": "assistant", "content": None, "tool_calls": calls})
             if len(calls) != 1:
                 reason = "Choose exactly one tool per turn; no operations were performed."
@@ -108,7 +107,9 @@ class InterpretationSession:
             if not isinstance(action, CannotAnalyse):
                 self.pending_call = call["id"]
             return action
-        raise InterpreterError("Cannot interpret this Job: the interpretation budget ended without a usable decision")
+        reason = ("the interpretation deadline elapsed" if monotonic() >= self.deadline
+                  else "the allowed model turns were exhausted")
+        raise self.chat.failure("selecting an input and reader", reason + " without a usable decision")
 
     def reject(self, reason: str) -> None:
         """Return correctable input feedback to the reader call awaiting its result."""
