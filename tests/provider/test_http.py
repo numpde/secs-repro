@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from secs_inference.provider.network_errors import ConnectionFailed
+from secs_inference.provider.network_errors import ConnectionFailed, network_failure_evidence
 
 from secs_inference.provider.http import (
     HttpResponse,
@@ -90,6 +90,11 @@ class ProviderHttpTests(unittest.TestCase):
 
         self.assertIsInstance(outcome, TlsRejected)
         self.assertIsInstance(outcome.cause, ssl.SSLCertVerificationError)
+        evidence = network_failure_evidence(outcome.cause)
+        self.assertEqual(evidence["tls_library"], outcome.cause.library)
+        self.assertEqual(evidence["tls_reason"], outcome.cause.reason)
+        self.assertEqual(evidence["tls_verify_code"], outcome.cause.verify_code)
+        self.assertNotIn("verify_message", evidence)
         self.assertEqual(server.requests, [])
 
     def test_upload_read_and_capability_post_have_no_content_headers(self):

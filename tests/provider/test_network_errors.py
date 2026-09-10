@@ -2,14 +2,37 @@
 
 import errno
 import http.client
+import json
 import socket
 import ssl
 import unittest
 
-from secs_inference.provider.network_errors import network_failure_reason
+from secs_inference.provider.network_errors import network_failure_evidence, network_failure_reason
+from secs_inference.provider.diagnostics import exception_evidence
 
 
 class NetworkErrorTests(unittest.TestCase):
+    def test_native_tls_identifiers_survive_without_verification_text(self):
+        error = ssl.SSLCertVerificationError(1, "private certificate")
+        error.library = "SSL"
+        error.reason = "CERTIFICATE_VERIFY_FAILED"
+        error.verify_code = 20
+        error.verify_message = "private hostname and certificate detail"
+        for evidence in (network_failure_evidence(error), exception_evidence(error)):
+            self.assertEqual(evidence["tls_library"], "SSL")
+            self.assertEqual(evidence["tls_reason"], "CERTIFICATE_VERIFY_FAILED")
+            self.assertEqual(evidence["tls_verify_code"], 20)
+            self.assertNotIn("private", json.dumps(evidence))
+        empty = network_failure_evidence(ssl.SSLError(1, "private"))
+        self.assertNotIn("tls_library", empty)
+        self.assertNotIn("tls_reason", empty)
+        self.assertNotIn("tls_verify_code", empty)
+        for invalid_code in ("private errno", object()):
+            error.errno = invalid_code
+            for evidence in (network_failure_evidence(error), exception_evidence(error)):
+                self.assertIsNone(evidence["errno"])
+                self.assertNotIn("private", json.dumps(evidence))
+
     def test_known_causes_have_plain_reasons_without_remote_or_secret_text(self):
         cases = (
             (socket.gaierror(-2, "private hostname"), "address could not be resolved"),
