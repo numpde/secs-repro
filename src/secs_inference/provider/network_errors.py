@@ -28,7 +28,19 @@ class ConnectionFailed(OSError):
 
 def network_failure_evidence(error: BaseException) -> dict:
     """Retain safe machine evidence, including every failed resolved destination."""
-    evidence = {"exception_type": type(error).__name__, "errno": getattr(error, "errno", None)}
+    code = getattr(error, "errno", None)
+    evidence = {"exception_type": type(error).__name__, "errno": code if type(code) is int else None}
+    if isinstance(error, ssl.SSLError):
+        # OpenSSL mnemonics are native error identifiers, not exception text
+        # or certificate/hostname-bearing verification messages.
+        for name in ("library", "reason"):
+            value = getattr(error, name, None)
+            if isinstance(value, str):
+                evidence[f"tls_{name}"] = value
+        if isinstance(error, ssl.SSLCertVerificationError):
+            code = getattr(error, "verify_code", None)
+            if type(code) is int:
+                evidence["tls_verify_code"] = code
     if isinstance(error, ConnectionFailed):
         evidence["connection_attempts"] = [
             {"family": _family_name(item.family), "address": item.address[0], "port": item.address[1],

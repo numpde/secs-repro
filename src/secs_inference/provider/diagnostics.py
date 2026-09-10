@@ -8,6 +8,8 @@ import socket
 import ssl
 import traceback
 
+from secs_inference.provider.network_errors import network_failure_evidence
+
 
 def exception_evidence(error: BaseException, *, boundary_details=None) -> dict:
     """Describe failures and their relationships without reading arbitrary payloads.
@@ -41,6 +43,8 @@ def exception_evidence(error: BaseException, *, boundary_details=None) -> dict:
             # OS codes without reading exception-supplied strerror or filenames.
             if current.errno in errno.errorcode and not isinstance(current, (ssl.SSLError, socket.gaierror, socket.herror)):
                 evidence["reason"] = os.strerror(current.errno)
+        if isinstance(current, ssl.SSLError):
+            evidence.update(network_failure_evidence(current))
         if boundary_details is not None:
             evidence.update(boundary_details(current))
         if current.__cause__ is not None:
