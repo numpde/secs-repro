@@ -39,19 +39,31 @@ def run_execution(*, api, config, chat, upload_store, stop, journal):
     def before_start(start):
         nonlocal worker
         check_running()
+        started = monotonic()
+        deadline = started + config.worker_startup_seconds
+        if worker is not None and not worker.stopped:
+            try:
+                worker.check_ready(deadline=deadline, check_running=check_running)
+            except WorkerStopUnconfirmed:
+                raise
+            except (WorkerError, OSError, TimeoutError) as error:
+                if not worker.stopped:
+                    raise
+                _LOG.warning("Job %s: idle scientific worker stopped; loading a replacement before Attempt admission | %s",
+                             start.selected.job_ref, json.dumps(exception_evidence(error, boundary_details=provider_error_details)))
         if worker is None or worker.stopped:
-            started = monotonic()
-            deadline = started + config.worker_startup_seconds
             _LOG.info("Job %s: waiting for scientific worker readiness; startup budget %g seconds",
                       start.selected.job_ref, config.worker_startup_seconds)
             while True:
                 check_running()
+                if monotonic() >= deadline:
+                    raise WorkerError("Scientific worker readiness timed out; the pending start intent is retained for restart recovery")
                 try:
                     worker = WorkerClient(WORKER_SOCKET, startup_deadline=deadline, check_running=check_running)
                     break
                 except (FileNotFoundError, ConnectionRefusedError):
                     if monotonic() >= deadline:
-                        raise WorkerError("Cannot start analysis: the offline worker socket is unavailable; start the worker before restarting the provider") from None
+                        raise WorkerError("Cannot start analysis: the offline worker socket remained unavailable; the pending start intent is retained for restart recovery") from None
                     stop.wait(min(1, max(0, deadline - monotonic())))
             _LOG.info("Job %s: scientific worker readiness confirmed after %.2f seconds",
                       start.selected.job_ref, monotonic() - started)

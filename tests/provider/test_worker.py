@@ -37,16 +37,17 @@ def load_broken_handler():
 
 
 @contextmanager
-def worker_connection(load_handler=load_test_handler):
+def worker_connection(load_handler=load_test_handler, *, sessions=1):
     with TemporaryDirectory() as directory:
         path = Path(directory) / "worker.sock"
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(str(path))
         listener.listen(1)
         def serve():
-            connection, _ = listener.accept()
-            with connection:
-                _serve_session(connection, load_handler)
+            for _ in range(sessions):
+                connection, _ = listener.accept()
+                with connection:
+                    _serve_session(connection, load_handler)
         thread = Thread(target=serve, daemon=True)
         thread.start()
         client = None
@@ -315,6 +316,15 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("exit was confirmed", captured.output[0])
         self.assertIn(f'"errno": {errno.EIO}', captured.output[0])
 
+    def test_readiness_rejection_remains_the_cause_when_stop_is_unconfirmed(self):
+        worker = object.__new__(WorkerClient)
+        with patch.object(worker, "request", return_value={"outcome": "unexpected"}), patch.object(
+                worker, "stop", side_effect=WorkerStopUnconfirmed("Child exit is unconfirmed")):
+            with self.assertRaises(WorkerStopUnconfirmed) as caught:
+                worker.check_ready(deadline=monotonic() + 2)
+        self.assertIsInstance(caught.exception.__context__, WorkerError)
+        self.assertIn("did not confirm readiness", str(caught.exception.__context__))
+
     def _scripted_peer(self, script, exercise):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "peer.sock"
@@ -367,12 +377,29 @@ class WorkerTests(unittest.TestCase):
     def test_normal_requests_share_one_warm_child(self):
         with worker_connection() as worker:
             first = worker.request({"operation": "count"}, deadline=monotonic() + 2)
+            worker.check_ready(deadline=monotonic() + 2)
             second = worker.request({"operation": "count"}, deadline=monotonic() + 2)
             self.assertEqual(first["pid"], second["pid"])
             self.assertEqual(second["calls"], 2)
             worker.stop()
             with self.assertRaises(ProcessLookupError):
                 os.kill(first["pid"], 0)
+
+    def test_idle_child_death_is_detected_before_a_replacement_session_is_used(self):
+        with worker_connection(sessions=2) as worker:
+            path = Path(worker.socket.getpeername())
+            first = worker.request({"operation": "count"}, deadline=monotonic() + 2)
+            os.kill(first["pid"], 9)
+            with self.assertRaises(WorkerError):
+                worker.check_ready(deadline=monotonic() + 3)
+            self.assertTrue(worker.stopped)
+            replacement = WorkerClient(path, startup_deadline=monotonic() + 5)
+            try:
+                second = replacement.request({"operation": "count"}, deadline=monotonic() + 2)
+                self.assertNotEqual(first["pid"], second["pid"])
+                self.assertEqual(second["calls"], 1)
+            finally:
+                replacement.stop()
 
     def test_deadline_reaps_blocked_computation_before_releasing_the_wait(self):
         with worker_connection() as worker:

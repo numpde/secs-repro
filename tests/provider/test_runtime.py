@@ -21,6 +21,7 @@ from secs_inference.provider.http import HttpsEndpoint
 from secs_inference.provider.upload_download import UploadStore
 from secs_inference.provider.main import main, run_provider, _read_regular_file
 from secs_inference.provider.runtime import run_execution, run_services
+from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
 from secs_inference.provider.configuration_error import ConfigurationError
 from test_execution import START
 
@@ -29,6 +30,54 @@ CONFIG = ExecutionConfig("https://model.test/chat", "model", "https://store.test
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_idle_worker_recovery_preserves_admission_and_cleanup_boundaries(self):
+        for failure in ("confirmed", "unknown", "expired"):
+            with self.subTest(failure=failure), TemporaryDirectory() as directory:
+                root = Path(directory) / "current"
+                stop = Event()
+                old = Mock(stopped=False)
+                replacement = Mock(stopped=False)
+                admissions = []
+                clock = [0]
+                def probe(**kwargs):
+                    if failure == "unknown":
+                        raise WorkerStopUnconfirmed("Child stop was not confirmed")
+                    old.stopped = True
+                    if failure == "expired":
+                        clock[0] = CONFIG.worker_startup_seconds + 1
+                        raise TimeoutError("Readiness deadline elapsed")
+                    raise WorkerError("Child exited while idle")
+                old.check_ready.side_effect = probe
+                class Loop:
+                    def __init__(self, jobs, journal, analyse, diagnose, before_start):
+                        self.before_start = before_start
+                    def step(self):
+                        self.before_start(START)
+                        admissions.append(True)
+                        if len(admissions) == 1:
+                            root.mkdir()
+                        else:
+                            stop.set()
+                        return True
+                with patch("secs_inference.provider.runtime.ExecutionLoop", Loop), patch(
+                        "secs_inference.provider.runtime.WorkerClient", side_effect=[old, replacement]) as connect, patch(
+                        "secs_inference.provider.runtime.SOURCE_DIRECTORY", root), patch(
+                        "secs_inference.provider.runtime.monotonic", side_effect=lambda: clock[0]):
+                    if failure == "confirmed":
+                        run_execution(api=Mock(), config=CONFIG, chat=None, upload_store=None, stop=stop, journal=Mock())
+                        self.assertEqual(len(admissions), 2)
+                        self.assertEqual(connect.call_count, 2)
+                        self.assertFalse(root.exists())
+                        replacement.stop.assert_called_once()
+                    else:
+                        expected = WorkerStopUnconfirmed if failure == "unknown" else WorkerError
+                        with self.assertRaises(expected):
+                            run_execution(api=Mock(), config=CONFIG, chat=None, upload_store=None, stop=stop, journal=Mock())
+                        self.assertEqual(len(admissions), 1)
+                        connect.assert_called_once()
+                        self.assertTrue(root.exists())
+                        old.stop.assert_not_called()
+
     def test_concurrent_hello_failure_is_reported_without_replacing_execution_failure(self):
         stop = Event()
         hello_failed = Event()

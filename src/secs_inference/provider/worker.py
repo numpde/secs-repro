@@ -85,6 +85,16 @@ class WorkerClient:
             self.stop()
             raise
 
+    def check_ready(self, *, deadline: float, check_running=None) -> None:
+        """Require a loaded-child reply before admitting another Attempt."""
+        response = self.request({"operation": "ready"}, deadline=deadline, check_active=check_running)
+        if response.get("outcome") != "ready":
+            try:
+                raise WorkerError("The scientific child did not confirm readiness before Attempt admission")
+            except WorkerError:
+                self.stop()
+                raise
+
     def _accept_stop(self, response):
         if response.get("outcome") != "stopped":
             return
@@ -298,6 +308,11 @@ def _child_loop(connection: socket.socket, load_handler) -> None:
         _send(connection, {"outcome": "ready"})
         while True:
             command = _receive(connection)
+            # Answer in the loaded child, not the supervisor: a listening
+            # socket alone cannot establish that scientific state is usable.
+            if command.get("operation") == "ready":
+                _send(connection, {"outcome": "ready"})
+                continue
             try:
                 response = handler(command)
             except Exception as error:
