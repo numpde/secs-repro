@@ -113,14 +113,14 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
     """Decode one closed TOML document; endpoint owners admit their URLs."""
 
     if type(raw) is not bytes or len(raw) > 65_536:
-        raise ValueError("Provider config must be bounded bytes")
+        raise ValueError("Cannot load provider configuration: supply a TOML file of at most 65536 bytes")
     try:
         document = tomllib.loads(raw.decode("utf-8"))
     except (UnicodeError, tomllib.TOMLDecodeError) as error:
         raise ValueError("Provider config is not valid TOML") from error
     _require_fields("top level", document, {"api", "hello", "schema_id"}, {"execution"})
     if document["schema_id"] != SCHEMA_ID:
-        raise ValueError("Provider config schema is unsupported")
+        raise ValueError(f"Cannot load provider configuration: schema_id must be {SCHEMA_ID!r}")
 
     api = _require_table(
         document,
@@ -185,7 +185,15 @@ def _require_fields(
 ) -> None:
     actual = set(value)
     if not required <= actual or actual - required - optional:
-        raise ValueError(f"Provider config {name} has invalid fields")
+        problems = []
+        if required - actual:
+            problems.append("missing required fields: " + ", ".join(sorted(required - actual)))
+        if actual - required - optional:
+            # Only known field names are safe to print: a mistyped TOML key
+            # could itself be a pasted credential or other private value.
+            problems.append(f"{len(actual - required - optional)} unrecognized field(s); allowed fields: "
+                            + ", ".join(sorted(required | optional)))
+        raise ValueError(f"Cannot load provider config {name}: " + "; ".join(problems))
 
 
 def _require_positive_seconds(value: object, name: str) -> None:

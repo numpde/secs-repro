@@ -1,6 +1,7 @@
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -15,6 +16,19 @@ SLIGHT_BLUR = np.asarray([1, 4, 6, 4, 1], dtype=np.float64) / 16
 
 
 class BrukerFrontendReferenceTest(unittest.TestCase):
+    def test_reader_rejections_explain_required_metadata_and_point_count(self):
+        cases = (
+            ({"AXNUC": "13C", "PPARMOD": 0}, np.ones(2), ("AXNUC=1H", "PPARMOD=0")),
+            ({"AXNUC": "1H", "PPARMOD": 0, "SI": 4}, np.ones(2), ("point count", "SI")),
+        )
+        for procs, points, evidence in cases:
+            with self.subTest(evidence=evidence), patch(
+                    "secs_inference.spectra.bruker.ng.bruker.read_pdata", return_value=({"procs": procs}, points)):
+                with self.assertRaises(ValueError) as caught:
+                    read_bruker_pdata("unused")
+            for fact in evidence:
+                self.assertIn(fact, str(caught.exception))
+
     def test_bruker_pdata_matches_frontend_float32_input(self):
         reference = json.loads(FRONTEND_REFERENCE.read_text())
         source = read_bruker_pdata(BRUKER_PDATA)

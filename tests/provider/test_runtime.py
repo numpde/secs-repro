@@ -9,6 +9,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from secs_inference.provider.config import ExecutionConfig, HelloPolicy, ProviderConfig, decode_provider_config
+from secs_inference.provider.credential import parse_provider_credential
+from secs_inference.provider.canonical_json import canonical_json_bytes
 from secs_inference.provider.execution import ProviderStopping
 from secs_inference.provider.attempt_store import AttemptStore
 from secs_inference.provider.job_api import ApiUnavailable
@@ -23,6 +25,39 @@ CONFIG = ExecutionConfig("https://model.test/chat", "model", "https://store.test
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_credential_errors_explain_expected_input_without_echoing_key_material(self):
+        document = {
+            "algorithm": "ed25519", "credential_ref": "credential:test",
+            "principal_ref": "provider:test", "profile": "run",
+            "schema_id": "nmr.provider.private_signing_credential.v1",
+            "public_key_spki_der_b64": "private-key-content",
+            "private_key_pkcs8_pem": "private-key-content",
+        }
+        for bad, expected in (
+            (document | {"algorithm": "private-key-content"}, "algorithm='ed25519'"),
+            (document, "expected a Base64 DER public key and an unencrypted PEM private key"),
+            (document | {"private-key-content": "secret"}, "exactly these API-issued fields"),
+        ):
+            with self.subTest(expected=expected):
+                raw = canonical_json_bytes(bad) + b"\n"
+                output = StringIO()
+                with patch("secs_inference.provider.main.run_provider", side_effect=lambda: parse_provider_credential(raw)), patch("sys.stderr", output):
+                    self.assertEqual(main(), 1)
+                self.assertIn(expected, output.getvalue())
+                self.assertNotIn("private-key-content", output.getvalue())
+
+    def test_config_errors_name_missing_fields_without_echoing_unknown_keys_or_values(self):
+        raw = Path("/workspace/config/provider.toml.example").read_bytes()
+        broken = raw.replace(b"interpreter_model =", b"private_pasted_key =")
+        output = StringIO()
+        with patch("secs_inference.provider.main.run_provider", side_effect=lambda: decode_provider_config(broken)), patch("sys.stderr", output):
+            self.assertEqual(main(), 1)
+        message = output.getvalue()
+        self.assertIn("missing required fields: interpreter_model", message)
+        self.assertIn("1 unrecognized field", message)
+        self.assertIn("allowed fields:", message)
+        self.assertNotIn("private_pasted_key", message)
+
     def test_feed_outage_reports_its_reason_without_claiming_an_admitted_attempt(self):
         stop = Event()
         api = Mock(provider_ref="provider:test")
@@ -87,7 +122,7 @@ class RuntimeTests(unittest.TestCase):
                     with patch("secs_inference.provider.main.run_provider", side_effect=lambda: configure(path)), patch("sys.stderr", output):
                         self.assertEqual(main(), 1)
                     self.assertIn(f"Cannot load {role} TLS trust from {path}", output.getvalue())
-                    self.assertIn("SSLError" if malformed else "No such file or directory", output.getvalue())
+                    self.assertIn("could not load the CA certificates" if malformed else "No such file or directory", output.getvalue())
                     self.assertNotIn("private-invalid-certificate-content", output.getvalue())
 
     def test_reused_worker_cleanup_precedes_next_remote_admission(self):
