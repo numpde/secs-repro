@@ -341,6 +341,7 @@ def _tls_server(
     declared_response_length: int | str | None = None,
     drip_seconds: float | None = None,
     header_drip_seconds: float | None = None,
+    reply_delay_seconds: float = 0,
 ):
     requests: list[dict[str, str | bytes]] = []
     headers = (
@@ -367,6 +368,7 @@ def _tls_server(
                     "body": self.rfile.read(length),
                 }
             )
+            sleep(reply_delay_seconds)
             self.send_response(status)
             for name, value in headers.items():
                 self.send_header(name, value)
