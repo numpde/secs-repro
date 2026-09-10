@@ -224,7 +224,7 @@ class ExecutionTests(unittest.TestCase):
                     store.save(retained)
                     ready = []
                     ExecutionLoop(FakeApi(), store, lambda _: REPORT, lambda *_: None,
-                                  lambda: ready.append(True)).step()
+                                  lambda start: ready.append(True)).step()
                     self.assertEqual(ready, [True] if retained is START else [])
 
     def test_lost_publication_replays_identical_bytes_without_reanalysing(self):

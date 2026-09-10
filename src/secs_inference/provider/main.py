@@ -147,7 +147,7 @@ def load_chat_endpoint(execution: ExecutionConfig) -> ChatEndpoint:
 def main() -> int:
     """Turn a terminal failure into a nonzero exit without remote error text."""
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%S%z")
     try:
         run_provider()
     except Exception as error:

@@ -21,12 +21,44 @@ from secs_inference.provider.upload_download import UploadStore
 from secs_inference.provider.main import main, run_provider, _read_regular_file
 from secs_inference.provider.runtime import run_execution, run_services
 from secs_inference.provider.configuration_error import ConfigurationError
+from test_execution import START
 
 
 CONFIG = ExecutionConfig("https://model.test/chat", "model", "https://store.test")
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_concurrent_hello_failure_is_reported_without_replacing_execution_failure(self):
+        stop = Event()
+        hello_failed = Event()
+        config = ProviderConfig(None, HelloPolicy("Test", "Description", 60, 1), CONFIG)
+        execution_failure = RuntimeError("private-execution")
+        original_cause = OSError(errno.EIO, "private-original")
+        execution_failure.__cause__ = original_cause
+        hello_failure = ApiError("Provider hello returned HTTP 400 for request hello-request")
+        hello_failure.__cause__ = ValueError("private-hello")
+        def fail_hello(**kwargs):
+            hello_failed.set()
+            raise hello_failure
+        def fail_execution(**kwargs):
+            self.assertTrue(hello_failed.wait(2))
+            raise execution_failure
+        with TemporaryDirectory() as directory, patch("secs_inference.provider.runtime.JOURNAL_DIRECTORY", Path(directory) / "journal"), \
+             patch("secs_inference.provider.runtime.publish_hello_until_stopped", side_effect=fail_hello), \
+             patch("secs_inference.provider.runtime.run_execution", side_effect=fail_execution), \
+             self.assertLogs("secs_inference.provider.runtime", level="ERROR") as captured:
+            with self.assertRaises(RuntimeError) as caught:
+                run_services(api=Mock(), prepared=None, config=config, chat=None, upload_store=None, stop=stop)
+            with AttemptStore(Path(directory) / "journal"):
+                pass
+        self.assertIs(caught.exception, execution_failure)
+        self.assertIs(execution_failure.__cause__, original_cause)
+        text = "\n".join(captured.output)
+        self.assertIn("hello also failed", text)
+        self.assertIn("hello-request", text)
+        self.assertIn("HTTP 400", text)
+        self.assertNotIn("private-", text)
+
     def test_malformed_endpoint_configuration_is_actionable_without_echoing_values(self):
         for endpoint in ("interpreter", "upload store"):
             for url in (42, "https://[private-invalid", "https://model.test:private-port", "https://model.test:70000", "https://model.test:0"):
@@ -108,7 +140,8 @@ class RuntimeTests(unittest.TestCase):
         api = Mock(provider_ref="provider:test")
         def unavailable(*args, **kwargs):
             stop.set()
-            raise ApiUnavailable("Provider API request to list available Jobs returned HTTP 503 for request request-test")
+            raise ApiUnavailable("Provider API request to list available Jobs returned HTTP 503 for request request-test",
+                                 diagnostic={"operation": "list available Jobs", "delivery": "response_received", "status": 503})
         api.request.side_effect = unavailable
         with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as journal:
             with self.assertLogs("secs_inference.provider.runtime", level="WARNING") as logged:
@@ -117,6 +150,8 @@ class RuntimeTests(unittest.TestCase):
             message = " ".join(logged.output)
             self.assertIn("any pending Attempt state", message)
             self.assertIn("list available Jobs returned HTTP 503 for request request-test", message)
+            self.assertIn(f"in {CONFIG.poll_seconds:g} seconds", message)
+            self.assertIn('"delivery": "response_received"', message)
 
     def test_startup_stderr_distinguishes_missing_and_unreadable_inputs(self):
         for kind, reason in (("missing", "No such file or directory"), ("denied", "Permission denied"),
@@ -181,7 +216,7 @@ class RuntimeTests(unittest.TestCase):
                     def __init__(self, jobs, journal, analyse, diagnose, before_start):
                         self.before_start = before_start
                     def step(self):
-                        self.before_start()
+                        self.before_start(START)
                         admissions.append(True)
                         if len(admissions) == 1:
                             root.mkdir()

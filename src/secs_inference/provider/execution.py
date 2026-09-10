@@ -41,7 +41,7 @@ class AttemptNoLongerActive(RuntimeError):
 class ExecutionLoop:
     """The journal owns recovery facts; work never restarts from ActiveAttempt."""
 
-    def __init__(self, api, journal, analyse, diagnose, before_start=lambda: None):
+    def __init__(self, api, journal, analyse, diagnose, before_start=lambda start: None):
         self.api, self.journal = api, journal
         self.analyse, self.diagnose = analyse, diagnose
         self.before_start = before_start
@@ -61,28 +61,35 @@ class ExecutionLoop:
             if isinstance(retained, ActiveAttempt):
                 self._recover_active(retained)
                 return True
+            _LOG.info("Job %s: recovering retained start intent %s; prior admission may be unconfirmed",
+                      retained.selected.job_ref, retained.provider_attempt_key)
         else:
             selected = self.api.next_job()
             if selected is None:
                 return False
             retained = StartPending(self.api.provider_ref, selected, token_hex(16))
             self.journal.save(retained)
+            _LOG.info("Job %s: start intent %s retained; preparing for admission", selected.job_ref, retained.provider_attempt_key)
         # Readiness and leftover-source cleanup precede remote admission. If
         # either fails, the retained start key still identifies the same retry.
-        self.before_start()
+        self.before_start(retained)
+        _LOG.info("Job %s: sending retained start intent %s", retained.selected.job_ref, retained.provider_attempt_key)
         try:
             active, state = self.api.start(retained)
         except ApiError as error:
             if error.status == 404:
-                self.journal.clear()
                 _LOG.info("Job %s is no longer available for Attempt admission", retained.selected.job_ref)
+                self.journal.clear()
                 return True
             raise
         if state != "in_progress":
-            self.journal.clear()
             _LOG.info("Start replay found Attempt %s already %s", active.execution_attempt_ref, state)
+            self.journal.clear()
             return True
+        _LOG.info("Job %s: API confirmed Attempt %s in progress; local active-state retention is pending",
+                  retained.selected.job_ref, active.execution_attempt_ref)
         self.journal.save(active)
+        _LOG.info("Attempt %s: active state retained; beginning analysis", active.execution_attempt_ref)
         # Journal uncertainty must escape, never become an Attempt failure.
         # Only analysis and report construction belong to this translation.
         failed_report = None
@@ -109,8 +116,8 @@ class ExecutionLoop:
         except AnalysisCancelled:
             terminal = fail_command(active, "job_cancelled", "Analysis stopped because the Job was cancelled.")
         except AttemptNoLongerActive as ended:
-            self.journal.clear()
             _LOG.info("Scientific work stopped after observing Attempt %s already %s", active.execution_attempt_ref, ended.state)
+            self.journal.clear()
             return True
         except Exception as error:
             self.diagnose(active, error)
@@ -130,12 +137,12 @@ class ExecutionLoop:
         except ApiError as error:
             if error.status != 404:
                 raise
-            self.journal.clear()
             _LOG.warning("Retained Attempt %s is no longer visible; no publication is claimed", active.execution_attempt_ref)
+            self.journal.clear()
             return
         if snapshot.state != "in_progress":
-            self.journal.clear()
             _LOG.info("Interrupted Attempt %s is already %s", active.execution_attempt_ref, snapshot.state)
+            self.journal.clear()
             return
         terminal = fail_command(active, "provider_interrupted", "Analysis was interrupted by a provider restart; it was not rerun.")
         self.journal.save(terminal)
@@ -143,6 +150,7 @@ class ExecutionLoop:
 
     def _publish(self, terminal):
         """Retain exact bytes across outages, even after the work deadline."""
+        _LOG.info("Attempt %s: sending retained %s command", terminal.active.execution_attempt_ref, terminal.operation)
         try:
             self.api.publish(terminal)
         except ApiError as error:
@@ -162,12 +170,15 @@ class ExecutionLoop:
                         "Inspect this Attempt before continuing; its command remains retained."
                     ) from error
                 reason = "the Attempt expired"
-            self.journal.clear()
             _LOG.warning("Stopped retrying %s publication for Attempt %s: %s. Delivery was not confirmed.",
                          "result" if terminal.operation == "complete" else "failure report",
                          terminal.active.execution_attempt_ref, reason)
+            self.journal.clear()
             return
+        _LOG.info("Attempt %s: %s publication confirmed; journal retirement is pending",
+                  terminal.active.execution_attempt_ref, terminal.operation)
         self.journal.clear()
+        _LOG.info("Attempt %s: journal retirement confirmed", terminal.active.execution_attempt_ref)
 
 
 def _public_failure(error: Exception) -> tuple[str, str]:
