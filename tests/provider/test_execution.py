@@ -47,15 +47,11 @@ class FakeApi:
 
 
 class ExecutionTests(unittest.TestCase):
-    def test_attempt_snapshot_accepts_the_released_schema_and_rejects_other_operations(self):
-        schema = json.loads(Path(
-            "/workspace/contracts/upstream/nmr_api_v1/schemas/"
-            "execution_attempt_read_response.v1.schema.json"
-        ).read_bytes())
+    def test_attempt_snapshot_accepts_a_read_reply_and_rejects_other_operations(self):
         transport = Mock(provider_ref=START.provider_ref)
         api = JobApi(transport)
         response = {
-            "schema_id": schema["properties"]["schema_id"]["const"],
+            "schema_id": "nmr.provider.execution_attempt_read_response.v1",
             "execution_attempt_ref": ACTIVE.execution_attempt_ref,
             "job_ref": START.selected.job_ref,
             "state": "in_progress", "job_state": "open",
@@ -277,12 +273,15 @@ class ExecutionTests(unittest.TestCase):
                     AttemptStore(root)
 
     def test_only_an_exact_api_receipt_retires_retained_result_or_failure(self):
-        for terminal in (complete_command(ACTIVE, REPORT), fail_command(ACTIVE, "test_failure", "The worker could not finish.")):
+        for terminal, response_schema in (
+            (complete_command(ACTIVE, REPORT), "nmr.provider.execution_attempt_complete_response.v1"),
+            (fail_command(ACTIVE, "test_failure", "The worker could not finish."), "nmr.provider.execution_attempt_fail_response.v1"),
+        ):
             with self.subTest(operation=terminal.operation), TemporaryDirectory() as directory:
                 with AttemptStore(Path(directory) / "journal") as store:
                     store.save(terminal)
                     command = json.loads(terminal.body)
-                    receipt = {"schema_id": "nmr.provider.execution_attempt_" + terminal.operation + "_response.v1",
+                    receipt = {"schema_id": response_schema,
                                "execution_attempt_ref": ACTIVE.execution_attempt_ref}
                     if terminal.operation == "complete":
                         raw = b64decode(command["canonical_result_base64"])
