@@ -19,6 +19,15 @@ NTUPLES_FRONTEND_REFERENCE = FIXTURES / "frontend/ethylvinylether.json"
 
 
 class JcampFrontendReferenceTest(unittest.TestCase):
+    def test_unknown_data_class_names_supported_formats_without_echoing_file_text(self):
+        contents = JCAMP_SPECTRUM.read_text()
+        self.assertIn("##DATA CLASS=XYDATA", contents)
+        contents = contents.replace("##DATA CLASS=XYDATA", "##DATA CLASS=private-source-marker", 1)
+        with self.assertRaises(ValueError) as caught:
+            read_jcamp_spectrum(self._write_variant(contents))
+        self.assertIn("DATA CLASS must identify XYDATA or NTUPLES", str(caught.exception))
+        self.assertNotIn("private-source-marker", str(caught.exception).lower())
+
     def test_processed_xydata_matches_frontend_float32_input(self):
         reference = json.loads(FRONTEND_REFERENCE.read_text())
         source = read_jcamp_spectrum(JCAMP_SPECTRUM)
