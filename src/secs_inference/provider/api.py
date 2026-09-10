@@ -23,11 +23,13 @@ from secs_inference.provider.http import (
     TlsRejected,
     ResponseRejected,
     RequestUnavailable,
+    RequestDelivery,
 )
 from secs_inference.provider.signing import sign_request
 from secs_inference.provider.operations import Operation
 from secs_inference.provider.job_api import ApiError, ApiUnavailable
 from secs_inference.provider.response_json import response_object
+from secs_inference.provider.network_errors import network_failure_reason
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,13 +66,24 @@ class ProviderApi:
         outcome = send_provider_request(endpoint=self.endpoint, request=signed, operation=operation)
         operation_name = f"Provider API request to {operation.action}"
         if isinstance(outcome, TlsRejected):
-            raise ApiError(f"Cannot finish {operation_name}: TLS verification failed before the request was sent")
+            raise ApiError(f"Cannot finish {operation_name}: {network_failure_reason(outcome.cause)}; the request was not sent")
         if isinstance(outcome, ResponseRejected):
-            raise ApiError(f"Cannot confirm the outcome of the {operation_name}: HTTP {outcome.status} response was rejected ({outcome.reason.value})")
+            raise ApiError(f"Cannot confirm the outcome of the {operation_name}: HTTP {outcome.status} response was rejected because {outcome.reason.explanation}",
+                           diagnostic={"operation": operation.action, "status": outcome.status, "response_rejection": outcome.reason.value})
         if isinstance(outcome, RequestUnavailable):
-            evidence = (f"HTTP {outcome.status} did not yield an admitted API response" if outcome.status is not None
-                        else f"request delivery was {outcome.delivery.value.replace('_', ' ')}")
-            raise ApiUnavailable(f"Cannot confirm the outcome of the {operation_name}: {evidence}")
+            delivery = {
+                RequestDelivery.NOT_SENT: "the request was not sent",
+                RequestDelivery.POSSIBLE: "the request may have reached the API; its outcome is unknown",
+                RequestDelivery.RESPONSE_RECEIVED: "a reply arrived, but the API outcome could not be confirmed",
+            }[outcome.delivery]
+            reason = (f"HTTP {outcome.status} did not yield an admitted API response" if outcome.status is not None
+                      else network_failure_reason(outcome.cause) if outcome.cause is not None
+                      else "no complete response was received")
+            raise ApiUnavailable(f"Cannot confirm the outcome of the {operation_name}: {reason}; {delivery}", diagnostic={
+                "operation": operation.action, "delivery": outcome.delivery.value,
+                "status": outcome.status, "exception_type": type(outcome.cause).__name__ if outcome.cause is not None else None,
+                "errno": getattr(outcome.cause, "errno", None),
+            })
         if outcome.status == 200:
             return outcome.body
         request = " without a request ID" if outcome.request_id is None else f" for request {outcome.request_id}"

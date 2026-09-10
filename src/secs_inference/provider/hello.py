@@ -83,6 +83,15 @@ class HelloReceiptRejection(Enum):
     INVALID_FIELD = "invalid_field"
     RESPONSE_DRIFT = "response_drift"
 
+    @property
+    def explanation(self) -> str:
+        return {
+            self.INVALID_JSON: "the reply is not a readable JSON object",
+            self.INVALID_SHAPE: "the reply must contain exactly schema_id, provider_ref, and accepted_at",
+            self.INVALID_FIELD: "the reply requires the hello response schema, a valid provider reference, and an accepted_at timestamp",
+            self.RESPONSE_DRIFT: "the reply identifies a different provider from this deployment",
+        }[self]
+
 
 @dataclass(frozen=True, slots=True)
 class HelloReceiptRejected:

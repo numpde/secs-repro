@@ -23,6 +23,10 @@ class AnalysisCancelled(RuntimeError):
     """An observed Job cancellation requests a policy stop, not a model failure."""
 
 
+class WorkDeadlineExceeded(TimeoutError):
+    """An execution boundary supplies a public-safe phase and stop outcome."""
+
+
 class AttemptNoLongerActive(RuntimeError):
     """A point read already proved the Attempt terminal before work stopped."""
 
@@ -163,6 +167,8 @@ def _public_failure(error: Exception) -> tuple[str, str]:
                              (UploadResponseError, "api_access_failed"), (WorkerError, "scientific_execution_failed")):
         if isinstance(error, error_type):
             return code, str(error)
+    if isinstance(error, WorkDeadlineExceeded):
+        return "work_deadline_exceeded", str(error)
     if isinstance(error, TimeoutError):
         return "work_deadline_exceeded", "Analysis stopped because the provider's work deadline elapsed."
     return "provider_execution_failed", "Analysis could not finish because of an internal provider error; the operator can inspect diagnostics recorded for this Attempt."

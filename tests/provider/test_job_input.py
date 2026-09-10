@@ -38,6 +38,12 @@ def _response(exact: bytes, **changes: object) -> bytes:
 
 
 class JobInputTests(unittest.TestCase):
+    def test_schema_rejection_names_the_required_reply_without_echoing_remote_text(self):
+        with self.assertRaises(JobInputError) as caught:
+            parse_job_input_read_response(_response(b"x", schema_id="private remote text"), selected=_selected(b"x"))
+        self.assertIn("nmr.provider.job_input.read.response.v1", str(caught.exception))
+        self.assertNotIn("private remote text", str(caught.exception))
+
     def assert_rejected(
         self,
         response: bytes,

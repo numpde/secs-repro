@@ -19,6 +19,8 @@ from secs_inference.provider.attempt_state import ActiveAttempt, AttemptState, S
 from secs_inference.provider.canonical_json import canonical_json_bytes
 from secs_inference.provider.chat import InterpreterError
 from secs_inference.provider.job_input import selected_job_input
+from secs_inference.provider.job_api import ApiError
+from secs_inference.provider.upload_download import UploadDownloadError
 from secs_inference.provider.response_json import response_object
 
 
@@ -110,6 +112,12 @@ class AttemptStore:
         if isinstance(error, InterpreterError):
             if error.diagnostic is not None:
                 document["interpreter"] = error.diagnostic
+        elif isinstance(error, ApiError):
+            if error.diagnostic is not None:
+                document["api"] = error.diagnostic
+        elif isinstance(error, UploadDownloadError):
+            if error.diagnostic is not None:
+                document["upload"] = error.diagnostic
         elif hasattr(error, "diagnostic"):
             document["worker"] = error.diagnostic
         if hasattr(error, "analysis_context"):

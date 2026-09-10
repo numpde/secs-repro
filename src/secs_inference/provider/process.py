@@ -20,9 +20,11 @@ from secs_inference.provider.http import (
     HttpOutcome,
     HttpResponse,
     RequestUnavailable,
+    RequestDelivery,
     ResponseRejected,
     TlsRejected,
 )
+from secs_inference.provider.network_errors import network_failure_reason
 
 
 _LOG = logging.getLogger(__name__)
@@ -83,19 +85,21 @@ def _evidence_message(evidence: HttpOutcome | HelloReceiptRejected) -> str:
         )
         return f"HTTP {evidence.status}{request}"
     if type(evidence) is HelloReceiptRejected:
-        return f"HTTP 200 receipt was rejected: {evidence.reason.value}"
+        return f"HTTP 200 did not confirm hello acceptance: {evidence.reason.explanation}"
     if type(evidence) is ResponseRejected:
         return (
-            f"HTTP response was rejected: {evidence.reason.value}; "
+            f"HTTP response was rejected: {evidence.reason.explanation}; "
             f"status={evidence.status}"
         )
     if type(evidence) is TlsRejected:
-        return "TLS verification failed before the request was sent"
+        return f"{network_failure_reason(evidence.cause)}; the request was not sent"
     if type(evidence) is RequestUnavailable:
         if evidence.status is not None:
             return f"HTTP {evidence.status} ended without a complete API response"
-        delivery = evidence.delivery.value.replace("_", " ")
-        if evidence.cause is None:
-            return f"request delivery was {delivery}"
-        return f"request delivery was {delivery}; {type(evidence.cause).__name__}"
+        delivery = {
+            RequestDelivery.NOT_SENT: "the hello request was not sent",
+            RequestDelivery.POSSIBLE: "the hello request may have reached the API; acceptance is unknown",
+            RequestDelivery.RESPONSE_RECEIVED: "a reply arrived, but hello acceptance could not be confirmed",
+        }[evidence.delivery]
+        return delivery if evidence.cause is None else f"{delivery}; {network_failure_reason(evidence.cause)}"
     raise AssertionError("Remote provider evidence has no operator description")

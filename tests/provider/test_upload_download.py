@@ -1,7 +1,7 @@
 """A parser receives only verified bytes; credentials stay at the store."""
 
 from base64 import b64encode
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from secs_inference.provider.job_upload import UploadReadCapability
 from secs_inference.provider.upload_download import (
@@ -38,6 +38,43 @@ def downloaded_upload(**arguments):
 
 
 class UploadDownloadTests(unittest.TestCase):
+    def test_transfer_failures_report_phase_and_do_not_publish_unverified_files(self):
+        phases = (
+            ("connect", "connecting to the upload store"),
+            ("endheaders", "requesting the selected Upload's bytes"),
+            ("getresponse", "waiting for the upload store to reply"),
+            ("copy", "receiving the selected Upload's bytes"),
+        )
+        for failing_call, phase in phases:
+            with self.subTest(phase=phase), TemporaryDirectory() as directory:
+                root = Path(directory)
+                sources = root / "sources"
+                sources.mkdir()
+                connection = Mock()
+                failure = ConnectionResetError("private bearer and URL")
+                if failing_call != "copy":
+                    getattr(connection, failing_call).side_effect = failure
+                capability = UploadReadCapability("upload:sha256:" + "a" * 64, 1, "sha256:" + "b" * 64,
+                    datetime(2099, 1, 1, tzinfo=UTC), "https://store.test/upload/v1/uploads/upload:sha256:" + "a" * 64 + "/bytes", "private-bearer")
+                with (AttemptStore(root / "journal") as journal,
+                      patch("secs_inference.provider.upload_download.http.client.HTTPSConnection", return_value=connection),
+                      patch("secs_inference.provider.upload_download.socket_deadline", return_value=nullcontext()),
+                      patch("secs_inference.provider.upload_download._copy_verified", side_effect=failure)):
+                    api = FakeApi()
+                    ExecutionLoop(api, journal, lambda _: download_upload(store=UploadStore("https://store.test", 100),
+                        capability=capability, directory=sources, deadline=monotonic() + 10), journal.diagnose).step()
+                result = json.loads(api.calls[-1])
+                self.assertEqual(result["failure_code"], "input_access_failed")
+                self.assertIn(phase, result["failure_message"])
+                self.assertIn("connection was reset", result["failure_message"])
+                self.assertIn("no verified file", result["failure_message"])
+                private = json.loads(next((root / "journal").glob("*.diagnostic.json")).read_bytes())
+                self.assertEqual(private["upload"]["phase"], phase)
+                self.assertNotIn("worker", private)
+                self.assertNotIn("private bearer", json.dumps(private))
+                self.assertNotIn("private-bearer", result["failure_message"])
+                self.assertEqual(list(sources.iterdir()), [])
+
     @classmethod
     def setUpClass(cls):
         cls.directory = TemporaryDirectory()

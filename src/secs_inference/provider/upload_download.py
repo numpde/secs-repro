@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from secs_inference.provider.job_upload import UploadReadCapability
 from secs_inference.provider.socket_deadline import socket_deadline
+from secs_inference.provider.network_errors import network_failure_reason
 
 
 _LOG = logging.getLogger(__name__)
@@ -24,9 +25,10 @@ _LOG = logging.getLogger(__name__)
 class UploadDownloadError(RuntimeError):
     """Byte access failed; status, when present, informs acquisition recovery."""
 
-    def __init__(self, reason: str, *, status: int | None = None):
+    def __init__(self, reason: str, *, status: int | None = None, diagnostic: dict | None = None):
         super().__init__(f"Cannot obtain Upload bytes: {reason}")
         self.status = status
+        self.diagnostic = diagnostic
 
 
 class UploadUnavailable(UploadDownloadError):
@@ -65,7 +67,8 @@ class UploadStore:
         try:
             context = ssl.create_default_context(cafile=self.ca_file)
         except OSError as error:
-            reason = type(error).__name__ if isinstance(error, ssl.SSLError) or error.errno is None else os.strerror(error.errno)
+            reason = ("TLS could not load the CA certificates" if isinstance(error, ssl.SSLError) else
+                      os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason")
             raise ValueError(f"Cannot load Upload store TLS trust from {self.ca_file or 'the system CA store'}: {reason}") from error
         object.__setattr__(self, "tls_context", context)
 
@@ -115,13 +118,13 @@ def download_upload(
         try:
             path.unlink()
         except OSError as cleanup:
-            _LOG.error("Cannot confirm removal of an incomplete private input file (%s); it may remain in the Attempt workspace", type(cleanup).__name__)
+            _LOG.error("%s; the incomplete file may remain in the Attempt workspace", _file_error("removal", cleanup))
         raise
 
 
 def _file_error(operation: str, error: OSError) -> UploadDownloadError:
     """Keep safe OS evidence at local file effects, never around network I/O."""
-    reason = os.strerror(error.errno) if error.errno is not None else type(error).__name__
+    reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
     return UploadDownloadError(f"private input file {operation} failed ({reason})")
 
 
@@ -133,24 +136,33 @@ def _transfer(store, capability, target, output, deadline):
         store.host, store.port, context=store.tls_context,
         timeout=min(store.connect_timeout_seconds, remaining),
     )
+    phase = "connecting to the upload store"
     try:
         connection.connect()
         with socket_deadline(connection.sock, deadline):
+            phase = "requesting the selected Upload's bytes"
             connection.putrequest("GET", target, skip_host=True, skip_accept_encoding=True)
             connection.putheader("Host", store.authority)
             connection.putheader("Authorization", "Bearer " + capability.capability)
             connection.endheaders()
+            phase = "waiting for the upload store to reply"
             response = connection.getresponse()
             try:
+                phase = "receiving the selected Upload's bytes"
                 _copy_verified(response, capability, output)
             finally:
                 response.close()
-    except ssl.SSLError:
-        raise UploadDownloadError("the store TLS connection could not be verified or established") from None
+    except ssl.SSLError as error:
+        raise UploadDownloadError(f"{phase}: {network_failure_reason(error)}", diagnostic={
+            "phase": phase, "exception_type": type(error).__name__, "errno": error.errno,
+        }) from None
     except (OSError, http.client.HTTPException) as error:
-        # Low-level HTTP exceptions may include a remote line. Only the class
-        # is useful here; neither a bearer nor response text belongs in reports.
-        raise UploadUnavailable(f"the transfer did not finish ({type(error).__name__})") from None
+        # Exception text may contain a bearer or remote response line. Describe
+        # only known transport causes and keep structured evidence private.
+        reason = "the acquisition deadline elapsed" if monotonic() >= deadline else network_failure_reason(error)
+        raise UploadUnavailable(f"{phase}: {reason}; no verified file was made available for analysis", diagnostic={
+            "phase": phase, "exception_type": type(error).__name__, "errno": getattr(error, "errno", None),
+        }) from None
     finally:
         connection.close()
 

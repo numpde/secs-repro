@@ -69,7 +69,7 @@ def parse_job_input_read_response(
     if type(document) is not dict:
         raise JobInputError("the API response is not a JSON object")
     if document.get("schema_id") != JOB_INPUT_READ_RESPONSE_SCHEMA_ID:
-        raise JobInputError("the API response uses a different schema")
+        raise JobInputError(f"the API response does not declare the required {JOB_INPUT_READ_RESPONSE_SCHEMA_ID!r} schema")
     if document.get("job_ref") != selected.job_ref:
         raise JobInputError("the API response names another Job")
 

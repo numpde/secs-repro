@@ -10,8 +10,7 @@ from time import monotonic, sleep
 
 from secs_inference.provider.input_operations import BrukerSelection, CannotAnalyse, JcampSelection
 from secs_inference.provider.interpreter import InterpretationSession
-from secs_inference.provider.chat import InterpreterError
-from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive, ProviderStopping
+from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive, ProviderStopping, WorkDeadlineExceeded
 from secs_inference.provider.job_api import ApiError, ApiUnavailable
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.upload_download import UploadDownloadError, UploadUnavailable, download_upload
@@ -52,7 +51,7 @@ class AttemptSources:
         try:
             self.directory.mkdir(mode=0o700)
         except OSError as error:
-            reason = os.strerror(error.errno) if error.errno is not None else type(error).__name__
+            reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
             raise UploadDownloadError(f"the private source workspace could not be created ({reason})") from error
         return self
 
@@ -65,7 +64,8 @@ class AttemptSources:
         except OSError as cleanup:
             # Admission retries leftovers before accepting another Attempt.
             # Cleanup cannot undo a completed analysis or explain its failure.
-            _LOG.error("Cannot remove the private source workspace (%s); cleanup is required before another Attempt", type(cleanup).__name__)
+            reason = os.strerror(cleanup.errno) if cleanup.errno is not None else "an operating-system error occurred without a recorded reason"
+            _LOG.error("Cannot remove the private source workspace: %s; cleanup is required before another Attempt", reason)
         return False
 
     def acquire(self, ref: str, *, deadline: float | None = None) -> Path:
@@ -86,7 +86,7 @@ class AttemptSources:
             )
         for attempt in range(3):
             if monotonic() >= deadline:
-                raise TimeoutError("The input acquisition deadline has elapsed")
+                raise WorkDeadlineExceeded("Analysis stopped while obtaining the selected Upload: the input acquisition deadline elapsed")
             try:
                 grant = self._capability(upload)
                 path = download_upload(store=self.store, capability=grant, directory=self.directory, deadline=deadline)
@@ -99,7 +99,7 @@ class AttemptSources:
                     raise
                 remaining = deadline - monotonic()
                 if remaining <= 0:
-                    raise TimeoutError("The input acquisition deadline has elapsed") from error
+                    raise WorkDeadlineExceeded("Analysis stopped while obtaining the selected Upload: the input acquisition deadline elapsed") from error
                 if attempt == 2:
                     raise
                 sleep(min(1, remaining))
@@ -141,7 +141,7 @@ def run_analysis(
             except UploadSetChanged as change:
                 return {"access_change": str(change), "current_uploads": [asdict(item) for item in change.uploads]}
             except TimeoutError as error:
-                raise InterpreterError("Cannot interpret this Job: the interpretation deadline elapsed during input inspection") from error
+                raise chat.failure("inspecting an input", "the interpretation deadline elapsed") from error
             if response["outcome"] == "input_rejected":
                 raise InputReadError(response["reason"])
             return response["facts"]
@@ -200,6 +200,7 @@ def run_analysis(
 
 
 def _worker_request(worker, sources, request, deadline, check_running=lambda: None):
+    operation = "input inspection" if request["operation"] == "inspect" else "SECS structure search"
     def check_active():
         check_running()
         try:
@@ -214,17 +215,29 @@ def _worker_request(worker, sources, request, deadline, check_running=lambda: No
             # Cancellation stops work by provider policy; the API still permits
             # its failure report. Merely closing the Job does not stop this Attempt.
             raise AnalysisCancelled("Scientific work stopped because the Job was cancelled")
-    response = worker.request(request | {"files": {ref: str(item.path) for ref, item in sources.acquired.items()},
-                                        "directory": str(sources.directory)}, deadline=deadline,
-                              check_active=check_active)
+    try:
+        response = worker.request(request | {"files": {ref: str(item.path) for ref, item in sources.acquired.items()},
+                                            "directory": str(sources.directory)}, deadline=deadline,
+                                  check_active=check_active)
+    except TimeoutError as error:
+        # WorkerClient confirms child exit before propagating a timeout.
+        # Preserve that fact and the controller-owned phase in the public result.
+        raise WorkDeadlineExceeded(f"Analysis stopped during {operation}: the operation deadline elapsed and the scientific worker was stopped") from error
+    except WorkerStopUnconfirmed:
+        raise
+    except WorkerError as cause:
+        error = WorkerError(f"Cannot finish {operation}: {cause}")
+        if hasattr(cause, "diagnostic"):
+            error.diagnostic = cause.diagnostic
+        raise error from cause
     if response.get("outcome") == "failed":
-        error = WorkerError("Scientific analysis could not finish because the worker encountered an internal error; inspect this Attempt's operator diagnostics")
+        error = WorkerError(f"Cannot finish {operation}: the SECS worker encountered an internal error; inspect this Attempt's operator diagnostics")
         error.diagnostic = response
         worker.stop()
         raise error
     if response.get("outcome") not in {"inspected", "input_rejected", "analysed"}:
         worker.stop()
-        raise WorkerError("Scientific analysis returned an unrecognized operation outcome")
+        raise WorkerError(f"Cannot confirm {operation}: the SECS worker returned an unrecognized operation outcome")
     return response
 
 

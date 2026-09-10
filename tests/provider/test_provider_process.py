@@ -35,6 +35,17 @@ class StopAfterWaits(Event):
 
 
 class ProviderProcessTests(unittest.TestCase):
+    def test_invalid_receipt_explains_why_registration_is_unconfirmed(self):
+        # Exercise receipt admission and the operator log together, rather than
+        # manufacturing a rejection that may not match the received reply.
+        with patch("secs_inference.provider.api.send_hello_request", return_value=HttpResponse(200, None, b'{"secret-extra": "private-response"}')), self.assertLogs("secs_inference.provider.process", level="WARNING") as logs:
+            publish_hello_until_stopped(api=self.api, prepared=self.prepared, policy=self.policy, stop=StopAfterWaits(1))
+        message = " ".join(logs.output)
+        self.assertIn("did not confirm hello acceptance", message)
+        self.assertIn("exactly schema_id, provider_ref, and accepted_at", message)
+        self.assertNotIn("secret-extra", message)
+        self.assertNotIn("private-response", message)
+
     def setUp(self):
         self.api = ProviderApi(
             HttpsEndpoint("https://api.example.test", "web", 1, 1),
@@ -105,7 +116,8 @@ class ProviderProcessTests(unittest.TestCase):
             ["WARNING", "INFO"],
         )
         self.assertIn("unavailable", logs.output[0])
-        self.assertIn("BadStatusLine", logs.output[0])
+        self.assertIn("unreadable HTTP response", logs.output[0])
+        self.assertIn("acceptance is unknown", logs.output[0])
         self.assertNotIn("peer-controlled-marker", logs.output[0])
         self.assertIn("recovered", logs.output[1])
 
