@@ -20,6 +20,7 @@ from secs_inference.provider.signing import (
 from secs_inference.provider.operations import Operation
 from secs_inference.provider.socket_deadline import socket_deadline
 from secs_inference.provider.connection import https_connection
+from secs_inference.provider.configuration_error import ConfigurationError
 
 
 _VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,128}")
@@ -133,7 +134,7 @@ class HttpsEndpoint:
         except OSError as error:
             reason = ("TLS could not load the CA certificates" if isinstance(error, ssl.SSLError) else
                       os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason")
-            raise ValueError(f"Cannot load Provider API TLS trust from {ca_file or 'the system CA store'}: {reason}") from error
+            raise ConfigurationError(f"Cannot load Provider API TLS trust from {ca_file or 'the system CA store'}: {reason}") from error
         context.check_hostname = True
         context.verify_mode = ssl.CERT_REQUIRED
         object.__setattr__(self, "authority", authority)
@@ -152,14 +153,14 @@ def validate_endpoint_config(
 
     prefix = "https://"
     if type(origin) is not str or not origin.startswith(prefix):
-        raise ValueError("Provider API origin must be canonical HTTPS")
+        raise ConfigurationError("Provider API origin must be canonical HTTPS")
     if not is_canonical_https_authority(origin[len(prefix) :]):
-        raise ValueError("Provider API origin must contain a canonical authority")
+        raise ConfigurationError("Provider API origin must contain a canonical authority")
     if (
         type(expected_topology) is not str
         or expected_topology not in {"dev-local", "dev", "web"}
     ):
-        raise ValueError("Provider API topology must be dev-local, dev, or web")
+        raise ConfigurationError("Provider API topology must be dev-local, dev, or web")
     _require_positive_finite_timeout(
         connect_timeout_seconds,
         name="Provider API connect timeout",
@@ -392,4 +393,4 @@ def _set_remaining_socket_timeout(
 
 def _require_positive_finite_timeout(value: object, *, name: str) -> None:
     if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
-        raise ValueError(f"{name} must be a positive finite number of seconds")
+        raise ConfigurationError(f"{name} must be a positive finite number of seconds")

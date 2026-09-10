@@ -18,6 +18,7 @@ from secs_inference.provider.job_upload import UploadReadCapability
 from secs_inference.provider.socket_deadline import socket_deadline
 from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
 from secs_inference.provider.connection import https_connection
+from secs_inference.provider.configuration_error import ConfigurationError
 
 
 _LOG = logging.getLogger(__name__)
@@ -50,27 +51,35 @@ class UploadStore:
     tls_context: ssl.SSLContext = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
-        parsed = urlsplit(self.origin)
+        rule = "Upload store origin must be one credential-free HTTPS origin with a valid port (1-65535)"
+        if type(self.origin) is not str:
+            raise ConfigurationError(rule)
+        try:
+            parsed = urlsplit(self.origin)
+            port = parsed.port
+        except ValueError as error:
+            raise ConfigurationError(rule) from error
         if (
             not self.origin.isascii() or re.search(r"[\x00-\x20\x7f]", self.origin)
             or parsed.scheme != "https" or not parsed.hostname
             or parsed.username is not None or parsed.password is not None
-            or self.origin != "https://" + parsed.netloc
+            or self.origin != "https://" + parsed.netloc or port == 0
         ):
-            raise ValueError("Upload store origin must be one credential-free HTTPS origin")
+            raise ConfigurationError(rule)
         if (type(self.max_upload_bytes) is not int or self.max_upload_bytes <= 0
+                or type(self.connect_timeout_seconds) not in (int, float)
                 or not math.isfinite(self.connect_timeout_seconds)
-                or self.connect_timeout_seconds <= 0 or parsed.port == 0):
-            raise ValueError("Upload byte limit and connection timeout must be positive")
+                or self.connect_timeout_seconds <= 0):
+            raise ConfigurationError("Upload byte limit and connection timeout must be positive")
         object.__setattr__(self, "authority", parsed.netloc)
         object.__setattr__(self, "host", parsed.hostname)
-        object.__setattr__(self, "port", parsed.port or 443)
+        object.__setattr__(self, "port", port or 443)
         try:
             context = ssl.create_default_context(cafile=self.ca_file)
         except OSError as error:
             reason = ("TLS could not load the CA certificates" if isinstance(error, ssl.SSLError) else
                       os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason")
-            raise ValueError(f"Cannot load Upload store TLS trust from {self.ca_file or 'the system CA store'}: {reason}") from error
+            raise ConfigurationError(f"Cannot load Upload store TLS trust from {self.ca_file or 'the system CA store'}: {reason}") from error
         object.__setattr__(self, "tls_context", context)
 
 

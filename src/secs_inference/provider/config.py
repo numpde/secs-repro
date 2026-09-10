@@ -9,6 +9,7 @@ from pathlib import Path
 import tomllib
 
 from secs_inference.provider.http import HttpsEndpoint, validate_endpoint_config
+from secs_inference.provider.configuration_error import ConfigurationError
 
 
 SCHEMA_ID = "secs.provider.config.v1"
@@ -39,15 +40,15 @@ class ExecutionConfig:
     def __post_init__(self):
         if self.interpreter_reasoning_effort is not None and (
                 not isinstance(self.interpreter_reasoning_effort, str) or not self.interpreter_reasoning_effort.strip()):
-            raise ValueError("Interpreter reasoning effort must be nonempty text when configured")
+            raise ConfigurationError("Interpreter reasoning effort must be nonempty text when configured")
         for name in ("interpreter_use_private_ca", "upload_store_use_private_ca"):
             if type(getattr(self, name)) is not bool:
-                raise ValueError(f"Execution {name} must be a boolean")
+                raise ConfigurationError(f"Execution {name} must be a boolean")
         for name in ("work_seconds", "interpretation_seconds", "worker_startup_seconds", "poll_seconds"):
             _require_positive_seconds(getattr(self, name), "execution " + name)
         for name in ("max_turns", "max_upload_bytes", "max_total_bytes"):
             if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
-                raise ValueError(f"Execution {name} must be a positive integer")
+                raise ConfigurationError(f"Execution {name} must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,14 +114,14 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
     """Decode one closed TOML document; endpoint owners admit their URLs."""
 
     if type(raw) is not bytes or len(raw) > 65_536:
-        raise ValueError("Cannot load provider configuration: supply a TOML file of at most 65536 bytes")
+        raise ConfigurationError("Cannot load provider configuration: supply a TOML file of at most 65536 bytes")
     try:
         document = tomllib.loads(raw.decode("utf-8"))
     except (UnicodeError, tomllib.TOMLDecodeError) as error:
-        raise ValueError("Provider config is not valid TOML") from error
+        raise ConfigurationError("Provider config is not valid TOML") from error
     _require_fields("top level", document, {"api", "hello", "schema_id"}, {"execution"})
     if document["schema_id"] != SCHEMA_ID:
-        raise ValueError(f"Cannot load provider configuration: schema_id must be {SCHEMA_ID!r}")
+        raise ConfigurationError(f"Cannot load provider configuration: schema_id must be {SCHEMA_ID!r}")
 
     api = _require_table(
         document,
@@ -130,7 +131,7 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
     )
     use_private_ca = api.get("use_private_ca", False)
     if type(use_private_ca) is not bool:
-        raise ValueError("Provider API private-CA selection must be a boolean")
+        raise ConfigurationError("Provider API private-CA selection must be a boolean")
     endpoint = EndpointConfig(
         origin=api["origin"],
         expected_topology=api["topology"],
@@ -172,7 +173,7 @@ def _require_table(
 ) -> dict[str, object]:
     value = document[name]
     if type(value) is not dict:
-        raise ValueError(f"Provider config [{name}] must be a table")
+        raise ConfigurationError(f"Provider config [{name}] must be a table")
     _require_fields(name, value, required, optional)
     return value
 
@@ -193,9 +194,9 @@ def _require_fields(
             # could itself be a pasted credential or other private value.
             problems.append(f"{len(actual - required - optional)} unrecognized field(s); allowed fields: "
                             + ", ".join(sorted(required | optional)))
-        raise ValueError(f"Cannot load provider config {name}: " + "; ".join(problems))
+        raise ConfigurationError(f"Cannot load provider config {name}: " + "; ".join(problems))
 
 
 def _require_positive_seconds(value: object, name: str) -> None:
     if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
-        raise ValueError(f"{name} must be positive finite seconds")
+        raise ConfigurationError(f"{name} must be positive finite seconds")

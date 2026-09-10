@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.serialization import (
 
 from secs_inference.provider.canonical_json import parse_canonical_json_bytes
 from secs_inference.provider.signing import validate_credential_ref
+from secs_inference.provider.configuration_error import ConfigurationError
 
 
 PROVIDER_SIGNING_CREDENTIAL_MAX_BYTES = 16_384
@@ -49,15 +50,15 @@ def parse_provider_credential(raw: bytes) -> ProviderCredential:
     """Verify the closed document, key encodings, and public/private pairing."""
 
     if type(raw) is not bytes or len(raw) > PROVIDER_SIGNING_CREDENTIAL_MAX_BYTES:
-        raise ValueError(f"Cannot load provider signing credential: expected a file of at most {PROVIDER_SIGNING_CREDENTIAL_MAX_BYTES} bytes")
+        raise ConfigurationError(f"Cannot load provider signing credential: expected a file of at most {PROVIDER_SIGNING_CREDENTIAL_MAX_BYTES} bytes")
     if not raw.endswith(b"\n") or raw.endswith(b"\n\n"):
-        raise ValueError("Provider signing credential must end with one newline")
+        raise ConfigurationError("Provider signing credential must end with one newline")
     try:
         document = parse_canonical_json_bytes(raw[:-1])
     except (TypeError, ValueError) as error:
-        raise ValueError("Provider signing credential is not canonical JSON") from error
+        raise ConfigurationError("Provider signing credential is not canonical JSON") from error
     if type(document) is not dict or set(document) != _FIELDS:
-        raise ValueError("Provider signing credential must contain exactly these API-issued fields: " + ", ".join(sorted(_FIELDS)))
+        raise ConfigurationError("Provider signing credential must contain exactly these API-issued fields: " + ", ".join(sorted(_FIELDS)))
     profile = document["profile"]
     provider_ref = document["principal_ref"]
     credential_ref = document["credential_ref"]
@@ -67,16 +68,16 @@ def parse_provider_credential(raw: bytes) -> ProviderCredential:
         or type(profile) is not str
         or profile not in {"dev-local", "dev", "run"}
     ):
-        raise ValueError(f"Provider signing credential requires schema_id={_SCHEMA_ID!r}, algorithm='ed25519', and profile 'dev-local', 'dev', or 'run'")
+        raise ConfigurationError(f"Provider signing credential requires schema_id={_SCHEMA_ID!r}, algorithm='ed25519', and profile 'dev-local', 'dev', or 'run'")
     try:
         validate_provider_ref(provider_ref)
         validate_credential_ref(credential_ref)
     except (TypeError, ValueError) as error:
-        raise ValueError("Provider signing credential principal_ref or credential_ref is not a supported reference") from error
+        raise ConfigurationError("Provider signing credential principal_ref or credential_ref is not a supported reference") from error
     encoded_public_key = document["public_key_spki_der_b64"]
     private_key_text = document["private_key_pkcs8_pem"]
     if type(encoded_public_key) is not str or type(private_key_text) is not str:
-        raise ValueError("Provider signing credential public and private key fields must be text")
+        raise ConfigurationError("Provider signing credential public and private key fields must be text")
     try:
         public_der = b64decode(encoded_public_key, validate=True)
         if b64encode(public_der).decode("ascii") != encoded_public_key:
@@ -87,19 +88,19 @@ def parse_provider_credential(raw: bytes) -> ProviderCredential:
             password=None,
         )
     except (TypeError, UnicodeError, UnsupportedAlgorithm, ValueError) as error:
-        raise ValueError(
+        raise ConfigurationError(
             "Provider signing credential keys could not be decoded: expected a Base64 DER public key and an unencrypted PEM private key"
         ) from error
     if not isinstance(public_key, Ed25519PublicKey) or not isinstance(
         private_key,
         Ed25519PrivateKey,
     ):
-        raise ValueError("Provider signing credential must contain Ed25519 keys")
+        raise ConfigurationError("Provider signing credential must contain Ed25519 keys")
     if private_key.public_key().public_bytes(
         Encoding.DER,
         PublicFormat.SubjectPublicKeyInfo,
     ) != public_der:
-        raise ValueError("Provider signing credential keys do not match")
+        raise ConfigurationError("Provider signing credential keys do not match")
     return ProviderCredential(
         provider_ref,
         credential_ref,
@@ -111,4 +112,4 @@ def validate_provider_ref(value: object) -> None:
     """Admit the provider identity grammar issued in API credentials."""
 
     if type(value) is not str or _PROVIDER_REF.fullmatch(value) is None:
-        raise ValueError("Provider identity requires a valid provider reference")
+        raise ConfigurationError("Provider identity requires a valid provider reference")

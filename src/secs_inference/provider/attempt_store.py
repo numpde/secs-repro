@@ -23,6 +23,11 @@ from secs_inference.provider.upload_download import UploadDownloadError
 from secs_inference.provider.response_json import response_object
 from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.worker import WorkerError
+from secs_inference.provider.configuration_error import ConfigurationError
+
+
+class JournalError(RuntimeError):
+    """An owned journal failure; no later API effect is authorized by uncertain storage."""
 
 
 class AttemptStore:
@@ -42,7 +47,7 @@ class AttemptStore:
         try:
             status = os.fstat(self._directory_fd)
             if status.st_uid != os.getuid() or status.st_mode & 0o077:
-                raise RuntimeError("Cannot own the Attempt journal: its directory must be private to the provider user")
+                raise JournalError("Cannot own the Attempt journal: its directory must be private to the provider user")
             self._lock_fd = os.open("owner.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=self._directory_fd)
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BaseException:
@@ -71,14 +76,14 @@ class AttemptStore:
             return None
         with os.fdopen(descriptor, "rb") as stream:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-                raise RuntimeError("Cannot recover the Attempt: the journal record is not a regular file")
+                raise JournalError("Cannot recover the Attempt: the journal record is not a regular file")
             raw = stream.read(3 * 1024 * 1024 + 1)
         if len(raw) > 3 * 1024 * 1024:
-            raise RuntimeError("Cannot recover the Attempt: the journal record exceeds its byte limit")
+            raise JournalError("Cannot recover the Attempt: the journal record exceeds its byte limit")
         try:
             return _decode(response_object(raw))
         except (ValueError, TypeError, KeyError, RecursionError):
-            raise RuntimeError("Cannot recover the Attempt: the retained journal record is unreadable") from None
+            raise JournalError("Cannot recover the Attempt: the retained journal record is unreadable") from None
 
     def save(self, state: AttemptState) -> None:
         """Confirm file and directory durability before the next external effect."""
@@ -137,16 +142,18 @@ class AttemptStore:
 
     def _require_usable(self):
         if not self._usable or self._directory_fd < 0:
-            raise RuntimeError("The Attempt journal has no confirmed writable state; restart and recover before further API effects")
+            raise JournalError("The Attempt journal has no confirmed writable state; restart and recover before further API effects")
 
 
 def provider_error_details(error: BaseException) -> dict:
     """Select only diagnostics whose exception boundary owns their disclosure."""
+    if isinstance(error, (ConfigurationError, JournalError)):
+        return {"message": str(error)}
     for kind, name in ((InterpreterError, "interpreter"), (ApiError, "api"),
                        (UploadDownloadError, "upload"), (WorkerError, "worker")):
         if isinstance(error, kind):
             diagnostic = getattr(error, "diagnostic", None)
-            return {} if diagnostic is None else {name: diagnostic}
+            return {"message": str(error), **({name: diagnostic} if diagnostic is not None else {})}
     return {}
 
 

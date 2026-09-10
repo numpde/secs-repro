@@ -3,6 +3,7 @@
 from pathlib import Path
 from io import StringIO
 import errno
+import json
 from tempfile import TemporaryDirectory
 from threading import Event
 import unittest
@@ -13,18 +14,62 @@ from secs_inference.provider.credential import parse_provider_credential
 from secs_inference.provider.canonical_json import canonical_json_bytes
 from secs_inference.provider.execution import ProviderStopping
 from secs_inference.provider.attempt_store import AttemptStore
-from secs_inference.provider.job_api import ApiUnavailable
+from secs_inference.provider.job_api import ApiError, ApiUnavailable
 from secs_inference.provider.chat import ChatEndpoint
 from secs_inference.provider.http import HttpsEndpoint
 from secs_inference.provider.upload_download import UploadStore
 from secs_inference.provider.main import main, run_provider, _read_regular_file
 from secs_inference.provider.runtime import run_execution, run_services
+from secs_inference.provider.configuration_error import ConfigurationError
 
 
 CONFIG = ExecutionConfig("https://model.test/chat", "model", "https://store.test")
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_malformed_endpoint_configuration_is_actionable_without_echoing_values(self):
+        for endpoint in ("interpreter", "upload store"):
+            for url in (42, "https://[private-invalid", "https://model.test:private-port", "https://model.test:70000", "https://model.test:0"):
+                with self.subTest(endpoint=endpoint, url=url):
+                    def configure():
+                        return ChatEndpoint(url, "model", "key") if endpoint == "interpreter" else UploadStore(url, 100)
+                    output = StringIO()
+                    with patch("secs_inference.provider.main.run_provider", side_effect=configure), patch("sys.stderr", output):
+                        self.assertEqual(main(), 1)
+                    message = output.getvalue()
+                    self.assertIn(endpoint, message.lower())
+                    self.assertIn("HTTPS", message)
+                    self.assertIn("1-65535", message)
+                    self.assertNotIn("unexpected internal error", message)
+                    self.assertNotIn("private-", message)
+
+    def test_terminal_output_keeps_causal_evidence_without_exception_text_or_notes(self):
+        def failed_runtime():
+            try:
+                raise OSError(errno.ENOSPC, "private-source-data", "/private-input")
+            except OSError:
+                error = RuntimeError("private-wrapper-data")
+                error.add_note("private-note-data")
+                raise error from None
+        output = StringIO()
+        with patch("secs_inference.provider.main.run_provider", side_effect=failed_runtime), patch("sys.stderr", output):
+            self.assertEqual(main(), 1)
+        message = output.getvalue()
+        self.assertIn("unexpected internal error", message)
+        evidence = json.loads(message.splitlines()[1])
+        self.assertEqual(evidence["context"]["errno"], errno.ENOSPC)
+        self.assertEqual(evidence["context"]["exception_type"], "OSError")
+        self.assertNotIn("private-", message)
+
+    def test_owned_configuration_explanation_is_not_lost_with_hidden_notes(self):
+        error = ConfigurationError("Cannot configure the provider: interpreter_model is missing")
+        error.add_note("private-note-data")
+        output = StringIO()
+        with patch("secs_inference.provider.main.run_provider", side_effect=error), patch("sys.stderr", output):
+            self.assertEqual(main(), 1)
+        self.assertIn("interpreter_model is missing", output.getvalue())
+        self.assertNotIn("private-note", output.getvalue())
+
     def test_credential_errors_explain_expected_input_without_echoing_key_material(self):
         document = {
             "algorithm": "ed25519", "credential_ref": "credential:test",
@@ -182,7 +227,7 @@ class RuntimeTests(unittest.TestCase):
     def test_hello_failure_stops_execution_and_is_relayed_after_journal_release(self):
         stop = Event()
         config = ProviderConfig(None, HelloPolicy("Test", "Description", 60, 1), CONFIG)
-        safe = RuntimeError("The Provider API rejected hello: HTTP 400 for request request-test")
+        safe = ApiError("The Provider API rejected hello: HTTP 400 for request request-test")
         safe.__cause__ = ValueError("secret marker must stay hidden")
         output = StringIO()
         with TemporaryDirectory() as directory, patch("secs_inference.provider.runtime.JOURNAL_DIRECTORY", Path(directory) / "journal"):
