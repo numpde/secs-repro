@@ -70,8 +70,10 @@ class ProviderApi:
             raise ApiError(f"Cannot finish {operation_name}: {network_failure_reason(outcome.cause)}; the request was not sent",
                            diagnostic={"operation": operation.action, **network_failure_evidence(outcome.cause)})
         if isinstance(outcome, ResponseRejected):
-            raise ApiError(f"Cannot confirm the outcome of the {operation_name}: HTTP {outcome.status} response was rejected because {outcome.reason.explanation}",
-                           diagnostic={"operation": operation.action, "status": outcome.status, "response_rejection": outcome.reason.value})
+            request = f" for request {outcome.request_id}" if outcome.request_id is not None else " without a request ID"
+            raise ApiError(f"Cannot confirm the outcome of the {operation_name}: HTTP {outcome.status} response was rejected because {outcome.reason.explanation}{request}",
+                           diagnostic={"operation": operation.action, "status": outcome.status,
+                                       "request_id": outcome.request_id, "response_rejection": outcome.reason.value})
         if isinstance(outcome, RequestUnavailable):
             delivery = {
                 RequestDelivery.NOT_SENT: "the request was not sent",
@@ -82,8 +84,11 @@ class ProviderApi:
                       else "no complete response was received")
             if outcome.cause is not None:
                 reason += "; " + network_failure_reason(outcome.cause)
+            if outcome.request_id is not None:
+                reason += f"; response request ID {outcome.request_id}"
             raise ApiUnavailable(f"Cannot confirm the outcome of the {operation_name}: {reason}; {delivery}", diagnostic={
                 "operation": operation.action, "delivery": outcome.delivery.value,
+                "request_id": outcome.request_id,
                 "status": outcome.status, **(network_failure_evidence(outcome.cause) if outcome.cause is not None else {}),
             })
         if outcome.status == 200:

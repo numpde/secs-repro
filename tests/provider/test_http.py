@@ -204,6 +204,33 @@ class ProviderHttpTests(unittest.TestCase):
                     ),
                 )
 
+    def test_response_correlation_survives_rejection_and_incomplete_delivery(self):
+        cases = (
+            (200, "text/plain", 4, ResponseRejected),
+            (200, "application/json", 5, RequestUnavailable),
+            (503, "application/problem+json", 5, RequestUnavailable),
+            (502, "text/html", 4, RequestUnavailable),
+        )
+        for status, media_type, length, outcome_type in cases:
+            with self.subTest(status=status, media_type=media_type):
+                headers = _valid_response_headers() | {"Content-Type": media_type, "X-Request-ID": "request-test"}
+                with _tls_server(self.certificate_directory, status=status, response_headers=headers,
+                                 response_body=b"four", declared_response_length=length) as server:
+                    outcome = self._send(server.port)
+                self.assertIs(type(outcome), outcome_type)
+                self.assertEqual(outcome.request_id, "request-test")
+                self.assertEqual(outcome.status, status)
+
+    def test_rejected_response_never_exposes_unsafe_or_ambiguous_request_ids(self):
+        for overrides in ({"X-Request-ID": "private\tvalue"}, {"X-Request-ID": "x" * 129},
+                          {"X-Request-ID": "first", "x-request-id": "second"}):
+            with self.subTest(overrides=overrides):
+                headers = _valid_response_headers() | overrides | {"Content-Type": "text/plain"}
+                with _tls_server(self.certificate_directory, response_headers=headers) as server:
+                    outcome = self._send(server.port)
+                self.assertIsInstance(outcome, ResponseRejected)
+                self.assertIsNone(outcome.request_id)
+
     def test_short_response_preserves_the_incomplete_exchange(self):
         with _tls_server(
             self.certificate_directory,

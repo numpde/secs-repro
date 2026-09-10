@@ -1,7 +1,7 @@
 """Closing an HTTP resource cannot invent a failed send or destroy its cause."""
 
 from base64 import b64encode
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from email.message import Message
 import errno
@@ -36,6 +36,25 @@ def exchange(body, headers):
 
 
 class HttpCleanupTests(unittest.TestCase):
+    def test_deadline_at_context_exit_preserves_received_response_correlation(self):
+        @contextmanager
+        def elapsed_deadline(*_args):
+            yield
+            raise TimeoutError("deadline elapsed")
+
+        endpoint = HttpsEndpoint("https://api.test", "web", 1, 1)
+        connection = Mock()
+        with patch("secs_inference.provider.http.https_connection", return_value=connection), \
+             patch("secs_inference.provider.http.socket_deadline", elapsed_deadline), \
+             patch("secs_inference.provider.http._exchange", return_value=HttpResponse(503, "request-test", b"{}")):
+            outcome = send_hello_request(endpoint=endpoint, request=_signed_hello(endpoint.authority, b"{}"))
+        self.assertIsInstance(outcome, RequestUnavailable)
+        self.assertEqual(outcome.delivery, RequestDelivery.RESPONSE_RECEIVED)
+        self.assertEqual(outcome.status, 503)
+        self.assertEqual(outcome.request_id, "request-test")
+        self.assertIsInstance(outcome.cause, TimeoutError)
+        connection.close.assert_called_once()
+
     def assert_cleanup_evidence(self, captured, operation):
         self.assertEqual(len(captured.output), 2)
         for line, role, number in zip(captured.output, ("response", "connection"), (errno.EIO, errno.EBADF)):
