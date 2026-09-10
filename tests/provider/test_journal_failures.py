@@ -16,6 +16,59 @@ from test_execution import ACTIVE, START, REPORT, FakeApi
 
 
 class JournalFailureTests(unittest.TestCase):
+    def test_failed_close_is_never_retried_against_a_reused_descriptor(self):
+        with TemporaryDirectory() as directory:
+            store = AttemptStore(Path(directory) / "journal")
+            lock, journal_fd = store._lock_fd, store._directory_fd
+            close = os.close
+            reused = []
+            closed = []
+            def fail_after_release(descriptor):
+                closed.append(descriptor)
+                close(descriptor)
+                if descriptor == lock:
+                    reused.append(os.open("/dev/null", os.O_RDONLY))
+                    raise OSError(errno.EIO, "private-close")
+            try:
+                with patch("secs_inference.provider.attempt_store.os.close", side_effect=fail_after_release):
+                    with self.assertRaises(JournalError) as caught:
+                        store.close()
+                    store.close()
+                self.assertEqual(closed, [lock, journal_fd])
+                self.assertEqual(reused, [lock])
+                os.fstat(reused[0])
+                self.assertIn("ownership lock", str(caught.exception))
+                self.assertEqual(caught.exception.__cause__.errno, errno.EIO)
+                with self.assertRaises(JournalError):
+                    store.load()
+            finally:
+                for descriptor in reused:
+                    close(descriptor)
+
+    def test_multiple_release_failures_remain_visible_without_replacing_primary_failure(self):
+        with TemporaryDirectory() as directory:
+            store = AttemptStore(Path(directory) / "journal")
+            close = os.close
+            def fail_close(descriptor):
+                close(descriptor)
+                raise OSError(errno.EIO, "private-close")
+            primary = WorkerStopUnconfirmed("Worker exit was not confirmed")
+            original_context = EOFError("private-receive")
+            primary.__context__ = original_context
+            with patch("secs_inference.provider.attempt_store.os.close", side_effect=fail_close) as closing, \
+                 self.assertLogs("secs_inference.provider.attempt_store", level="ERROR") as captured:
+                with self.assertRaises(WorkerStopUnconfirmed) as caught:
+                    with store:
+                        raise primary
+            self.assertIs(caught.exception, primary)
+            self.assertIs(primary.__context__, original_context)
+            self.assertEqual(closing.call_count, 2)
+            text = "\n".join(captured.output)
+            self.assertIn("ownership lock", text)
+            self.assertIn("journal directory", text)
+            self.assertIn("ExceptionGroup", text)
+            self.assertNotIn("private-", text)
+
     def test_staging_sync_failure_preserves_previous_record_and_stops_effects(self):
         with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as store:
             store.save(START)
