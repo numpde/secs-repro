@@ -8,6 +8,8 @@ record survived instead of guessing whether the previous write committed.
 from base64 import b64decode, b64encode
 from dataclasses import asdict
 import fcntl
+import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -24,6 +26,9 @@ from secs_inference.provider.response_json import response_object
 from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.worker import WorkerError
 from secs_inference.provider.configuration_error import ConfigurationError
+
+
+_LOG = logging.getLogger(__name__)
 
 
 class JournalError(RuntimeError):
@@ -88,15 +93,20 @@ class AttemptStore:
     def save(self, state: AttemptState) -> None:
         """Confirm file and directory durability before the next external effect."""
         self._require_usable()
-        raw = canonical_json_bytes(_encode(state))
+        document = _encode(state)
+        raw = canonical_json_bytes(document)
         staging = None
+        phase = "creating the staging file"
         try:
             with NamedTemporaryFile(dir=self.directory, prefix=".attempt-", delete=False) as stream:
                 staging = Path(stream.name)
+                phase = "writing and syncing the staging file"
                 stream.write(raw)
                 stream.flush()
                 os.fsync(stream.fileno())
+            phase = "replacing the retained record"
             os.replace(staging, "attempt.json", dst_dir_fd=self._directory_fd)
+            phase = "syncing the journal directory"
             os.fsync(self._directory_fd)
         except BaseException as error:
             self._usable = False
@@ -104,7 +114,12 @@ class AttemptStore:
                 try:
                     staging.unlink(missing_ok=True)
                 except OSError as cleanup:
-                    error.add_note(f"The incomplete journal staging file could not be removed ({type(cleanup).__name__}).")
+                    _LOG.error("Cannot remove the staging file for journal %s after a failed %s write: %s",
+                               self.directory, document["stage"], json.dumps(exception_evidence(cleanup)))
+            if isinstance(error, OSError):
+                reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
+                raise JournalError(f"Cannot retain Attempt journal state {document['stage']!r} while {phase}: {reason}. "
+                                   "Durability is unconfirmed; restart and recover before further API effects.") from error
             raise
 
     def diagnose(self, active: ActiveAttempt, error: Exception) -> None:
@@ -123,22 +138,36 @@ class AttemptStore:
         """Create private Attempt evidence once, without replacing earlier facts."""
         self._require_usable()
         name = active.execution_attempt_ref.removeprefix("execution_attempt:sha256:") + f".{kind}.json"
-        descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self._directory_fd)
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(canonical_json_bytes(document))
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.fsync(self._directory_fd)
+        raw = canonical_json_bytes(document)
+        phase = "creating the evidence file"
+        try:
+            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self._directory_fd)
+            with os.fdopen(descriptor, "wb") as stream:
+                phase = "writing and syncing the evidence file"
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            phase = "syncing the journal directory"
+            os.fsync(self._directory_fd)
+        except OSError as error:
+            self._usable = False
+            reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
+            raise JournalError(f"Cannot confirm {kind} retention for Attempt {active.execution_attempt_ref} while {phase}: {reason}. "
+                               "Evidence retention is unconfirmed; Attempt settlement has stopped.") from error
 
     def clear(self) -> None:
         """Retire only a reconciled obligation; this is not cancellation."""
         self._require_usable()
+        phase = "removing the retained record"
         try:
             os.unlink("attempt.json", dir_fd=self._directory_fd)
+            phase = "syncing the journal directory"
             os.fsync(self._directory_fd)
-        except OSError:
+        except OSError as error:
             self._usable = False
-            raise
+            reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
+            raise JournalError(f"Cannot confirm Attempt journal retirement while {phase}: {reason}. "
+                               "Retirement durability is unconfirmed; restart and reconcile before further API effects.") from error
 
     def _require_usable(self):
         if not self._usable or self._directory_fd < 0:

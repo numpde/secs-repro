@@ -1,6 +1,7 @@
 """Settle one durable Attempt before admitting another Job."""
 
 import logging
+import json
 from secrets import token_hex
 
 from secs_inference.provider.attempt_state import ActiveAttempt, StartPending, TerminalPending
@@ -10,6 +11,8 @@ from secs_inference.provider.job_input import JobInputError
 from secs_inference.provider.job_upload import UploadResponseError
 from secs_inference.provider.upload_download import UploadDownloadError
 from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
+from secs_inference.provider.diagnostics import exception_evidence
+from secs_inference.provider.attempt_store import JournalError, provider_error_details
 
 
 _LOG = logging.getLogger(__name__)
@@ -51,7 +54,7 @@ class ExecutionLoop:
                 retained.start if isinstance(retained, ActiveAttempt) else retained.active.start
             )
             if start.provider_ref != self.api.provider_ref:
-                raise RuntimeError("Cannot recover the retained Attempt with another provider identity; restore the owning provider credential")
+                raise JournalError("Cannot recover the retained Attempt with another provider identity; restore the owning provider credential")
             if isinstance(retained, TerminalPending):
                 self._publish(retained)
                 return True
@@ -91,8 +94,15 @@ class ExecutionLoop:
                 failed_report = report
             else:
                 terminal = complete_command(active, report)
-        except WorkerStopUnconfirmed:
+        except WorkerStopUnconfirmed as stopped:
             # The source workspace and active record survive for recovery.
+            try:
+                self.diagnose(active, stopped)
+            except Exception as retention_error:
+                # Keep the lifecycle-controlling exception and its original
+                # cause. The secondary storage failure remains in the log.
+                _LOG.error("Cannot retain diagnostics for Attempt %s; worker stop remains unconfirmed and settlement is halted: %s",
+                           active.execution_attempt_ref, json.dumps(exception_evidence(retention_error, boundary_details=provider_error_details)))
             raise
         except ProviderStopping:
             terminal = fail_command(active, "provider_stopping", "Analysis stopped because the provider is shutting down.")
