@@ -15,7 +15,7 @@ from secs_inference.provider.chat import InterpreterError
 from secs_inference.provider.attempt_store import AttemptStore
 from secs_inference.provider.job_input import JobSpecification
 from secs_inference.provider.job_api import ApiError, ApiUnavailable, AttemptSnapshot
-from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive, ExecutionLoop
+from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive, ExecutionLoop, ProviderStopping, WorkDeadlineExceeded
 from secs_inference.provider.job_upload import JobUpload, UploadReadCapability
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
@@ -30,6 +30,59 @@ GRANT = UploadReadCapability(UPLOAD.upload_ref, 4, "sha256:" + "b" * 64,
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_transient_metadata_outages_do_not_restart_admission_or_interpretation(self):
+        api = FakeApi()
+        api.specification = Mock(side_effect=[ApiUnavailable("specification offline"), JobSpecification("job:test", "C2H6O")])
+        api.uploads = Mock(side_effect=[ApiUnavailable("uploads offline"), (UPLOAD,)])
+        api.capability = Mock(return_value=GRANT)
+        chat = ScriptedChat(tool("read_jcamp", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None},
+                                               "formula": "C2H6O", "explanation": "Proton experiment."}))
+        worker = Mock()
+        worker.request.return_value = {"outcome": "analysed", "analysis": {"candidates": []}}
+        clock = [10.0]
+        def advance(seconds):
+            clock[0] += seconds
+        with TemporaryDirectory() as directory, patch("secs_inference.provider.analysis_run.monotonic", side_effect=lambda: clock[0]), \
+             patch("secs_inference.provider.interpreter.monotonic", side_effect=lambda: clock[0]), \
+             patch("secs_inference.provider.analysis_run.sleep", side_effect=advance), \
+             self.assertLogs("secs_inference.provider.analysis_run", level="WARNING") as logs, \
+             patch("secs_inference.provider.analysis_run.download_upload", return_value=Path(directory) / "verified"), \
+             AttemptStore(Path(directory) / "journal") as journal:
+            def analyse(active):
+                return run_analysis(api=api, active=active, chat=chat, worker=worker, store=None,
+                                    directory=Path(directory) / "current", work_deadline=20,
+                                    interpretation_seconds=5, max_turns=1, max_total_bytes=100)
+            ExecutionLoop(api, journal, analyse, journal.diagnose).step()
+            self.assertIsNone(journal.load())
+        self.assertEqual(len(api.calls), 3)
+        self.assertEqual(json.loads(api.calls[-1])["schema_id"], "nmr.provider.execution_attempt_complete_request.v1")
+        worker.request.assert_called_once()
+        self.assertEqual(api.specification.call_count, 2)
+        self.assertEqual(api.uploads.call_count, 2)
+        self.assertEqual(len(chat.requests), 1)
+        self.assertEqual(len(logs.output), 2)
+
+    def test_metadata_recovery_obeys_shutdown_and_original_deadline(self):
+        for stopping in (False, True):
+            with self.subTest(stopping=stopping):
+                api = Mock()
+                api.specification.side_effect = ApiUnavailable("HTTP 503 for request-test")
+                clock = [10.0]
+                def advance(seconds):
+                    clock[0] += seconds
+                def check():
+                    if stopping and clock[0] > 10:
+                        raise ProviderStopping("stopping")
+                with TemporaryDirectory() as directory, patch("secs_inference.provider.analysis_run.monotonic", side_effect=lambda: clock[0]), \
+                     patch("secs_inference.provider.analysis_run.sleep", side_effect=advance), \
+                     self.assertLogs("secs_inference.provider.analysis_run", level="WARNING"), \
+                     self.assertRaises(ProviderStopping if stopping else WorkDeadlineExceeded):
+                    run_analysis(api=api, active=ACTIVE, chat=Mock(), worker=Mock(), store=None,
+                                 directory=Path(directory) / "current", work_deadline=12,
+                                 interpretation_seconds=5, max_turns=1, max_total_bytes=100, check_running=check)
+                api.uploads.assert_not_called()
+                self.assertLessEqual(clock[0], 12)
+
     def test_successful_acquisition_does_not_hide_earlier_retry_causes(self):
         api = Mock()
         api.capability.side_effect = [ApiUnavailable("Read grant returned HTTP 503", diagnostic={"status": 503}), GRANT, GRANT]

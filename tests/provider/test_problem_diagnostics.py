@@ -141,3 +141,12 @@ class ProblemDiagnosticsTests(unittest.TestCase):
                 with self.assertRaises(ApiError) as caught:
                     JobApi(self.api).capability(ACTIVE, JobUpload("upload:test", "", 0, None))
                 self.assertIs(caught.exception, error)
+
+    def test_server_error_retries_reads_and_replayable_commands_not_bearer_issuance(self):
+        response = self.response(self.problem | {"status": 500, "type": "urn:nmr-api:problem:internal-error",
+                                                 "title": "Internal server error"})
+        for operation in Operation:
+            with self.subTest(operation=operation):
+                error = self.request_error(response, operation)
+                self.assertEqual(error.status, 500)
+                self.assertEqual(isinstance(error, ApiUnavailable), operation is not Operation.CAPABILITY)

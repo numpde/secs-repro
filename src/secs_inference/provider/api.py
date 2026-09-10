@@ -107,7 +107,15 @@ class ProviderApi:
             if problem.get("type") != "urn:nmr-api:problem:" + meaning or problem.get("status") != outcome.status:
                 raise ApiError(f"Cannot reconcile {operation_name} HTTP {outcome.status}{request}: its problem meaning is unreadable",
                                diagnostic=diagnostic)
-        error_type = ApiUnavailable if outcome.status in {408, 503} else ApiError
+        # Most operations can retry a 500 using a read or retained command.
+        # Capability issuance is different: a lost bearer cannot be replayed,
+        # and its contract requires diagnosis before issuing another after 500.
+        retryable = outcome.status in {408, 503} or (
+            outcome.status == 500 and (operation.method == "GET" or operation in {
+                Operation.START, Operation.COMPLETE, Operation.FAIL, Operation.HELLO,
+            })
+        )
+        error_type = ApiUnavailable if retryable else ApiError
         raise error_type(f"{operation_name} returned {explanation}", status=outcome.status,
                          diagnostic=diagnostic)
 

@@ -135,8 +135,8 @@ def run_analysis(
     check_running=lambda: None,
 ) -> dict:
     """Return an observed outcome; the execution owner maps it to API status."""
-    specification = api.specification(active)
-    uploads = api.uploads(active)
+    specification = _read_job_metadata(api.specification, active, work_deadline, check_running)
+    uploads = _read_job_metadata(api.uploads, active, work_deadline, check_running)
     with AttemptSources(api, active, uploads, store, directory,
                         deadline=work_deadline, max_total_bytes=max_total_bytes) as sources:
         interpretation_deadline = min(work_deadline, monotonic() + interpretation_seconds)
@@ -201,6 +201,32 @@ def run_analysis(
             # diagnostic, and leave exception classification unchanged.
             error.analysis_context = AnalysisContext(session.rejections, choices, _upload_evidence(sources))
             raise
+
+
+def _read_job_metadata(read, active, deadline, check_running):
+    """Retry only the failed read, never admission, interpretation or science."""
+    def check_budget():
+        check_running()
+        if monotonic() >= deadline:
+            raise WorkDeadlineExceeded("The work deadline elapsed while obtaining the Job's input metadata; scientific analysis did not start")
+    delay = 1
+    while True:
+        check_budget()
+        try:
+            result = read(active)
+        except ApiUnavailable as error:
+            until = min(deadline, monotonic() + delay)
+            _LOG.warning("Attempt %s: input metadata is temporarily unavailable; retrying within the work deadline: %s%s",
+                         active.execution_attempt_ref, error,
+                         " | " + json.dumps(error.diagnostic) if error.diagnostic is not None else "")
+            while monotonic() < until:
+                check_budget()
+                sleep(min(1, max(0, until - monotonic())))
+            check_budget()
+            delay = min(30, delay * 2)
+        else:
+            check_budget()
+            return result
 
 
 def _worker_request(worker, sources, request, deadline, check_running=lambda: None):
