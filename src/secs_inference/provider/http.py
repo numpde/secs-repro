@@ -81,6 +81,7 @@ class RequestUnavailable:
     delivery: RequestDelivery
     cause: BaseException | None = field(default=None, compare=False, repr=False)
     status: int | None = None
+    request_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +97,7 @@ class ResponseRejected:
 
     reason: ResponseRejection
     status: int
+    request_id: str | None = None
 
 
 HttpOutcome = HttpResponse | RequestUnavailable | TlsRejected | ResponseRejected
@@ -222,8 +224,9 @@ def send_provider_request(
             return outcome
         except TimeoutError as error:
             status = None if outcome is None else getattr(outcome, "status", None)
+            request_id = getattr(outcome, "request_id", None)
             delivery = RequestDelivery.POSSIBLE if status is None else RequestDelivery.RESPONSE_RECEIVED
-            return RequestUnavailable(delivery, error, status)
+            return RequestUnavailable(delivery, error, status, request_id)
     finally:
         close_http_resource(connection, operation=f"Provider API request to {operation.action}", role="connection")
 
@@ -289,34 +292,37 @@ def _read_response(
     operation: Operation,
 ) -> HttpOutcome:
     status = response.status
+    headers = response.getheaders()
+    request_ids = _header_values(headers, "X-Request-ID")
+    # Correlation survives an invalid envelope or incomplete body. It is not
+    # evidence that the API accepted the request or committed an operation.
+    request_id = (request_ids[0] if len(request_ids) == 1
+                  and _VISIBLE_ASCII.fullmatch(request_ids[0]) is not None else None)
     if status in _EDGE_UNAVAILABLE_STATUSES:
         return RequestUnavailable(
             RequestDelivery.RESPONSE_RECEIVED,
             status=status,
+            request_id=request_id,
         )
     if status not in operation.statuses:
-        return ResponseRejected(ResponseRejection.UNDECLARED_STATUS, status)
-    headers = response.getheaders()
+        return ResponseRejected(ResponseRejection.UNDECLARED_STATUS, status, request_id)
     expected_media_type = (
         "application/json" if status == 200 else "application/problem+json"
     )
     if _single_header(headers, "Content-Type") != expected_media_type:
-        return ResponseRejected(ResponseRejection.INVALID_CONTENT_TYPE, status)
+        return ResponseRejected(ResponseRejection.INVALID_CONTENT_TYPE, status, request_id)
     if _header_values(headers, "Content-Encoding"):
         return ResponseRejected(
             ResponseRejection.CONTENT_ENCODING_NOT_ADMITTED,
             status,
+            request_id,
         )
     if _single_header(headers, "Cache-Control") != "no-store":
-        return ResponseRejected(ResponseRejection.INVALID_CACHE_CONTROL, status)
+        return ResponseRejected(ResponseRejection.INVALID_CACHE_CONTROL, status, request_id)
     topology = _single_header(headers, "Nmr-Api-Topology")
     if topology != expected_topology:
-        return ResponseRejected(ResponseRejection.INVALID_TOPOLOGY, status)
-    request_ids = _header_values(headers, "X-Request-ID")
-    request_id = request_ids[0] if len(request_ids) == 1 else None
-    if status != 200 and (
-        request_id is None or _VISIBLE_ASCII.fullmatch(request_id) is None
-    ):
+        return ResponseRejected(ResponseRejection.INVALID_TOPOLOGY, status, request_id)
+    if status != 200 and request_id is None:
         return ResponseRejected(ResponseRejection.INVALID_REQUEST_ID, status)
     if status == 200 and len(request_ids) > 1:
         return ResponseRejected(ResponseRejection.DUPLICATE_REQUEST_ID, status)
@@ -325,15 +331,15 @@ def _read_response(
     if len(lengths) > 1 or (
         lengths and (not lengths[0].isascii() or not lengths[0].isdigit())
     ):
-        return ResponseRejected(ResponseRejection.INVALID_CONTENT_LENGTH, status)
+        return ResponseRejected(ResponseRejection.INVALID_CONTENT_LENGTH, status, request_id)
     declared_length = None
     if lengths:
         significant_length = lengths[0].lstrip("0") or "0"
         if len(significant_length) > len(str(operation.response_limit)):
-            return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status)
+            return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status, request_id)
         declared_length = int(significant_length)
         if declared_length > operation.response_limit:
-            return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status)
+            return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status, request_id)
     body_parts: list[bytes] = []
     body_length = 0
     try:
@@ -353,10 +359,11 @@ def _read_response(
             RequestDelivery.RESPONSE_RECEIVED,
             error,
             status,
+            request_id,
         )
     body = b"".join(body_parts)
     if len(body) > operation.response_limit:
-        return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status)
+        return ResponseRejected(ResponseRejection.RESPONSE_BODY_TOO_LARGE, status, request_id)
     if declared_length is not None and len(body) != declared_length:
         return RequestUnavailable(
             RequestDelivery.RESPONSE_RECEIVED,
@@ -365,6 +372,7 @@ def _read_response(
                 "declared bytes"
             ),
             status=status,
+            request_id=request_id,
         )
     return HttpResponse(status, request_id, body)
 

@@ -87,9 +87,10 @@ def _evidence_message(evidence: HttpOutcome | HelloReceiptRejected) -> str:
     if type(evidence) is HelloReceiptRejected:
         return f"HTTP 200 did not confirm hello acceptance: {evidence.reason.explanation}"
     if type(evidence) is ResponseRejected:
+        request = f"; response request ID {evidence.request_id}" if evidence.request_id is not None else ""
         return (
             f"HTTP response was rejected: {evidence.reason.explanation}; "
-            f"status={evidence.status}"
+            f"status={evidence.status}{request}"
         )
     if type(evidence) is TlsRejected:
         return f"{network_failure_reason(evidence.cause)}; the request was not sent"
@@ -101,5 +102,7 @@ def _evidence_message(evidence: HttpOutcome | HelloReceiptRejected) -> str:
         }[evidence.delivery]
         if evidence.status is not None:
             delivery = f"HTTP {evidence.status} ended without a complete API response; {delivery}"
+        if evidence.request_id is not None:
+            delivery += f"; response request ID {evidence.request_id}"
         return delivery if evidence.cause is None else f"{delivery}; {network_failure_reason(evidence.cause)}"
     raise AssertionError("Remote provider evidence has no operator description")

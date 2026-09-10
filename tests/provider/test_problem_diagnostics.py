@@ -9,7 +9,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from secs_inference.provider.api import ProviderApi
 from secs_inference.provider.config import HelloPolicy
 from secs_inference.provider.hello import prepare_hello
-from secs_inference.provider.http import HttpResponse, HttpsEndpoint
+from secs_inference.provider.http import (
+    HttpResponse, HttpsEndpoint, RequestDelivery, RequestUnavailable, ResponseRejected, ResponseRejection,
+)
 from secs_inference.provider.job_api import ApiError, ApiUnavailable
 from secs_inference.provider.operations import Operation
 from secs_inference.provider.process import publish_hello_until_stopped
@@ -93,3 +95,18 @@ class ProblemDiagnosticsTests(unittest.TestCase):
                 self.assertIsNone(error.status)
                 self.assertEqual(error.diagnostic["status"], status)
                 self.assertEqual(error.diagnostic["request_id"], "request-test")
+
+    def test_incomplete_response_correlation_reaches_execution_and_hello_logs(self):
+        for response in (
+            ResponseRejected(ResponseRejection.INVALID_CONTENT_TYPE, 503, "request-test"),
+            RequestUnavailable(RequestDelivery.RESPONSE_RECEIVED, EOFError("private body"), 503, "request-test"),
+        ):
+            with self.subTest(response=response):
+                error = self.request_error(response)
+                self.assertEqual(error.diagnostic["request_id"], "request-test")
+                with self.assertLogs("secs_inference.provider.process", level="WARNING") as logs:
+                    self.hello(response)
+                for message in (str(error), " ".join(logs.output)):
+                    self.assertIn("request-test", message)
+                    self.assertIn("503", message)
+                    self.assertNotIn("private body", message)
