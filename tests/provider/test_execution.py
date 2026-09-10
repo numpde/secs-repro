@@ -86,6 +86,22 @@ class ExecutionTests(unittest.TestCase):
                 self.assertNotIn("private", json.dumps(retained))
                 self.assertNotIn("private", result["failure_message"])
 
+    def test_status_and_incomplete_body_evidence_do_not_authorize_api_retirement(self):
+        transport = ProviderApi(HttpsEndpoint("https://api.test", "web", 1, 1), START.provider_ref,
+                               "credential:test", Ed25519PrivateKey.from_private_bytes(bytes(range(32))))
+        for status in (200, 404, 409):
+            with self.subTest(status=status), patch("secs_inference.provider.api.send_provider_request", return_value=
+                    RequestUnavailable(RequestDelivery.RESPONSE_RECEIVED, EOFError("private-body"), status)):
+                with self.assertRaises(ApiUnavailable) as caught:
+                    JobApi(transport).snapshot(ACTIVE)
+            self.assertIn(f"HTTP {status}", str(caught.exception))
+            self.assertIn("before completion", str(caught.exception))
+            self.assertIn("outcome could not be confirmed", str(caught.exception))
+            self.assertIsNone(caught.exception.status)
+            self.assertEqual(caught.exception.diagnostic["status"], status)
+            self.assertEqual(caught.exception.diagnostic["exception_type"], "EOFError")
+            self.assertNotIn("private-body", str(caught.exception))
+
     def test_attempt_snapshot_accepts_a_read_reply_and_rejects_other_operations(self):
         transport = Mock(provider_ref=START.provider_ref)
         api = JobApi(transport)

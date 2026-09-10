@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from threading import Event
 
 from secs_inference.provider.api import (
@@ -24,7 +25,7 @@ from secs_inference.provider.http import (
     ResponseRejected,
     TlsRejected,
 )
-from secs_inference.provider.network_errors import network_failure_reason
+from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
 from secs_inference.provider.job_api import ApiError
 
 
@@ -60,15 +61,15 @@ def publish_hello_until_stopped(
                 f"{_evidence_message(outcome.response)}"
             )
         else:
-            if not outage_active:
-                # Remote deployment and authorization can recover without a
-                # local restart, so rejection evidence follows retry policy too.
-                # Log the outage once; retries change cadence but add no new
-                # operator evidence until publication recovers.
-                _LOG.warning(
-                    "Provider hello is unavailable; retrying: %s",
-                    _evidence_message(outcome.evidence),
-                )
+            # Backoff bounds log volume. Each request can reveal a different
+            # failure or request ID even while registration remains unavailable.
+            evidence = outcome.evidence
+            cause = evidence.cause if isinstance(evidence, (TlsRejected, RequestUnavailable)) else None
+            _LOG.warning(
+                "Provider hello is unavailable; retrying in %g seconds: %s%s",
+                retry_seconds, _evidence_message(evidence),
+                " | " + json.dumps(network_failure_evidence(cause)) if cause is not None else "",
+            )
             outage_active = True
             wait_seconds = retry_seconds
             retry_seconds = min(retry_seconds * 2.0, _MAX_RETRY_SECONDS)
@@ -95,12 +96,12 @@ def _evidence_message(evidence: HttpOutcome | HelloReceiptRejected) -> str:
     if type(evidence) is TlsRejected:
         return f"{network_failure_reason(evidence.cause)}; the request was not sent"
     if type(evidence) is RequestUnavailable:
-        if evidence.status is not None:
-            return f"HTTP {evidence.status} ended without a complete API response"
         delivery = {
             RequestDelivery.NOT_SENT: "the hello request was not sent",
             RequestDelivery.POSSIBLE: "the hello request may have reached the API; acceptance is unknown",
             RequestDelivery.RESPONSE_RECEIVED: "a reply arrived, but hello acceptance could not be confirmed",
         }[evidence.delivery]
+        if evidence.status is not None:
+            delivery = f"HTTP {evidence.status} ended without a complete API response; {delivery}"
         return delivery if evidence.cause is None else f"{delivery}; {network_failure_reason(evidence.cause)}"
     raise AssertionError("Remote provider evidence has no operator description")

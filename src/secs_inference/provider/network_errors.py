@@ -77,6 +77,8 @@ def network_failure_reason(error: BaseException) -> str:
         return "the service closed the connection without a reply"
     if isinstance(error, http.client.IncompleteRead):
         return "the reply ended before all its declared bytes arrived"
+    if isinstance(error, EOFError):
+        return "the reply ended before completion"
     if isinstance(error, (http.client.BadStatusLine, http.client.LineTooLong)):
         return "the service returned an unreadable HTTP response"
     if isinstance(error, http.client.HTTPException):

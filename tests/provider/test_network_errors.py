@@ -22,6 +22,7 @@ class NetworkErrorTests(unittest.TestCase):
             (BrokenPipeError("private bytes"), "connection closed"),
             (http.client.RemoteDisconnected("private status"), "closed the connection without a reply"),
             (http.client.IncompleteRead(b"private response", 42), "declared bytes"),
+            (EOFError("private incomplete reply"), "before completion"),
             (http.client.BadStatusLine("private HTTP bytes"), "unreadable HTTP response"),
             (http.client.CannotSendRequest("private client state"), "HTTP exchange could not be completed"),
             (RuntimeError("private missing socket detail"), "connection failed"),
