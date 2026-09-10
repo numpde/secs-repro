@@ -1,6 +1,6 @@
 """A stopped wait must never masquerade as a stopped scientific process."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import errno
 import os
 import json
@@ -63,6 +63,113 @@ def worker_connection(load_handler=load_test_handler):
 
 
 class WorkerTests(unittest.TestCase):
+    def test_supervisor_releases_acquired_resources_when_child_startup_fails(self):
+        for stage in ("construction", "start"):
+            with self.subTest(stage=stage):
+                parent, child_socket = Mock(), Mock()
+                child = Mock(pid=None)
+                child.is_alive.return_value = False
+                context = Mock()
+                context.Process.return_value = child
+                original = RuntimeError("private-startup")
+                if stage == "construction":
+                    context.Process.side_effect = original
+                else:
+                    child.start.side_effect = original
+                with patch("secs_inference.provider.worker.socket.socketpair", return_value=(parent, child_socket)), \
+                     patch("secs_inference.provider.worker.multiprocessing.get_context", return_value=context), \
+                     patch("secs_inference.provider.worker._reap") as reaping, \
+                     patch("secs_inference.provider.worker._send") as sending:
+                    with self.assertRaises(RuntimeError) as caught:
+                        _serve_session(Mock(), Mock())
+                self.assertIs(caught.exception, original)
+                parent.close.assert_called_once()
+                child_socket.close.assert_called_once()
+                reaping.assert_not_called()
+                sending.assert_not_called()
+                if stage == "start":
+                    child.close.assert_called_once()
+
+    def test_resource_release_errors_do_not_prevent_reaping_or_rewrite_its_acknowledgement(self):
+        parent, child_socket = Mock(), Mock()
+        child = Mock(pid=123)
+        child.is_alive.return_value = False
+        context = Mock()
+        context.Process.return_value = child
+        for resource in (parent, child_socket, child):
+            resource.close.side_effect = OSError(errno.EIO, "private-close")
+        with patch("secs_inference.provider.worker.socket.socketpair", return_value=(parent, child_socket)), \
+             patch("secs_inference.provider.worker.multiprocessing.get_context", return_value=context), \
+             patch("secs_inference.provider.worker._relay", return_value="cancel"), \
+             patch("secs_inference.provider.worker._reap") as reaping, \
+             patch("secs_inference.provider.worker._send") as sending, \
+             patch("secs_inference.provider.worker.socket_deadline", return_value=nullcontext()), \
+             self.assertLogs("secs_inference.provider.worker", level="ERROR") as captured:
+            _serve_session(Mock(), Mock())
+        reaping.assert_called_once_with(child)
+        self.assertEqual(sending.call_args.args[1], {"outcome": "stopped", "reason": "cancel"})
+        for resource in (parent, child_socket, child):
+            resource.close.assert_called_once()
+        self.assertEqual(len(captured.output), 3)
+        self.assertNotIn("private-close", "\n".join(captured.output))
+
+    def test_relay_evidence_survives_failed_reaping_or_acknowledgement_delivery(self):
+        for stage in ("reap", "delivery"):
+            with self.subTest(stage=stage):
+                child = Mock()
+                child.is_alive.return_value = stage == "reap"
+                context = Mock()
+                context.Process.return_value = child
+                parent, child_socket = Mock(), Mock()
+                if stage == "reap":
+                    parent.close.side_effect = OSError(errno.EIO, "private-close")
+                stop_failure = WorkerStopUnconfirmed("Child exit could not be confirmed")
+                with patch("secs_inference.provider.worker.multiprocessing.get_context", return_value=context), \
+                     patch("secs_inference.provider.worker.socket.socketpair", return_value=(parent, child_socket)), \
+                     patch("secs_inference.provider.worker._relay", side_effect=ValueError("private-relay")), \
+                     patch("secs_inference.provider.worker._reap", side_effect=stop_failure if stage == "reap" else None), \
+                     patch("secs_inference.provider.worker._send", side_effect=OSError(errno.EPIPE, "private-delivery")) as sending, \
+                     patch("secs_inference.provider.worker.socket_deadline", return_value=nullcontext()), \
+                     self.assertLogs("secs_inference.provider.worker", level="ERROR") as captured:
+                    if stage == "reap":
+                        with self.assertRaises(WorkerStopUnconfirmed) as caught:
+                            _serve_session(Mock(), Mock())
+                        self.assertIs(caught.exception, stop_failure)
+                        sending.assert_not_called()
+                    else:
+                        _serve_session(Mock(), Mock())
+                        sending.assert_called_once()
+                text = "\n".join(captured.output)
+                self.assertIn('"relay"', text)
+                self.assertIn("ValueError", text)
+                if stage == "delivery":
+                    self.assertIn('"delivery"', text)
+                    self.assertIn(f'"errno": {errno.EPIPE}', text)
+                self.assertNotIn("private-", text)
+                parent.close.assert_called_once()
+
+    def test_failed_cancel_send_is_retained_only_when_exit_cannot_be_confirmed(self):
+        for acknowledged in (False, True):
+            with self.subTest(acknowledged=acknowledged):
+                transport = Mock()
+                with patch("secs_inference.provider.worker.socket.socket", return_value=transport), \
+                     patch.object(WorkerClient, "_receive_next", return_value={"outcome": "ready"}):
+                    worker = WorkerClient(Path("/worker.sock"), startup_deadline=monotonic() + 5)
+                receive_failure = EOFError("private-receive")
+                receive = {"return_value": {"outcome": "stopped"}} if acknowledged else {"side_effect": receive_failure}
+                with patch("secs_inference.provider.worker._send", side_effect=OSError(errno.EPIPE, "private-send")), \
+                     patch.object(worker, "_receive_next", **receive), \
+                     self.assertNoLogs("secs_inference.provider.worker", level="WARNING"):
+                    if acknowledged:
+                        worker.stop()
+                    else:
+                        with self.assertRaises(WorkerStopUnconfirmed) as caught:
+                            worker.stop()
+                        self.assertIs(caught.exception.__context__, receive_failure)
+                        self.assertEqual(caught.exception.diagnostic["cancel_request"]["errno"], errno.EPIPE)
+                        self.assertNotIn("private-", json.dumps(caught.exception.diagnostic))
+                self.assertEqual(worker.stopped, acknowledged)
+
     def test_socket_cleanup_cannot_change_supervisor_exit_confirmation(self):
         for acknowledged in (False, True):
             with self.subTest(acknowledged=acknowledged):
@@ -131,9 +238,24 @@ class WorkerTests(unittest.TestCase):
             with self.assertRaisesRegex(WorkerError, "communication failed; its analysis process was confirmed stopped") as failure:
                 worker.request({"operation": "forge_stop"}, deadline=monotonic() + 2)
             self.assertNotIsInstance(failure.exception, WorkerStopUnconfirmed)
+            self.assertEqual(failure.exception.diagnostic["relay"]["exception_type"], "WorkerError")
+            self.assertTrue(failure.exception.diagnostic["relay"]["frames"])
             self.assertTrue(worker.stopped)
             with self.assertRaises(ProcessLookupError):
                 os.kill(first["pid"], 0)
+
+    def test_explicit_stop_reports_relay_evidence_without_claiming_unconfirmed_exit(self):
+        transport = Mock()
+        with patch("secs_inference.provider.worker.socket.socket", return_value=transport), \
+             patch.object(WorkerClient, "_receive_next", return_value={"outcome": "ready"}):
+            worker = WorkerClient(Path("/worker.sock"), startup_deadline=monotonic() + 5)
+        diagnostic = {"relay": {"exception_type": "OSError", "errno": errno.EIO, "frames": []}}
+        with patch.object(worker, "_receive_next", return_value={"outcome": "stopped", "reason": "relay_failure", "diagnostic": diagnostic}), \
+             self.assertLogs("secs_inference.provider.worker", level="ERROR") as captured:
+            worker.stop()
+        self.assertTrue(worker.stopped)
+        self.assertIn("exit was confirmed", captured.output[0])
+        self.assertIn(f'"errno": {errno.EIO}', captured.output[0])
 
     def _scripted_peer(self, script, exercise):
         with TemporaryDirectory() as directory:

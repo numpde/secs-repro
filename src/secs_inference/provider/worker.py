@@ -34,6 +34,14 @@ class WorkerStopUnconfirmed(WorkerError):
     """Keep source files and stop admission until the supervisor confirms exit."""
 
 
+def _close_socket(transport, role: str) -> None:
+    """Socket cleanup cannot revise the supervisor's process-exit evidence."""
+    try:
+        transport.close()
+    except OSError as error:
+        _LOG.error("Cannot close %s; worker-exit confirmation is unchanged: %s", role, json.dumps(exception_evidence(error)))
+
+
 class WorkerClient:
     """Wait for a loaded child, then share it across serial healthy Attempts.
 
@@ -47,7 +55,7 @@ class WorkerClient:
         try:
             self.socket.connect(str(path))
         except BaseException:
-            self._close_socket()
+            _close_socket(self.socket, "the controller's scientific-worker socket")
             raise
         self.stopped = False
         self._incoming = _FrameBuffer()
@@ -81,41 +89,43 @@ class WorkerClient:
         if response.get("outcome") != "stopped":
             return
         self.stopped = True
-        self._close_socket()
+        _close_socket(self.socket, "the controller's scientific-worker socket")
         if response.get("reason") == "deadline":
             raise TimeoutError("The scientific work deadline elapsed and its child was stopped")
         if response.get("reason") == "relay_failure":
-            raise WorkerError("Scientific worker communication failed; its analysis process was confirmed stopped")
+            error = WorkerError("Scientific worker communication failed; its analysis process was confirmed stopped")
+            error.diagnostic = response.get("diagnostic")
+            raise error
         raise WorkerError("The scientific analysis process exited before completing its operation; its exit was confirmed")
 
     def stop(self) -> None:
         """Discard a raced result; only a supervisor acknowledgement permits cleanup."""
         if self.stopped:
             return
+        cancel_failure = None
         try:
             deadline = monotonic() + 10
             self.socket.settimeout(10)
             try:
                 _send(self.socket, {"operation": "cancel"})
-            except OSError:
+            except OSError as error:
                 # The supervisor may already have stopped and closed its write
                 # side. Its queued acknowledgement is still the needed proof.
-                pass
-            while self._receive_next(deadline).get("outcome") != "stopped":
-                pass
+                cancel_failure = exception_evidence(error)
+            while True:
+                response = self._receive_next(deadline)
+                if response.get("outcome") == "stopped":
+                    break
             self.stopped = True
         except BaseException:
-            raise WorkerStopUnconfirmed("Scientific worker exit could not be confirmed; retain its source files and stop accepting Jobs") from None
+            error = WorkerStopUnconfirmed("Scientific worker exit could not be confirmed; retain its source files and stop accepting Jobs")
+            if cancel_failure is not None:
+                error.diagnostic = {"cancel_request": cancel_failure}
+            raise error from None
         finally:
-            self._close_socket()
-
-    def _close_socket(self) -> None:
-        """Socket cleanup cannot revise the supervisor's process-exit evidence."""
-        try:
-            self.socket.close()
-        except OSError as error:
-            _LOG.error("Cannot close the scientific worker's control socket; worker-exit confirmation is unchanged: %s",
-                       json.dumps(exception_evidence(error)))
+            _close_socket(self.socket, "the controller's scientific-worker socket")
+        if response.get("diagnostic") is not None:
+            _LOG.error("Scientific worker exit was confirmed after a relay failure: %s", json.dumps(response["diagnostic"]))
 
     def _receive_next(self, deadline, check_active=None):
         """Keep partial frames across timeout so a raced result cannot hide stop."""
@@ -172,28 +182,45 @@ def _listen(path, load_handler):
 def _serve_session(client: socket.socket, load_handler) -> None:
     """Read frames incrementally so a partial child response cannot block cancel."""
     parent, child_socket = socket.socketpair()
-    context = multiprocessing.get_context("spawn")
-    child = context.Process(target=_child_loop, args=(child_socket, load_handler))
-    child.start()
-    child_socket.close()
+    child = None
     reason = None
+    diagnostic = None
     try:
-        reason = _relay(client, parent, child)
-    except (OSError, ValueError, WorkerError):
-        reason = "relay_failure"
+        context = multiprocessing.get_context("spawn")
+        child = context.Process(target=_child_loop, args=(child_socket, load_handler))
+        child.start()
+        _close_socket(child_socket, "the supervisor's child-side socket")
+        child_socket = None
+        try:
+            reason = _relay(client, parent, child)
+        except (OSError, ValueError, WorkerError) as error:
+            reason = "relay_failure"
+            diagnostic = {"relay": exception_evidence(error)}
     finally:
         try:
-            _reap(child)
+            if child is not None and child.pid is not None:
+                _reap(child)
+        except BaseException:
+            if diagnostic is not None:
+                _LOG.error("Scientific worker relay failed before child exit could be confirmed: %s", json.dumps(diagnostic))
+            raise
         finally:
-            parent.close()
-            if not child.is_alive():
-                child.close()
+            _close_socket(parent, "the supervisor's relay socket")
+            if child_socket is not None:
+                _close_socket(child_socket, "the supervisor's child-side socket")
+            if child is not None and not child.is_alive():
+                try:
+                    child.close()
+                except OSError as error:
+                    _LOG.error("Cannot release the supervisor's process handle: %s", json.dumps(exception_evidence(error)))
     if reason is not None:
         try:
             with socket_deadline(client, monotonic() + 2):
-                _send(client, {"outcome": "stopped", "reason": reason})
-        except OSError:
-            pass
+                _send(client, {"outcome": "stopped", "reason": reason,
+                               **({"diagnostic": diagnostic} if diagnostic is not None else {})})
+        except OSError as error:
+            _LOG.error("Scientific child exit was confirmed, but its acknowledgement could not be delivered: %s",
+                       json.dumps({"delivery": exception_evidence(error), **(diagnostic or {})}))
 
 
 def _relay(client, parent, child):
