@@ -25,6 +25,7 @@ from secs_inference.provider.http import (
     TlsRejected,
 )
 from secs_inference.provider.network_errors import network_failure_reason
+from secs_inference.provider.job_api import ApiError
 
 
 _LOG = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ def publish_hello_until_stopped(
             retry_seconds = min(policy.retry_initial_seconds, _MAX_RETRY_SECONDS)
             wait_seconds = policy.publication_interval_seconds
         elif type(outcome) is HelloCorrectionRequired:
-            raise RuntimeError(
+            raise ApiError(
                 "The Provider API rejected the hello request. Correct the "
                 "provider configuration or code before restarting: "
                 f"{_evidence_message(outcome.response)}"

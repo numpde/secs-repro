@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from secs_inference.provider.socket_deadline import socket_deadline
 from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
 from secs_inference.provider.connection import https_connection
+from secs_inference.provider.configuration_error import ConfigurationError
 
 
 _MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -44,19 +45,27 @@ class ChatEndpoint:
     tls_context: ssl.SSLContext = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
-        parsed = urlsplit(self.url)
+        rule = "Interpreter endpoint must be a credential-free HTTPS URL with a valid port (1-65535), without query or fragment"
+        if type(self.url) is not str:
+            raise ConfigurationError(rule)
+        try:
+            parsed = urlsplit(self.url)
+            port = parsed.port
+        except ValueError as error:
+            raise ConfigurationError(rule) from error
         if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
-                or parsed.password is not None or parsed.fragment or parsed.query or parsed.port == 0
+                or parsed.password is not None or parsed.fragment or parsed.query or port == 0
                 or re.search(r"[\x00-\x20\x7f]", self.url)):
-            raise ValueError("Interpreter endpoint must be a credential-free HTTPS URL without query or fragment")
-        if not self.model or re.fullmatch(r"[\x21-\x7e]+", self.api_key) is None:
-            raise ValueError("Interpreter model and a header-safe API key are required")
+            raise ConfigurationError(rule)
+        if (type(self.model) is not str or not self.model or type(self.api_key) is not str
+                or re.fullmatch(r"[\x21-\x7e]+", self.api_key) is None):
+            raise ConfigurationError("Interpreter model and a header-safe API key are required")
         try:
             context = ssl.create_default_context(cafile=self.ca_file)
         except OSError as error:
             reason = ("TLS could not load the CA certificates" if isinstance(error, ssl.SSLError) else
                       os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason")
-            raise ValueError(f"Cannot load interpreter TLS trust from {self.ca_file or 'the system CA store'}: {reason}") from error
+            raise ConfigurationError(f"Cannot load interpreter TLS trust from {self.ca_file or 'the system CA store'}: {reason}") from error
         object.__setattr__(self, "tls_context", context)
 
     def complete(self, messages: list[dict], tools: list[dict], *, deadline: float) -> dict:

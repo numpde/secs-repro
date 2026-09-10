@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 from pathlib import Path
 import signal
 import stat
 from threading import Event
-import traceback
 
 from secs_inference.provider.analysis import (
     ANALYSIS_KIND_REF,
@@ -36,6 +36,9 @@ from secs_inference.provider.process import publish_hello_until_stopped
 from secs_inference.provider.chat import ChatEndpoint
 from secs_inference.provider.upload_download import UploadStore
 from secs_inference.provider.runtime import run_services
+from secs_inference.provider.configuration_error import ConfigurationError
+from secs_inference.provider.diagnostics import exception_evidence
+from secs_inference.provider.attempt_store import provider_error_details
 
 
 _CONFIG_MAX_BYTES = 65_536
@@ -44,16 +47,20 @@ _CONFIG_MAX_BYTES = 65_536
 def prepare_configured_hello(config: ProviderConfig) -> PreparedHello:
     """Combine deployment presentation with the code-owned analysis offering."""
 
-    return prepare_hello(
-        display_name=config.hello.display_name,
-        description=config.hello.provider_description,
-        analysis_offerings=(
-            AnalysisOffering(
-                analysis_kind_ref=ANALYSIS_KIND_REF,
-                description=analysis_offering_description(),
+    try:
+        return prepare_hello(
+            display_name=config.hello.display_name,
+            description=config.hello.provider_description,
+            analysis_offerings=(
+                AnalysisOffering(
+                    analysis_kind_ref=ANALYSIS_KIND_REF,
+                    description=analysis_offering_description(),
+                ),
             ),
-        ),
-    )
+        )
+    except (TypeError, ValueError) as error:
+        # prepare_hello reports owned field rules, never offending values.
+        raise ConfigurationError(f"Cannot prepare provider registration: {error}") from error
 
 
 def run_provider(config_path: Path = CONFIG_PATH) -> None:
@@ -109,18 +116,18 @@ def _read_regular_file(path: Path, maximum_bytes: int) -> bytes:
         try:
             status = os.fstat(descriptor)
             if not stat.S_ISREG(status.st_mode):
-                raise ValueError(f"{failure}: it is not a regular file")
+                raise ConfigurationError(f"{failure}: it is not a regular file")
             if status.st_size > maximum_bytes:
-                raise ValueError(f"{failure}: its {status.st_size} bytes exceed the {maximum_bytes}-byte limit")
+                raise ConfigurationError(f"{failure}: its {status.st_size} bytes exceed the {maximum_bytes}-byte limit")
             content = os.read(descriptor, maximum_bytes + 1)
             if len(content) != status.st_size:
-                raise ValueError(f"{failure}: the file changed while it was read")
+                raise ConfigurationError(f"{failure}: the file changed while it was read")
             return content
         finally:
             os.close(descriptor)
     except OSError as error:
         reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
-        raise ValueError(f"{failure}: {reason}") from error
+        raise ConfigurationError(f"{failure}: {reason}") from error
 
 
 def load_chat_endpoint(execution: ExecutionConfig) -> ChatEndpoint:
@@ -130,7 +137,7 @@ def load_chat_endpoint(execution: ExecutionConfig) -> ChatEndpoint:
     """
     key = _read_regular_file(INTERPRETER_KEY_PATH, 16_384)
     if not key.isascii():
-        raise ValueError("Interpreter API key must contain only header-safe ASCII characters")
+        raise ConfigurationError("Interpreter API key must contain only header-safe ASCII characters")
     return ChatEndpoint(execution.interpreter_url, execution.interpreter_model,
                         key.decode("ascii").rstrip("\r\n"),
                         Path("/run/config/provider/interpreter-ca.crt") if execution.interpreter_use_private_ca else None,
@@ -144,10 +151,16 @@ def main() -> int:
     try:
         run_provider()
     except Exception as error:
-        print(f"Provider stopped ({type(error).__name__}).", file=os.sys.stderr)
-        # Startup and runtime boundaries supply safe outer diagnostics. Hidden
-        # parser/transport causes may contain source bytes or credentials.
-        traceback.print_exception(error, chain=False, file=os.sys.stderr)
+        reason = provider_error_details(error).get("message")
+        if reason is None:
+            if isinstance(error, OSError):
+                reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
+            else:
+                reason = "an unexpected internal error occurred"
+        print(f"Provider stopped: {reason}", file=os.sys.stderr)
+        # Even an outer exception or its notes can contain third-party payloads.
+        # Keep owned explanations above and structural causal evidence below.
+        print(json.dumps(exception_evidence(error, boundary_details=provider_error_details)), file=os.sys.stderr)
         print(
             "Job admission and hello publication are stopped. If Attempt state or "
             "diagnostics were retained, they are in /state/journal; correct the failure "
