@@ -38,10 +38,11 @@ class _InvalidArguments(ValueError):
 class InterpretationSession:
     """One transcript and one turn/time budget across inspection and correction."""
 
-    def __init__(self, chat, specification, uploads, inspect, *, deadline: float, max_turns: int = 8):
+    def __init__(self, chat, specification, uploads, inspect, *, deadline: float, max_turns: int = 8, check_running=None):
         self.chat = chat
         self.inspect = inspect
         self.deadline = deadline
+        self.check_running = check_running
         self.remaining_turns = max_turns
         self.pending_call = None
         # Keep provider-issued rejections, not raw arguments or inspected file
@@ -61,7 +62,8 @@ class InterpretationSession:
             raise AssertionError("A selected reader must finish or reject before another selection")
         while self.remaining_turns > 0 and monotonic() < self.deadline:
             self.remaining_turns -= 1
-            message = self.chat.complete(self.messages, interpreter_tools(), deadline=self.deadline)
+            message = self.chat.complete(self.messages, interpreter_tools(), deadline=self.deadline,
+                                         check_running=self.check_running)
             calls = message.get("tool_calls", [])
             if type(calls) is not list or not calls or any(
                 type(call) is not dict or type(call.get("id")) is not str or not call["id"]
