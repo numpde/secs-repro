@@ -12,10 +12,13 @@ from secs_inference.provider.hello import prepare_hello
 from secs_inference.provider.http import (
     HttpResponse, HttpsEndpoint, RequestDelivery, RequestUnavailable, ResponseRejected, ResponseRejection,
 )
-from secs_inference.provider.job_api import ApiError, ApiUnavailable
+from secs_inference.provider.job_api import ApiError, ApiUnavailable, JobApi
 from secs_inference.provider.operations import Operation
 from secs_inference.provider.process import publish_hello_until_stopped
 from test_provider_process import StopAfterWaits
+from test_execution import ACTIVE, START, REPORT
+from secs_inference.provider.job_api import complete_command
+from secs_inference.provider.job_upload import JobUpload
 
 
 class ProblemDiagnosticsTests(unittest.TestCase):
@@ -110,3 +113,31 @@ class ProblemDiagnosticsTests(unittest.TestCase):
                     self.assertIn("request-test", message)
                     self.assertIn("503", message)
                     self.assertNotIn("private body", message)
+
+    def test_rejected_success_receipts_keep_request_correlation(self):
+        jobs = JobApi(self.api)
+        calls = (jobs.next_job, lambda: jobs.start(START), lambda: jobs.snapshot(ACTIVE),
+                 lambda: jobs.specification(ACTIVE), lambda: jobs.uploads(ACTIVE),
+                 lambda: jobs.capability(ACTIVE, JobUpload("upload:test", "", 0, None)),
+                 lambda: jobs.publish(complete_command(ACTIVE, REPORT)))
+        response = HttpResponse(200, "request-test", b"private invalid receipt")
+        for call in calls:
+            with self.subTest(call=call), patch("secs_inference.provider.api.send_provider_request", return_value=response):
+                with self.assertRaises(ApiError) as caught:
+                    call()
+                self.assertIn("request-test", str(caught.exception))
+                self.assertNotIn("private", str(caught.exception))
+                self.assertIsNone(caught.exception.status)
+                self.assertEqual(caught.exception.diagnostic["request_id"], "request-test")
+        with self.assertLogs("secs_inference.provider.process", level="WARNING") as logs:
+            self.hello(response)
+        self.assertIn("request-test", " ".join(logs.output))
+        self.assertNotIn("private", " ".join(logs.output))
+
+    def test_receipt_scope_does_not_reclassify_transport_failures(self):
+        for error in (ApiUnavailable("unavailable", status=503), ApiError("missing", status=404),
+                      ApiError("conflict", status=409)):
+            with self.subTest(status=error.status), patch.object(ProviderApi, "request", side_effect=error):
+                with self.assertRaises(ApiError) as caught:
+                    JobApi(self.api).capability(ACTIVE, JobUpload("upload:test", "", 0, None))
+                self.assertIs(caught.exception, error)

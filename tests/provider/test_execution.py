@@ -123,14 +123,16 @@ class ExecutionTests(unittest.TestCase):
             "job_ref": START.selected.job_ref,
             "state": "in_progress", "job_state": "open",
         }
-        transport.request.return_value = json.dumps(response).encode()
+        transport.request.return_value = HttpResponse(200, "request-test", json.dumps(response).encode())
         self.assertEqual(api.snapshot(ACTIVE), AttemptSnapshot("in_progress", "open"))
 
         response["schema_id"] = "nmr.provider.execution_attempt_start_response.v1"
-        transport.request.return_value = json.dumps(response).encode()
+        transport.request.return_value = HttpResponse(200, "request-test", json.dumps(response).encode())
         with self.assertRaisesRegex(ApiError, "response schema differs") as caught:
             api.snapshot(ACTIVE)
         self.assertIn("nmr.provider.execution_attempt_read_response.v1", str(caught.exception))
+        self.assertEqual(caught.exception.diagnostic["request_id"], "request-test")
+        self.assertIsNone(caught.exception.status)
 
     def test_inability_is_failed_with_private_evidence_and_identical_publication_replay(self):
         report = {"schema_id": REPORT["schema_id"], "outcome": "cannot_analyse",
@@ -364,7 +366,7 @@ class ExecutionTests(unittest.TestCase):
                     class Transport:
                         provider_ref = START.provider_ref
                         def request(self, operation, **kwargs):
-                            return self.reply
+                            return HttpResponse(200, "request-test", self.reply)
                     transport = Transport()
                     loop = ExecutionLoop(JobApi(transport), store, lambda _: self.fail("Analysis was rerun"), lambda *_: None)
                     for reply in (b"private invalid JSON", json.dumps(receipt | {fact: "different"}).encode()):
@@ -372,6 +374,7 @@ class ExecutionTests(unittest.TestCase):
                         with self.assertRaises(ApiError) as caught:
                             loop.step()
                         self.assertEqual(store.load(), terminal)
+                        self.assertIn("request-test", str(caught.exception))
                         if reply.startswith(b"private"):
                             self.assertIn("Cannot confirm the Provider API request to publish", str(caught.exception))
                             self.assertNotIn("private", str(caught.exception))
