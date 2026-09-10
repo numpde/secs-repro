@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-import traceback
+from secs_inference.provider.diagnostics import exception_evidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,9 +78,7 @@ class ScientificHandler:
         except Exception as error:
             # No exception text, source data or locals cross the diagnostic
             # boundary. Frame locations still let the operator find the fault.
-            return {"outcome": "failed", "exception_type": type(error).__name__,
-                    "frames": [{"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
-                               for frame in traceback.extract_tb(error.__traceback__)]}
+            return {"outcome": "failed", **exception_evidence(error)}
 
     def _analyse(self, access, document):
         """Read the chosen input and report refinement or observed empty retrieval."""

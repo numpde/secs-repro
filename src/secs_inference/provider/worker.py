@@ -18,6 +18,7 @@ import stat
 from time import monotonic
 
 from secs_inference.provider.socket_deadline import socket_deadline
+from secs_inference.provider.diagnostics import exception_evidence
 
 
 _MAX_MESSAGE_BYTES = 2 * 1024 * 1024
@@ -238,10 +239,7 @@ def _child_loop(connection: socket.socket, load_handler) -> None:
         try:
             handler = load_handler()
         except Exception as error:
-            import traceback
-            diagnostic = {"outcome": "failed", "exception_type": type(error).__name__,
-                          "frames": [{"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
-                                     for frame in traceback.extract_tb(error.__traceback__)]}
+            diagnostic = {"outcome": "failed", **exception_evidence(error)}
             print(json.dumps(diagnostic), flush=True)
             _send(connection, diagnostic)
             return

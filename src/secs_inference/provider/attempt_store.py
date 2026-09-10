@@ -12,7 +12,6 @@ import os
 import re
 from pathlib import Path
 import stat
-import traceback
 from tempfile import NamedTemporaryFile
 
 from secs_inference.provider.attempt_state import ActiveAttempt, AttemptState, StartPending, TerminalPending
@@ -22,6 +21,8 @@ from secs_inference.provider.job_input import selected_job_input
 from secs_inference.provider.job_api import ApiError
 from secs_inference.provider.upload_download import UploadDownloadError
 from secs_inference.provider.response_json import response_object
+from secs_inference.provider.diagnostics import exception_evidence
+from secs_inference.provider.worker import WorkerError
 
 
 class AttemptStore:
@@ -103,23 +104,8 @@ class AttemptStore:
 
     def diagnose(self, active: ActiveAttempt, error: Exception) -> None:
         """Retain frames and selected boundary evidence under the Attempt identity."""
-        document = {
-            "execution_attempt_ref": active.execution_attempt_ref,
-            "exception_type": type(error).__name__,
-            "frames": [{"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
-                       for frame in traceback.extract_tb(error.__traceback__)],
-        }
-        if isinstance(error, InterpreterError):
-            if error.diagnostic is not None:
-                document["interpreter"] = error.diagnostic
-        elif isinstance(error, ApiError):
-            if error.diagnostic is not None:
-                document["api"] = error.diagnostic
-        elif isinstance(error, UploadDownloadError):
-            if error.diagnostic is not None:
-                document["upload"] = error.diagnostic
-        elif hasattr(error, "diagnostic"):
-            document["worker"] = error.diagnostic
+        document = {"execution_attempt_ref": active.execution_attempt_ref,
+                    **exception_evidence(error, boundary_details=provider_error_details)}
         if hasattr(error, "analysis_context"):
             document["analysis"] = error.analysis_context
         self._write_evidence(active, "diagnostic", document)
@@ -152,6 +138,16 @@ class AttemptStore:
     def _require_usable(self):
         if not self._usable or self._directory_fd < 0:
             raise RuntimeError("The Attempt journal has no confirmed writable state; restart and recover before further API effects")
+
+
+def provider_error_details(error: BaseException) -> dict:
+    """Select only diagnostics whose exception boundary owns their disclosure."""
+    for kind, name in ((InterpreterError, "interpreter"), (ApiError, "api"),
+                       (UploadDownloadError, "upload"), (WorkerError, "worker")):
+        if isinstance(error, kind):
+            diagnostic = getattr(error, "diagnostic", None)
+            return {} if diagnostic is None else {name: diagnostic}
+    return {}
 
 
 def _encode(state: AttemptState) -> dict:

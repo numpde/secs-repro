@@ -56,7 +56,9 @@ class ExecutionTests(unittest.TestCase):
                 raise TimeoutError("private arbitrary timeout detail")
             ExecutionLoop(api, journal, analyse, journal.diagnose).step()
         result = json.loads(api.calls[-1])
-        self.assertEqual(result["failure_code"], "work_deadline_exceeded")
+        self.assertEqual(result["failure_code"], "provider_execution_failed")
+        self.assertIn("internal operation timed out", result["failure_message"])
+        self.assertNotIn("work deadline", result["failure_message"])
         self.assertNotIn("private", result["failure_message"])
         self.assertNotIn("worker was stopped", result["failure_message"])
 
