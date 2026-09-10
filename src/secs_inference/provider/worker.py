@@ -160,23 +160,38 @@ def serve_worker(path: Path, load_handler) -> None:
                 raise WorkerError("Cannot start the worker: its socket path contains a non-socket file")
             path.unlink()
         _listen(path, load_handler)
-    finally:
+    except BaseException:
+        try:
+            os.close(owner)
+        except OSError as cleanup:
+            _LOG.error("Cannot release the scientific supervisor's ownership lock after failure: %s", json.dumps(exception_evidence(cleanup)))
+        raise
+    else:
         os.close(owner)
 
 
 def _listen(path, load_handler):
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    listener.bind(str(path))
-    path.chmod(0o600)
-    listener.listen(1)
+    bound = False
     try:
+        listener.bind(str(path))
+        bound = True
+        path.chmod(0o600)
+        listener.listen(1)
         while True:
             client, _ = listener.accept()
-            with client:
+            try:
                 _serve_session(client, load_handler)
+            finally:
+                _close_socket(client, "the supervisor's accepted controller socket")
     finally:
-        listener.close()
-        path.unlink(missing_ok=True)
+        _close_socket(listener, "the scientific supervisor's listening socket")
+        # A failed bind grants no ownership of an existing pathname.
+        if bound:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as cleanup:
+                _LOG.error("Cannot remove the scientific supervisor's socket pathname after closing its listener: %s", json.dumps(exception_evidence(cleanup)))
 
 
 def _serve_session(client: socket.socket, load_handler) -> None:
@@ -283,7 +298,13 @@ def _child_loop(connection: socket.socket, load_handler) -> None:
         _send(connection, {"outcome": "ready"})
         while True:
             command = _receive(connection)
-            _send(connection, handler(command))
+            try:
+                response = handler(command)
+            except Exception as error:
+                # The process boundary owns unexpected-failure serialization,
+                # including imports or setup outside the scientific reader's catches.
+                response = {"outcome": "failed", **exception_evidence(error)}
+            _send(connection, response)
 
 
 class _FrameBuffer:

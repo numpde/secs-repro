@@ -1,7 +1,11 @@
 """Load warm scientific state in the offline child, not the API controller."""
 
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, fields
+import json
 from pathlib import Path
+import sys
+import tomllib
+from secs_inference.provider.configuration_error import ConfigurationError
 from secs_inference.provider.diagnostics import exception_evidence
 
 
@@ -21,14 +25,17 @@ class ScientificWorkerConfig:
     seed: int = 42
 
     def __post_init__(self):
+        for name in ("checkpoint_directory", "molformer_lock", "device"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name):
+                raise ConfigurationError(f"Worker {name} must be a nonempty string")
         for name in ("smiles_batch_size", "initial_population_size", "neighbours", "threads",
                      "population_size", "offspring_size", "max_generations"):
             if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
-                raise ValueError(f"Worker {name} must be a positive integer")
-        if self.compute_dtype not in {"float32", "bfloat16"}:
-            raise ValueError("Worker compute_dtype must be float32 or bfloat16")
+                raise ConfigurationError(f"Worker {name} must be a positive integer")
+        if not isinstance(self.compute_dtype, str) or self.compute_dtype not in {"float32", "bfloat16"}:
+            raise ConfigurationError("Worker compute_dtype must be float32 or bfloat16")
         if type(self.seed) is not int or self.seed < 0:
-            raise ValueError("Worker seed must be a nonnegative integer")
+            raise ConfigurationError("Worker seed must be a nonnegative integer")
 
     def __call__(self):
         """Materialize the configured model/index once per supervised child."""
@@ -75,10 +82,6 @@ class ScientificHandler:
             return {"outcome": "analysed", "analysis": self._analyse(access, command["selection"])}
         except (InputReadError, SpectrumReadError, FormulaError) as error:
             return {"outcome": "input_rejected", "reason": str(error)[:2048]}
-        except Exception as error:
-            # No exception text, source data or locals cross the diagnostic
-            # boundary. Frame locations still let the operator find the fault.
-            return {"outcome": "failed", **exception_evidence(error)}
 
     def _analyse(self, access, document):
         """Read the chosen input and report refinement or observed empty retrieval."""
@@ -128,15 +131,42 @@ class ScientificHandler:
         }
 
 
-def main() -> None:
-    """Read the worker's own scientific settings without controller credentials."""
-    import tomllib
-    from secs_inference.provider.worker import serve_worker
+def main() -> int:
+    """Report worker startup/supervision failures without controller credentials."""
+    from secs_inference.provider.worker import WorkerError, serve_worker
 
-    with Path("/run/config/worker/worker.toml").open("rb") as stream:
-        config = ScientificWorkerConfig(**tomllib.load(stream))
-    serve_worker(Path("/run/secs/worker/worker.sock"), config)
+    path = Path("/run/config/worker/worker.toml")
+    operation = f"reading scientific worker configuration from {path}"
+    try:
+        raw = path.read_bytes()
+        operation = f"parsing scientific worker configuration from {path}"
+        try:
+            document = tomllib.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+            raise ConfigurationError("Worker configuration must be UTF-8 text with valid TOML syntax") from error
+        operation = f"configuring the scientific worker from {path}"
+        try:
+            config = ScientificWorkerConfig(**document)
+        except TypeError as error:
+            settings = fields(ScientificWorkerConfig)
+            required = ", ".join(setting.name for setting in settings if setting.default is MISSING)
+            allowed = ", ".join(setting.name for setting in settings)
+            raise ConfigurationError(f"Worker configuration requires {required}; supported fields are: {allowed}") from error
+        operation = "running the scientific worker supervisor"
+        serve_worker(Path("/run/secs/worker/worker.sock"), config)
+    except Exception as error:
+        # Configuration and supervisor errors own their explanations. Parser
+        # and library exception text can instead echo arbitrary supplied values.
+        def owned_details(cause):
+            return {"message": str(cause)} if isinstance(cause, (ConfigurationError, WorkerError)) else {}
+        evidence = exception_evidence(error, boundary_details=owned_details)
+        reason = evidence.get("message") or evidence.get("reason") or "an unexpected internal error occurred"
+        print(f"Scientific worker stopped while {operation}: {reason}.", file=sys.stderr)
+        print(json.dumps(evidence), file=sys.stderr)
+        print("Correct the failure before restarting the worker; no model work will be accepted by this supervisor.", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
