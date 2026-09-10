@@ -4,6 +4,7 @@ from pathlib import Path
 from io import StringIO
 import errno
 import json
+import os
 from tempfile import TemporaryDirectory
 from threading import Event
 import unittest
@@ -172,7 +173,7 @@ class RuntimeTests(unittest.TestCase):
                 self.assertNotIn("credential-content-must-not-appear", output.getvalue())
 
     def test_opened_startup_file_failures_keep_path_and_safe_reason(self):
-        for outcome, reason in ((OSError(errno.EIO, "secret error detail"), "Input/output error"), (b"", "changed while it was read")):
+        for outcome, reason in ((OSError(errno.EIO, "secret error detail"), "Input/output error"), (b"", "read 0 bytes, but the file initially reported")):
             with self.subTest(reason=reason), TemporaryDirectory() as directory:
                 path = Path(directory) / "provider.toml"
                 path.write_bytes(b"private startup bytes")
@@ -185,6 +186,44 @@ class RuntimeTests(unittest.TestCase):
                 self.assertIn(reason, output.getvalue())
                 self.assertNotIn("secret error detail", output.getvalue())
                 self.assertNotIn("private startup bytes", output.getvalue())
+
+    def test_startup_input_close_cannot_replace_a_read_or_validation_failure(self):
+        for outcome, expected in ((OSError(errno.ENOSPC, "private-read"), "No space left on device"),
+                                  (b"", "read 0 bytes, but the file initially reported")):
+            with self.subTest(expected=expected), TemporaryDirectory() as directory:
+                path = Path(directory) / "provider.toml"
+                path.write_bytes(b"private configuration")
+                close = os.close
+                def failed_close(descriptor):
+                    close(descriptor)
+                    raise OSError(errno.EIO, "private-close")
+                fault = {"side_effect": outcome} if isinstance(outcome, Exception) else {"return_value": outcome}
+                with patch("secs_inference.provider.main.os.read", **fault), \
+                     patch("secs_inference.provider.main.os.close", side_effect=failed_close) as release, \
+                     self.assertLogs("secs_inference.provider.main", level="ERROR") as captured:
+                    with self.assertRaises(ConfigurationError) as caught:
+                        _read_regular_file(path, 1024)
+                self.assertIn(expected, str(caught.exception))
+                release.assert_called_once()
+                text = "\n".join(captured.output)
+                self.assertIn("after its read failed", text)
+                self.assertIn('"errno": 5', text)
+                self.assertNotIn("private-", text + str(caught.exception))
+
+    def test_startup_input_close_failure_after_read_is_named_and_not_retried(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "provider.toml"
+            path.write_bytes(b"private configuration")
+            close = os.close
+            def failed_close(descriptor):
+                close(descriptor)
+                raise OSError(errno.EIO, "private-close")
+            with patch("secs_inference.provider.main.os.close", side_effect=failed_close) as release:
+                with self.assertRaises(ConfigurationError) as caught:
+                    _read_regular_file(path, 1024)
+            release.assert_called_once()
+            self.assertIn("after reading it: Input/output error", str(caught.exception))
+            self.assertNotIn("private-close", str(caught.exception))
 
     def test_each_tls_startup_failure_names_its_own_trust_input(self):
         owners = (
@@ -275,6 +314,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(str(safe), output.getvalue())
         self.assertNotIn("secret marker", output.getvalue())
         self.assertIn("If Attempt state or diagnostics were retained", output.getvalue())
+        self.assertIn("the provider checks retained state before accepting another Job", output.getvalue())
 
     def test_execution_is_explicit_and_private_ca_choices_are_independent(self):
         example = Path("/workspace/config/provider.toml.example").read_bytes()

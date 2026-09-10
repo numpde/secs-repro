@@ -49,6 +49,18 @@ class FakeApi:
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_public_failure_length_limit_marks_omission_without_cutting_unicode(self):
+        for length in (1023, 1024, 1025):
+            with self.subTest(length=length):
+                message = "é" * length
+                command = json.loads(fail_command(ACTIVE, "test_failure", message).body)
+                rendered = command["failure_message"]
+                self.assertLessEqual(len(rendered), 1024)
+                if length <= 1024:
+                    self.assertEqual(rendered, message)
+                else:
+                    self.assertEqual(rendered, message[:1023] + "…")
+
     def test_unknown_timeout_text_is_not_published_as_owned_deadline_evidence(self):
         with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as journal:
             api = FakeApi()
@@ -180,7 +192,7 @@ class ExecutionTests(unittest.TestCase):
             (TlsRejected(ssl.SSLError("secret protocol")), jobs.specification, "encrypted connection failed; the request was not sent"),
             (ResponseRejected(ResponseRejection.INVALID_CONTENT_TYPE, 200), jobs.specification, "Content-Type does not identify the required JSON response"),
             (RequestUnavailable(RequestDelivery.POSSIBLE, OSError("secret transport detail")), jobs.specification, "request may have reached the API"),
-            (RequestUnavailable(RequestDelivery.RESPONSE_RECEIVED, status=502), jobs.specification, "HTTP 502 did not yield an admitted API response"),
+            (RequestUnavailable(RequestDelivery.RESPONSE_RECEIVED, status=502), jobs.specification, "HTTP 502 did not confirm the API outcome"),
             (HttpResponse(503, "request-test", b"secret response"), jobs.specification, "HTTP 503 for request request-test"),
             (HttpResponse(404, "request-test", b"secret invalid problem"), jobs.specification, "HTTP 404 for request request-test"),
         )

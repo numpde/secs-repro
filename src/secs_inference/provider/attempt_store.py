@@ -1,7 +1,7 @@
 """One process owns one durable Attempt record; no work queue is hidden here.
 
 Atomic replacement and fsync ordering follow nmrpeak-repro's Attempt store.
-Durability uncertainty stops further effects; restart reads whichever complete
+Durability uncertainty stops Attempt processing; restart reads whichever complete
 record survived instead of guessing whether the previous write committed.
 """
 
@@ -33,7 +33,7 @@ _LOG = logging.getLogger(__name__)
 
 
 class JournalError(RuntimeError):
-    """An owned journal failure; no later API effect is authorized by uncertain storage."""
+    """An owned journal failure; uncertain storage cannot authorize Attempt effects."""
 
 
 class AttemptStore:
@@ -168,7 +168,7 @@ class AttemptStore:
             if isinstance(error, OSError):
                 reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
                 raise JournalError(f"Cannot retain Attempt journal state {document['stage']!r} while {phase}: {reason}. "
-                                   "Durability is unconfirmed; restart and recover before further API effects.") from error
+                                   "Durability is unconfirmed; correct the failure, then restart the provider to check retained Attempt state.") from error
             raise
 
     def diagnose(self, active: ActiveAttempt, error: Exception) -> None:
@@ -217,11 +217,11 @@ class AttemptStore:
             self._usable = False
             reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
             raise JournalError(f"Cannot confirm Attempt journal retirement while {phase}: {reason}. "
-                               "Retirement durability is unconfirmed; restart and reconcile before further API effects.") from error
+                               "Retirement durability is unconfirmed; correct the failure, then restart the provider to check retained Attempt state.") from error
 
     def _require_usable(self):
         if not self._usable or self._directory_fd < 0:
-            raise JournalError("The Attempt journal has no confirmed writable state; restart and recover before further API effects")
+            raise JournalError("The Attempt journal has no confirmed writable state; restart the provider to check retained Attempt state before continuing")
 
 
 def provider_error_details(error: BaseException) -> dict:

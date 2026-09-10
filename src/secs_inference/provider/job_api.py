@@ -151,7 +151,7 @@ def fail_command(active: ActiveAttempt, code: str, message: str) -> TerminalPend
     body = canonical_json_bytes({
         "schema_id": "nmr.provider.execution_attempt_fail_request.v1",
         "execution_attempt_ref": active.execution_attempt_ref,
-        "failure_code": code, "failure_message": message[:1024],
+        "failure_code": code, "failure_message": message if len(message) <= 1024 else message[:1023] + "…",
     })
     return TerminalPending(active, "fail", body)
 

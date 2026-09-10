@@ -42,6 +42,7 @@ from secs_inference.provider.attempt_store import provider_error_details
 
 
 _CONFIG_MAX_BYTES = 65_536
+_LOG = logging.getLogger(__name__)
 
 
 def prepare_configured_hello(config: ProviderConfig) -> PreparedHello:
@@ -121,10 +122,20 @@ def _read_regular_file(path: Path, maximum_bytes: int) -> bytes:
                 raise ConfigurationError(f"{failure}: its {status.st_size} bytes exceed the {maximum_bytes}-byte limit")
             content = os.read(descriptor, maximum_bytes + 1)
             if len(content) != status.st_size:
-                raise ConfigurationError(f"{failure}: the file changed while it was read")
-            return content
-        finally:
+                raise ConfigurationError(f"{failure}: read {len(content)} bytes, but the file initially reported {status.st_size} bytes")
+        except BaseException:
+            # Releasing an input must not replace the failure that prevented
+            # startup. A failed close is separate operator evidence, not a retry.
+            try:
+                os.close(descriptor)
+            except OSError as cleanup_error:
+                _LOG.error("Cannot close provider startup input %s after its read failed: %s",
+                           path, json.dumps(exception_evidence(cleanup_error)))
+            raise
+        else:
+            failure = f"Cannot close provider startup input {path} after reading it"
             os.close(descriptor)
+            return content
     except OSError as error:
         reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
         raise ConfigurationError(f"{failure}: {reason}") from error
@@ -163,8 +174,9 @@ def main() -> int:
         print(json.dumps(exception_evidence(error, boundary_details=provider_error_details)), file=os.sys.stderr)
         print(
             "Job admission and hello publication are stopped. If Attempt state or "
-            "diagnostics were retained, they are in /state/journal; correct the failure "
-            "before restarting. Do not delete a pending result to force a retry.",
+            "diagnostics were retained, they are in /state/journal. Correct the failure, "
+            "then restart; the provider checks retained state before accepting another Job. "
+            "Do not delete a pending result to force a retry.",
             file=os.sys.stderr,
         )
         return 1
