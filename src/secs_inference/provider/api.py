@@ -77,7 +77,7 @@ class ProviderApi:
                 RequestDelivery.POSSIBLE: "the request may have reached the API; its outcome is unknown",
                 RequestDelivery.RESPONSE_RECEIVED: "a reply arrived, but the API outcome could not be confirmed",
             }[outcome.delivery]
-            reason = (f"HTTP {outcome.status} did not yield an admitted API response" if outcome.status is not None
+            reason = (f"HTTP {outcome.status} did not confirm the API outcome" if outcome.status is not None
                       else "no complete response was received")
             if outcome.cause is not None:
                 reason += "; " + network_failure_reason(outcome.cause)
