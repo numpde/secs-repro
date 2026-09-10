@@ -8,15 +8,16 @@ endpoint discovery, fallback routing and an additional HTTP library are absent.
 from dataclasses import dataclass, field
 import http.client
 import json
+import logging
 import os
 from pathlib import Path
 import re
 import ssl
-from time import monotonic
+from time import monotonic, sleep
 from urllib.parse import urlsplit
 
 from secs_inference.provider.socket_deadline import socket_deadline
-from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
+from secs_inference.provider.network_errors import ConnectionFailed, network_failure_reason, network_failure_evidence
 from secs_inference.provider.connection import https_connection
 from secs_inference.provider.configuration_error import ConfigurationError
 from secs_inference.provider.http_cleanup import close_http_resource
@@ -25,6 +26,7 @@ from secs_inference.provider.http_cleanup import close_http_resource
 _MAX_REQUEST_BYTES = 2 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 256 * 1024
 _MAX_ERROR_BYTES = 16 * 1024
+_LOG = logging.getLogger(__name__)
 
 
 class InterpreterError(RuntimeError):
@@ -69,7 +71,7 @@ class ChatEndpoint:
             raise ConfigurationError(f"Cannot load interpreter TLS trust from {self.ca_file or 'the system CA store'}: {reason}") from error
         object.__setattr__(self, "tls_context", context)
 
-    def complete(self, messages: list[dict], tools: list[dict], *, deadline: float) -> dict:
+    def complete(self, messages: list[dict], tools: list[dict], *, deadline: float, check_running=None) -> dict:
         """Return one assistant message; retain only selected rejection details on failure."""
         request = {
             "model": self.model, "messages": messages, "tools": tools,
@@ -83,7 +85,7 @@ class ChatEndpoint:
         if len(body) > _MAX_REQUEST_BYTES:
             raise self.failure("preparing the interpretation request", f"its {len(body)}-byte input and inspection context exceeds this provider's {_MAX_REQUEST_BYTES}-byte model-request limit")
         prompt_text = tuple(m["content"] for m in messages if isinstance(m.get("content"), str) and m["content"])
-        raw = self._post(body, deadline, prompt_text=prompt_text)
+        raw = self._post(body, deadline, prompt_text=prompt_text, check_running=check_running)
         try:
             document = json.loads(raw)
             choices = document["choices"]
@@ -114,20 +116,53 @@ class ChatEndpoint:
             diagnostic=diagnostic,
         )
 
-    def _post(self, body: bytes, deadline: float, *, prompt_text: tuple[str, ...]) -> bytes:
+    def _connect(self, parsed, deadline, operation, check_running):
+        """Retry only before HTTP delivery; never replay a potentially billed POST."""
+        for attempt in range(3):
+            if check_running is not None:
+                check_running()
+            connection = https_connection(
+                parsed.hostname, parsed.port or 443,
+                timeout=min(10, max(0.01, deadline - monotonic())), context=self.tls_context,
+            )
+            try:
+                connection.connect()
+                return connection
+            except BaseException as error:
+                close_http_resource(connection, operation=operation, role="connection")
+                if (not isinstance(error, OSError) or isinstance(error, ssl.SSLError)
+                        or (isinstance(error, ConnectionFailed)
+                            and any(item.cleanup_cause is not None for item in error.attempts))
+                        or attempt == 2 or monotonic() >= deadline):
+                    raise
+                delay = 2 ** attempt
+                _LOG.warning("%s: connection failed before the request was sent; waiting up to %d s before retry %d of 2, within the interpretation deadline | %s",
+                             operation, delay, attempt + 1, json.dumps(network_failure_evidence(error)))
+                until = min(deadline, monotonic() + delay)
+                while monotonic() < until:
+                    if check_running is not None:
+                        check_running()
+                    sleep(min(1, max(0, until - monotonic())))
+                if check_running is not None:
+                    check_running()
+                if monotonic() >= deadline:
+                    raise
+
+    def _post(self, body: bytes, deadline: float, *, prompt_text: tuple[str, ...], check_running=None) -> bytes:
         """Send once under the turn deadline, preserving rejection evidence without replay."""
         parsed = urlsplit(self.url)
         remaining = deadline - monotonic()
         if remaining <= 0:
             raise self.failure("preparing the interpretation request", "the interpretation deadline has elapsed; this request was not sent", prompt_text=prompt_text)
-        connection = https_connection(
-            parsed.hostname, parsed.port or 443, timeout=min(10, remaining),
-            context=self.tls_context,
-        )
+        connection = None
         phase = "connecting to the model service"
         operation = f"Job interpretation with model {_diagnostic_text(self.model, (self.api_key, *prompt_text), 128)!r}"
         try:
-            connection.connect()
+            connection = self._connect(parsed, deadline, operation, check_running)
+            if check_running is not None:
+                check_running()
+            if monotonic() >= deadline:
+                raise TimeoutError()
             with socket_deadline(connection.sock, deadline):
                 # The connect timeout must not cap model generation. The timer
                 # now owns the remaining budget across sending and all reads.
@@ -169,7 +204,8 @@ class ChatEndpoint:
             raise self.failure(phase, reason, prompt_text=prompt_text,
                                **network_failure_evidence(error)) from None
         finally:
-            close_http_resource(connection, operation=operation, role="connection")
+            if connection is not None:
+                close_http_resource(connection, operation=operation, role="connection")
 
     def _rejection(self, response, prompt_text: tuple[str, ...]) -> InterpreterError:
         """Preserve an observed HTTP rejection even when its optional detail cannot be read.

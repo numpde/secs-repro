@@ -154,7 +154,7 @@ def run_analysis(
             return response["facts"]
 
         session = InterpretationSession(chat, specification, uploads, inspect,
-                                        deadline=interpretation_deadline, max_turns=max_turns)
+                                        deadline=interpretation_deadline, max_turns=max_turns, check_running=check_running)
         choices = []
         try:
             while True:

@@ -10,7 +10,7 @@ from time import monotonic
 import unittest
 from unittest.mock import Mock, patch
 
-from secs_inference.provider.chat import ChatEndpoint
+from secs_inference.provider.chat import ChatEndpoint, InterpreterError
 from secs_inference.provider.connection import _connect_tcp
 from secs_inference.provider.network_errors import AddressFailure, ConnectionFailed, network_failure_evidence, network_failure_reason
 from secs_inference.provider.attempt_store import AttemptStore
@@ -88,16 +88,35 @@ class ConnectionTests(unittest.TestCase):
         attempt = network_failure_evidence(failure)["connection_attempts"][0]
         self.assertEqual((attempt["address"], attempt["port"], attempt["flow_info"], attempt["scope_id"]), ("fe80::1", 443, 12, 7))
 
+    def test_model_recovery_does_not_override_failed_socket_cleanup(self):
+        transport = Mock()
+        transport.connect.side_effect = ConnectionRefusedError()
+        transport.close.side_effect = OSError(errno.EIO, "private-cleanup")
+        endpoint = ChatEndpoint("https://model.test/chat", "test-model", "private-key")
+        with patch("secs_inference.provider.connection.socket.getaddrinfo", return_value=ADDRESSES), patch(
+                "secs_inference.provider.connection.socket.socket", return_value=transport) as sockets:
+            with self.assertRaises(InterpreterError) as caught:
+                endpoint.complete([], [], deadline=monotonic() + 10)
+        sockets.assert_called_once()
+        self.assertIn("this request was not sent", str(caught.exception))
+        self.assertIn("socket cleanup also failed", str(caught.exception))
+        self.assertEqual(caught.exception.diagnostic["connection_attempts"][0]["socket_cleanup"]["errno"], errno.EIO)
+        transport.sendall.assert_not_called()
+
     def test_expired_interpretation_deadline_keeps_each_connection_cause(self):
         endpoint = ChatEndpoint("https://model.test/chat", "test-model", "private-key")
         sockets = [Mock(), Mock()]
         sockets[0].connect.side_effect = TimeoutError()
-        sockets[1].connect.side_effect = OSError(errno.ENETUNREACH, "private-host")
+        clock = [0]
+        def unreachable(address):
+            clock[0] = 121
+            raise OSError(errno.ENETUNREACH, "private-host")
+        sockets[1].connect.side_effect = unreachable
         with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as journal:
             api = FakeApi()
             with patch("secs_inference.provider.connection.socket.getaddrinfo", return_value=ADDRESSES), patch(
                     "secs_inference.provider.connection.socket.socket", side_effect=sockets), patch(
-                    "secs_inference.provider.chat.monotonic", side_effect=[0, 121]):
+                    "secs_inference.provider.chat.monotonic", side_effect=lambda: clock[0]):
                 ExecutionLoop(api, journal, lambda _: endpoint.complete([], [], deadline=120), journal.diagnose).step()
             message = json.loads(api.calls[-1])["failure_message"]
             self.assertIn("interpretation deadline elapsed", message)
@@ -107,14 +126,18 @@ class ConnectionTests(unittest.TestCase):
 
     def test_mixed_address_failures_reach_attempt_message_and_private_evidence(self):
         endpoint = ChatEndpoint("https://model.test/chat", "test-model", "private-key")
-        sockets = [Mock(), Mock()]
-        sockets[0].connect.side_effect = TimeoutError("private-request")
-        sockets[1].connect.side_effect = OSError(errno.ENETUNREACH, "private-host")
+        sockets = [Mock() for _ in range(6)]
+        for index, transport in enumerate(sockets):
+            transport.connect.side_effect = (TimeoutError("private-request") if index % 2 == 0
+                                             else OSError(errno.ENETUNREACH, "private-host"))
+        clock = [0]
         with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as journal:
             api = FakeApi()
             with patch("secs_inference.provider.connection.socket.getaddrinfo", return_value=ADDRESSES), patch(
-                    "secs_inference.provider.connection.socket.socket", side_effect=sockets):
-                ExecutionLoop(api, journal, lambda _: endpoint.complete([], [], deadline=monotonic() + 120), journal.diagnose).step()
+                    "secs_inference.provider.connection.socket.socket", side_effect=sockets), patch(
+                    "secs_inference.provider.chat.monotonic", side_effect=lambda: clock[0]), patch(
+                    "secs_inference.provider.chat.sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+                ExecutionLoop(api, journal, lambda _: endpoint.complete([], [], deadline=120), journal.diagnose).step()
             message = json.loads(api.calls[-1])["failure_message"]
             self.assertIn("IPv4: the connection timed out", message)
             self.assertIn("IPv6: Network is unreachable", message)

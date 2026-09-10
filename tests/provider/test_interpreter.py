@@ -4,6 +4,7 @@ from copy import deepcopy
 from contextlib import nullcontext
 import errno
 import json
+import ssl
 from time import monotonic
 import unittest
 from unittest.mock import Mock, patch
@@ -17,7 +18,7 @@ from test_http import _tls_server, _write_test_certificates
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from secs_inference.provider.attempt_store import AttemptStore
-from secs_inference.provider.execution import ExecutionLoop
+from secs_inference.provider.execution import ExecutionLoop, ProviderStopping
 from test_execution import FakeApi, ACTIVE
 
 
@@ -33,7 +34,7 @@ class ScriptedChat:
         self.turns = iter(turns)
         self.requests = []
 
-    def complete(self, messages, tools, *, deadline):
+    def complete(self, messages, tools, *, deadline, check_running=None):
         self.requests.append(deepcopy(messages))
         return next(self.turns)
 
@@ -42,6 +43,54 @@ class ScriptedChat:
 
 
 class InterpreterTests(unittest.TestCase):
+    def test_connection_recovery_sends_once_and_keeps_the_model_turn(self):
+        failed, connected = Mock(), Mock()
+        failed.connect.side_effect = ConnectionRefusedError()
+        message = tool("report_input_problem", {"explanation": "No spectrum supplied."})
+        response = connected.getresponse.return_value
+        response.status, response.headers, response.length = 200, {}, 0
+        response.read1.side_effect = [json.dumps({"choices": [{"message": message}]}).encode(), b""]
+        clock = [0]
+        def connect(*args, **kwargs):
+            if not failed.connect.called:
+                return failed
+            failed.close.assert_called_once()
+            return connected
+        endpoint = ChatEndpoint("https://model.test/chat", "test-model", "key")
+        session = InterpretationSession(endpoint, JobSpecification("job:chosen", "No input"), [], Mock(), deadline=10, max_turns=1)
+        with patch("secs_inference.provider.chat.https_connection", side_effect=connect), patch(
+                "secs_inference.provider.chat.socket_deadline", return_value=nullcontext()), patch(
+                "secs_inference.provider.chat.monotonic", side_effect=lambda: clock[0]), patch(
+                "secs_inference.provider.interpreter.monotonic", side_effect=lambda: clock[0]), patch(
+                "secs_inference.provider.chat.sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+            self.assertIsInstance(session.select(), CannotAnalyse)
+        failed.request.assert_not_called()
+        connected.request.assert_called_once()
+        connected.close.assert_called_once()
+        self.assertEqual(session.remaining_turns, 0)
+
+    def test_connection_backoff_obeys_stop_deadline_and_tls_failure(self):
+        for ending in ("stop", "deadline", "tls"):
+            with self.subTest(ending=ending):
+                connection = Mock()
+                connection.connect.side_effect = ssl.SSLError() if ending == "tls" else ConnectionRefusedError(errno.ECONNREFUSED, "private")
+                clock = [0]
+                def check_running():
+                    if ending == "stop" and clock[0]:
+                        raise ProviderStopping("The provider is shutting down")
+                endpoint = ChatEndpoint("https://model.test/chat", "test-model", "key")
+                with patch("secs_inference.provider.chat.https_connection", return_value=connection) as connect, patch(
+                        "secs_inference.provider.chat.monotonic", side_effect=lambda: clock[0]), patch(
+                        "secs_inference.provider.chat.sleep", side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds)):
+                    with self.assertRaises(ProviderStopping if ending == "stop" else InterpreterError) as caught:
+                        endpoint.complete([], [], deadline=0.5, check_running=check_running)
+                connect.assert_called_once()
+                connection.request.assert_not_called()
+                connection.close.assert_called_once()
+                if ending == "deadline":
+                    self.assertIn("deadline elapsed", str(caught.exception))
+                    self.assertEqual(caught.exception.diagnostic["errno"], errno.ECONNREFUSED)
+
     def test_model_reply_can_outlast_connection_timeout_within_interpretation_deadline(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -90,17 +139,21 @@ class InterpreterTests(unittest.TestCase):
                 for output in (json.dumps(private), public["failure_message"]):
                     self.assertNotIn("private prompt", output)
                     self.assertNotIn("model-secret", output)
-                self.assertEqual(connection.connect.call_count, 1)
+                self.assertEqual(connection.connect.call_count, 3 if failing_call == "connect" else 1)
 
     def test_socket_timeout_and_interpretation_deadline_are_distinct(self):
         for now, reason in ((1, "connection timed out"), (11, "interpretation deadline elapsed")):
             with self.subTest(now=now):
                 connection = Mock()
-                connection.getresponse.side_effect = TimeoutError("private timeout detail")
+                clock = [0]
+                def timeout():
+                    clock[0] = now
+                    raise TimeoutError("private timeout detail")
+                connection.getresponse.side_effect = timeout
                 endpoint = ChatEndpoint("https://model.test/chat", "test-model", "key")
                 with (patch("secs_inference.provider.chat.http.client.HTTPSConnection", return_value=connection),
                       patch("secs_inference.provider.chat.socket_deadline", return_value=nullcontext()),
-                      patch("secs_inference.provider.chat.monotonic", side_effect=[0, now])):
+                      patch("secs_inference.provider.chat.monotonic", side_effect=lambda: clock[0])):
                     with self.assertRaises(InterpreterError) as caught:
                         endpoint.complete([], [], deadline=10)
                 self.assertIn(reason, str(caught.exception))
@@ -130,11 +183,15 @@ class InterpreterTests(unittest.TestCase):
                 connection = Mock()
                 response = connection.getresponse.return_value
                 response.status, response.headers, response.length = 200, {}, bytes_remaining
-                response.read1.return_value = b""
+                clock = [0]
+                def eof(size):
+                    clock[0] = 11
+                    return b""
+                response.read1.side_effect = eof
                 endpoint = ChatEndpoint("https://model.test/chat", "test-model", "key")
                 with (patch("secs_inference.provider.chat.http.client.HTTPSConnection", return_value=connection),
                       patch("secs_inference.provider.chat.socket_deadline", return_value=nullcontext()),
-                      patch("secs_inference.provider.chat.monotonic", side_effect=[0, 11])):
+                      patch("secs_inference.provider.chat.monotonic", side_effect=lambda: clock[0])):
                     with self.assertRaisesRegex(InterpreterError, "deadline elapsed before the reply could be accepted"):
                         endpoint.complete([], [], deadline=10)
 
