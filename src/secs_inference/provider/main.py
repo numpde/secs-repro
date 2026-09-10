@@ -119,7 +119,7 @@ def _read_regular_file(path: Path, maximum_bytes: int) -> bytes:
         finally:
             os.close(descriptor)
     except OSError as error:
-        reason = os.strerror(error.errno) if error.errno is not None else type(error).__name__
+        reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
         raise ValueError(f"{failure}: {reason}") from error
 
 

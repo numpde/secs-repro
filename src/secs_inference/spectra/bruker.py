@@ -25,13 +25,13 @@ def read_bruker_pdata(processed_directory: str | Path) -> SourceSpectrum:
         raise SpectrumReadError("Cannot read the selected Bruker spectrum: its 1r/procs pair could not be decoded") from cause
     procs = parameters.get("procs", {})
     if procs.get("AXNUC") != "1H" or procs.get("PPARMOD") != 0:
-        raise SpectrumReadError("Cannot read the selected Bruker spectrum: AXNUC and PPARMOD must establish a 1D proton spectrum")
+        raise SpectrumReadError("Cannot read the selected Bruker spectrum: procs must declare AXNUC=1H and PPARMOD=0 for a 1D proton spectrum")
     # A library warning (for example, missing optional intensity scaling) is
     # not a scientific verdict. Establish the facts used by this reader below.
     if (not isinstance(intensities, np.ndarray)
             or intensities.ndim != 1 or intensities.size < 2
             or intensities.size != procs.get("SI")):
-        raise SpectrumReadError("Cannot read the selected Bruker spectrum: decoded points do not establish the declared complete 1D spectrum")
+        raise SpectrumReadError("Cannot read the selected Bruker spectrum: 1r must decode to one dimension with at least two points, and its point count must match SI in procs")
     try:
         offset = float(procs["OFFSET"])
         frequency = float(procs["SF"])

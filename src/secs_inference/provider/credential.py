@@ -49,7 +49,7 @@ def parse_provider_credential(raw: bytes) -> ProviderCredential:
     """Verify the closed document, key encodings, and public/private pairing."""
 
     if type(raw) is not bytes or len(raw) > PROVIDER_SIGNING_CREDENTIAL_MAX_BYTES:
-        raise ValueError("Provider signing credential must be bounded bytes")
+        raise ValueError(f"Cannot load provider signing credential: expected a file of at most {PROVIDER_SIGNING_CREDENTIAL_MAX_BYTES} bytes")
     if not raw.endswith(b"\n") or raw.endswith(b"\n\n"):
         raise ValueError("Provider signing credential must end with one newline")
     try:
@@ -57,7 +57,7 @@ def parse_provider_credential(raw: bytes) -> ProviderCredential:
     except (TypeError, ValueError) as error:
         raise ValueError("Provider signing credential is not canonical JSON") from error
     if type(document) is not dict or set(document) != _FIELDS:
-        raise ValueError("Provider signing credential has an invalid shape")
+        raise ValueError("Provider signing credential must contain exactly these API-issued fields: " + ", ".join(sorted(_FIELDS)))
     profile = document["profile"]
     provider_ref = document["principal_ref"]
     credential_ref = document["credential_ref"]
@@ -67,16 +67,16 @@ def parse_provider_credential(raw: bytes) -> ProviderCredential:
         or type(profile) is not str
         or profile not in {"dev-local", "dev", "run"}
     ):
-        raise ValueError("Provider signing credential identity is invalid")
+        raise ValueError(f"Provider signing credential requires schema_id={_SCHEMA_ID!r}, algorithm='ed25519', and profile 'dev-local', 'dev', or 'run'")
     try:
         validate_provider_ref(provider_ref)
         validate_credential_ref(credential_ref)
     except (TypeError, ValueError) as error:
-        raise ValueError("Provider signing credential identity is invalid") from error
+        raise ValueError("Provider signing credential principal_ref or credential_ref is not a supported reference") from error
     encoded_public_key = document["public_key_spki_der_b64"]
     private_key_text = document["private_key_pkcs8_pem"]
     if type(encoded_public_key) is not str or type(private_key_text) is not str:
-        raise ValueError("Provider signing credential key material is invalid")
+        raise ValueError("Provider signing credential public and private key fields must be text")
     try:
         public_der = b64decode(encoded_public_key, validate=True)
         if b64encode(public_der).decode("ascii") != encoded_public_key:
@@ -88,7 +88,7 @@ def parse_provider_credential(raw: bytes) -> ProviderCredential:
         )
     except (TypeError, UnicodeError, UnsupportedAlgorithm, ValueError) as error:
         raise ValueError(
-            "Provider signing credential key material is invalid"
+            "Provider signing credential keys could not be decoded: expected a Base64 DER public key and an unencrypted PEM private key"
         ) from error
     if not isinstance(public_key, Ed25519PublicKey) or not isinstance(
         private_key,
