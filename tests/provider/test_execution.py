@@ -47,6 +47,27 @@ class FakeApi:
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_attempt_snapshot_accepts_the_released_schema_and_rejects_other_operations(self):
+        schema = json.loads(Path(
+            "/workspace/contracts/upstream/nmr_api_v1/schemas/"
+            "execution_attempt_read_response.v1.schema.json"
+        ).read_bytes())
+        transport = Mock(provider_ref=START.provider_ref)
+        api = JobApi(transport)
+        response = {
+            "schema_id": schema["properties"]["schema_id"]["const"],
+            "execution_attempt_ref": ACTIVE.execution_attempt_ref,
+            "job_ref": START.selected.job_ref,
+            "state": "in_progress", "job_state": "open",
+        }
+        transport.request.return_value = json.dumps(response).encode()
+        self.assertEqual(api.snapshot(ACTIVE), AttemptSnapshot("in_progress", "open"))
+
+        response["schema_id"] = "nmr.provider.execution_attempt_start_response.v1"
+        transport.request.return_value = json.dumps(response).encode()
+        with self.assertRaisesRegex(ApiError, "response schema differs"):
+            api.snapshot(ACTIVE)
+
     def test_inability_is_failed_with_private_evidence_and_identical_publication_replay(self):
         report = {"schema_id": REPORT["schema_id"], "outcome": "cannot_analyse",
                   "explanation": "The reader rejected the input.", "input_choices": [],
