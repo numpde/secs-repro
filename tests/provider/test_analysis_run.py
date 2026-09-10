@@ -1,6 +1,7 @@
 """Acquisition outages and observed membership changes have different owners."""
 
 from datetime import datetime, timezone
+import errno
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,6 +19,7 @@ from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLonger
 from secs_inference.provider.job_upload import JobUpload, UploadReadCapability
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
+from secs_inference.provider.upload_download import UploadUnavailable
 from test_interpreter import ScriptedChat, tool
 from test_execution import FakeApi, ACTIVE, START
 
@@ -28,6 +30,31 @@ GRANT = UploadReadCapability(UPLOAD.upload_ref, 4, "sha256:" + "b" * 64,
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_successful_acquisition_does_not_hide_earlier_retry_causes(self):
+        api = Mock()
+        api.capability.side_effect = [ApiUnavailable("Read grant returned HTTP 503", diagnostic={"status": 503}), GRANT, GRANT]
+        with TemporaryDirectory() as directory:
+            with AttemptSources(api, ACTIVE, (UPLOAD,), None, Path(directory) / "current",
+                                deadline=monotonic() + 5, max_total_bytes=100) as sources:
+                path = sources.directory / "verified"
+                failure = UploadUnavailable("connection was reset", diagnostic={"errno": errno.ECONNRESET})
+                with patch("secs_inference.provider.analysis_run.download_upload", side_effect=[failure, path]) as download, \
+                     patch("secs_inference.provider.analysis_run.sleep") as sleeping, \
+                     self.assertLogs("secs_inference.provider.analysis_run", level="WARNING") as captured:
+                    self.assertEqual(sources.acquire(UPLOAD.upload_ref), path)
+                self.assertEqual(api.capability.call_count, 3)
+                self.assertEqual(download.call_count, 2)
+                self.assertEqual(sleeping.call_count, 2)
+        self.assertEqual(len(captured.output), 2)
+        self.assertIn("retry 1 of 2", captured.output[0])
+        self.assertIn("HTTP 503", captured.output[0])
+        self.assertIn("retry 2 of 2", captured.output[1])
+        self.assertIn("connection was reset", captured.output[1])
+        self.assertIn(f'"errno": {errno.ECONNRESET}', captured.output[1])
+        for line in captured.output:
+            self.assertIn(ACTIVE.execution_attempt_ref, line)
+            self.assertIn(UPLOAD.upload_ref, line)
+
     def test_owned_analysis_context_preserves_the_original_exception_and_cause(self):
         api = Mock()
         api.specification.return_value = JobSpecification("job:test", "C2H6O")
@@ -88,7 +115,7 @@ class AcquisitionTests(unittest.TestCase):
                     api = FakeApi()
                     worker = Mock()
                     worker.request.side_effect = [failure]
-                    sources = SimpleNamespace(api=api, active=None, acquired={}, directory=Path(directory))
+                    sources = SimpleNamespace(api=api, active=ACTIVE, acquired={}, directory=Path(directory))
                     with AttemptStore(Path(directory) / "journal") as journal:
                         ExecutionLoop(api, journal, lambda _: _worker_request(
                             worker, sources, {"operation": operation}, monotonic() + 10,
@@ -115,7 +142,7 @@ class AcquisitionTests(unittest.TestCase):
                 return_value=Path(directory) / "verified"):
             with self.assertLogs("secs_inference.provider.analysis_run", level="ERROR"), patch(
                     "secs_inference.provider.analysis_run.shutil.rmtree", side_effect=PermissionError("private path")):
-                report = run_analysis(api=api, active=None, chat=chat, worker=worker, store=None,
+                report = run_analysis(api=api, active=ACTIVE, chat=chat, worker=worker, store=None,
                     directory=Path(directory) / "current", work_deadline=monotonic() + 10,
                     interpretation_seconds=5, max_turns=1, max_total_bytes=100)
             self.assertTrue((Path(directory) / "current").exists())
@@ -166,7 +193,7 @@ class AcquisitionTests(unittest.TestCase):
         with TemporaryDirectory() as directory, patch("secs_inference.provider.analysis_run.download_upload",
                 return_value=Path(directory) / "verified"):
             with self.assertRaises(InterpreterError) as caught:
-                run_analysis(api=api, active=None, chat=chat, worker=worker, store=None,
+                run_analysis(api=api, active=ACTIVE, chat=chat, worker=worker, store=None,
                     directory=Path(directory) / "current", work_deadline=monotonic() + 10,
                     interpretation_seconds=5, max_turns=1, max_total_bytes=100)
         evidence = caught.exception.analysis_context
@@ -185,7 +212,7 @@ class AcquisitionTests(unittest.TestCase):
                 chat = ScriptedChat(malformed, tool("report_input_problem", {"explanation": "The reader rejected the directory."}))
                 worker = Mock()
                 def run():
-                    return run_analysis(api=api, active=None, chat=chat, worker=worker, store=None,
+                    return run_analysis(api=api, active=ACTIVE, chat=chat, worker=worker, store=None,
                         directory=Path(directory) / "current", work_deadline=monotonic() + 10,
                         interpretation_seconds=5, max_turns=2 if explains else 1, max_total_bytes=100)
                 if explains:
@@ -217,7 +244,7 @@ class AcquisitionTests(unittest.TestCase):
         worker.request.return_value = {"outcome": "inspected", "facts": {}}
         with TemporaryDirectory() as directory, patch("secs_inference.provider.analysis_run.download_upload",
                                                        return_value=Path(directory) / "verified") as download:
-            report = run_analysis(api=api, active=None, chat=chat, worker=worker, store=None,
+            report = run_analysis(api=api, active=ACTIVE, chat=chat, worker=worker, store=None,
                                   directory=Path(directory) / "current", work_deadline=monotonic() + 10,
                                   interpretation_seconds=5, max_turns=3, max_total_bytes=6)
         feedback = chat.requests[-1][-1]["content"]
@@ -233,7 +260,7 @@ class AcquisitionTests(unittest.TestCase):
             with self.assertLogs("secs_inference.provider.analysis_run", level="ERROR") as logged:
                 with self.assertRaises(RuntimeError) as caught, patch(
                         "secs_inference.provider.analysis_run.shutil.rmtree", side_effect=PermissionError("secret path")):
-                    with AttemptSources(None, None, (), None, Path(directory) / "current",
+                    with AttemptSources(None, ACTIVE, (), None, Path(directory) / "current",
                                         deadline=monotonic() + 1, max_total_bytes=100):
                         raise failure
             self.assertIs(caught.exception, failure)
@@ -257,7 +284,7 @@ class AcquisitionTests(unittest.TestCase):
                         now[0] = 10
                 with patch("secs_inference.provider.analysis_run.monotonic", side_effect=lambda: now[0]), patch(
                         "secs_inference.provider.analysis_run.sleep", side_effect=sleep):
-                    with AttemptSources(api, None, (UPLOAD,), None, Path(directory) / "current",
+                    with AttemptSources(api, ACTIVE, (UPLOAD,), None, Path(directory) / "current",
                                         deadline=10, max_total_bytes=100) as sources:
                         with self.assertRaises(TimeoutError):
                             sources.acquire(UPLOAD.upload_ref)
@@ -281,7 +308,7 @@ class AcquisitionTests(unittest.TestCase):
                 work_deadline = monotonic() + 1800
                 with patch("secs_inference.provider.analysis_run.download_upload", return_value=Path(directory) / "verified") as download:
                     def run():
-                        return run_analysis(api=api, active=None, chat=chat, worker=worker, store=None,
+                        return run_analysis(api=api, active=ACTIVE, chat=chat, worker=worker, store=None,
                                             directory=Path(directory) / "current", work_deadline=work_deadline,
                                             interpretation_seconds=120, max_turns=3, max_total_bytes=100)
                     if inspection_failure:
@@ -301,7 +328,7 @@ class AcquisitionTests(unittest.TestCase):
             with self.subTest(failure=type(failure)), TemporaryDirectory() as directory:
                 root = Path(directory) / "current"
                 with self.assertRaises(type(failure)):
-                    with AttemptSources(None, None, (), None, root, deadline=monotonic() + 1, max_total_bytes=100):
+                    with AttemptSources(None, ACTIVE, (), None, root, deadline=monotonic() + 1, max_total_bytes=100):
                         (root / "input").write_bytes(b"source")
                         raise failure
                 self.assertEqual(root.exists(), isinstance(failure, WorkerStopUnconfirmed))
@@ -313,7 +340,7 @@ class AcquisitionTests(unittest.TestCase):
                 api.capability.side_effect = ([ApiError("missing", status=404), GRANT] if recovers else
                                                [ApiError("missing", status=404)] * 3)
                 api.uploads.side_effect = ApiUnavailable("temporarily unavailable")
-                with AttemptSources(api, None, (UPLOAD,), None, Path(directory) / "current",
+                with AttemptSources(api, ACTIVE, (UPLOAD,), None, Path(directory) / "current",
                                     deadline=monotonic() + 10, max_total_bytes=100) as sources:
                     with patch("secs_inference.provider.analysis_run.sleep"), patch(
                             "secs_inference.provider.analysis_run.download_upload", return_value=sources.directory / "verified") as download:
@@ -337,7 +364,7 @@ class AcquisitionTests(unittest.TestCase):
         api.capability.side_effect = ApiError("missing", status=404)
         api.uploads.return_value = ()
         with TemporaryDirectory() as directory:
-            with AttemptSources(api, None, (UPLOAD, second), None, Path(directory) / "current",
+            with AttemptSources(api, ACTIVE, (UPLOAD, second), None, Path(directory) / "current",
                                 deadline=monotonic() + 10, max_total_bytes=100) as sources:
                 sources.acquired[UPLOAD.upload_ref] = AcquiredUpload(sources.directory / "verified", 4, GRANT.content_hash)
                 with self.assertRaises(UploadSetChanged) as change:
@@ -349,13 +376,18 @@ class AcquisitionTests(unittest.TestCase):
 
     def test_missed_lifecycle_poll_does_not_cancel_work_but_observed_cancel_does(self):
         api = Mock()
-        sources = SimpleNamespace(api=api, active=None, acquired={}, directory=Path("/private/current"))
+        sources = SimpleNamespace(api=api, active=ACTIVE, acquired={}, directory=Path("/private/current"))
         class Worker:
             def request(self, command, *, deadline, check_active):
                 check_active()
                 return {"outcome": "inspected", "facts": {}}
-        api.snapshot.side_effect = ApiUnavailable("outage")
-        self.assertEqual(_worker_request(Worker(), sources, {"operation": "inspect"}, monotonic() + 5)["outcome"], "inspected")
+        api.snapshot.side_effect = ApiUnavailable("API connection reset", diagnostic={"errno": errno.ECONNRESET})
+        with self.assertLogs("secs_inference.provider.analysis_run", level="WARNING") as captured:
+            self.assertEqual(_worker_request(Worker(), sources, {"operation": "inspect"}, monotonic() + 5)["outcome"], "inspected")
+        self.assertIn(ACTIVE.execution_attempt_ref, captured.output[0])
+        self.assertIn("input inspection", captured.output[0])
+        self.assertIn("work continues under its existing deadline", captured.output[0])
+        self.assertIn(f'"errno": {errno.ECONNRESET}', captured.output[0])
         api.snapshot.side_effect = None
         api.snapshot.return_value = AttemptSnapshot("in_progress", "cancelled")
         with self.assertRaisesRegex(AnalysisCancelled, "cancelled"):

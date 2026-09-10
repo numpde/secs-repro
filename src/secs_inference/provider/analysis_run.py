@@ -16,6 +16,7 @@ from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.upload_download import UploadDownloadError, UploadUnavailable, download_upload
 from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
 from secs_inference.provider.analysis_evidence import AnalysisContext
+from secs_inference.provider.diagnostics import exception_evidence
 
 
 RESULT_SCHEMA_ID = "secs.elucidation.result.v1"
@@ -66,7 +67,8 @@ class AttemptSources:
             # Admission retries leftovers before accepting another Attempt.
             # Cleanup cannot undo a completed analysis or explain its failure.
             reason = os.strerror(cleanup.errno) if cleanup.errno is not None else "an operating-system error occurred without a recorded reason"
-            _LOG.error("Cannot remove the private source workspace: %s; cleanup is required before another Attempt", reason)
+            _LOG.error("Attempt %s: cannot remove the private source workspace: %s; cleanup is required before another Attempt | %s",
+                       self.active.execution_attempt_ref, reason, json.dumps(exception_evidence(cleanup)))
         return False
 
     def acquire(self, ref: str, *, deadline: float | None = None) -> Path:
@@ -103,7 +105,11 @@ class AttemptSources:
                     raise WorkDeadlineExceeded("Analysis stopped while obtaining the selected Upload: the input acquisition deadline elapsed") from error
                 if attempt == 2:
                     raise
-                sleep(min(1, remaining))
+                wait_seconds = min(1, remaining)
+                _LOG.warning("Attempt %s: Upload %s acquisition failed; retry %d of 2 in %g s: %s%s",
+                             self.active.execution_attempt_ref, ref, attempt + 1, wait_seconds, error,
+                             " | " + json.dumps(error.diagnostic) if error.diagnostic is not None else "")
+                sleep(wait_seconds)
             else:
                 self.acquired[ref] = AcquiredUpload(path, grant.byte_length, grant.content_hash)
                 return path
@@ -203,9 +209,12 @@ def _worker_request(worker, sources, request, deadline, check_running=lambda: No
         check_running()
         try:
             snapshot = sources.api.snapshot(sources.active)
-        except ApiUnavailable:
+        except ApiUnavailable as error:
             # A missed observation is not evidence of cancellation. The worker's
             # work deadline still bounds execution while the API recovers.
+            _LOG.warning("Attempt %s: lifecycle check unavailable during %s; work continues under its existing deadline: %s%s",
+                         sources.active.execution_attempt_ref, operation, error,
+                         " | " + json.dumps(error.diagnostic) if error.diagnostic is not None else "")
             return
         if snapshot.state != "in_progress":
             raise AttemptNoLongerActive(snapshot.state)
