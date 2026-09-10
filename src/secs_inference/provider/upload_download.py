@@ -19,6 +19,7 @@ from secs_inference.provider.socket_deadline import socket_deadline
 from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
 from secs_inference.provider.connection import https_connection
 from secs_inference.provider.configuration_error import ConfigurationError
+from secs_inference.provider.http_cleanup import close_http_resource
 
 
 _LOG = logging.getLogger(__name__)
@@ -161,7 +162,7 @@ def _transfer(store, capability, target, output, deadline):
                 phase = "receiving the selected Upload's bytes"
                 _copy_verified(response, capability, output)
             finally:
-                response.close()
+                close_http_resource(response, operation=f"Reading Upload {capability.upload_ref}", role="response")
     except ssl.SSLError as error:
         raise UploadDownloadError(f"{phase}: {network_failure_reason(error)}", diagnostic={
             "phase": phase, **network_failure_evidence(error),
@@ -176,7 +177,7 @@ def _transfer(store, capability, target, output, deadline):
             "phase": phase, **network_failure_evidence(error),
         }) from None
     finally:
-        connection.close()
+        close_http_resource(connection, operation=f"Reading Upload {capability.upload_ref}", role="connection")
 
 
 def _copy_verified(response, capability, output):

@@ -19,6 +19,7 @@ from secs_inference.provider.socket_deadline import socket_deadline
 from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
 from secs_inference.provider.connection import https_connection
 from secs_inference.provider.configuration_error import ConfigurationError
+from secs_inference.provider.http_cleanup import close_http_resource
 
 
 _MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -124,6 +125,7 @@ class ChatEndpoint:
             context=self.tls_context,
         )
         phase = "connecting to the model service"
+        operation = f"Job interpretation with model {_diagnostic_text(self.model, (self.api_key, *prompt_text), 128)!r}"
         try:
             connection.connect()
             with socket_deadline(connection.sock, deadline):
@@ -154,7 +156,7 @@ class ChatEndpoint:
                         raise self.failure(phase, "the reply ended before all its declared bytes arrived", prompt_text=prompt_text)
                     return bytes(result)
                 finally:
-                    response.close()
+                    close_http_resource(response, operation=operation, role="response")
         except (OSError, http.client.HTTPException) as error:
             if monotonic() >= deadline:
                 reason = "the interpretation deadline elapsed; " + network_failure_reason(error)
@@ -167,7 +169,7 @@ class ChatEndpoint:
             raise self.failure(phase, reason, prompt_text=prompt_text,
                                **network_failure_evidence(error)) from None
         finally:
-            connection.close()
+            close_http_resource(connection, operation=operation, role="connection")
 
     def _rejection(self, response, prompt_text: tuple[str, ...]) -> InterpreterError:
         """Preserve an observed HTTP rejection even when its optional detail cannot be read.
