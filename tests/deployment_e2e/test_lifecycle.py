@@ -15,7 +15,7 @@ import unittest
 from uuid import uuid4
 
 from deployment.compose import ComposeProject
-from deployment.provider_deployment import render_deployment
+from deployment.provider_deployment import _status, render_deployment
 
 
 @contextmanager
@@ -100,6 +100,10 @@ class LifecycleEndToEndTests(unittest.TestCase):
             try:
                 records = project.start(plan)
                 self.assertEqual(set(records), {"provider", "worker"})
+                for status in _status(records).values():
+                    self.assertEqual(status["status"], "running")
+                    self.assertEqual(status["restart_count"], 0)
+                    self.assertFalse(status["oom_killed"])
                 for record in records.values():
                     self.assertTrue(record["State"]["Running"])
                     self.assertEqual(record["HostConfig"]["NetworkMode"], "none")
