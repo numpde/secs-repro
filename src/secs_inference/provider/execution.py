@@ -170,5 +170,5 @@ def _public_failure(error: Exception) -> tuple[str, str]:
     if isinstance(error, WorkDeadlineExceeded):
         return "work_deadline_exceeded", str(error)
     if isinstance(error, TimeoutError):
-        return "work_deadline_exceeded", "Analysis stopped because the provider's work deadline elapsed."
+        return "provider_execution_failed", "Analysis stopped after an internal operation timed out; the operator can inspect diagnostics recorded for this Attempt."
     return "provider_execution_failed", "Analysis could not finish because of an internal provider error; the operator can inspect diagnostics recorded for this Attempt."
