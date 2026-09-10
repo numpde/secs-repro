@@ -120,7 +120,7 @@ class JobApi:
         raw = self.provider.request(operation, **kwargs)
         schema = {
             Operation.JOBS: "nmr.provider.jobs.list.response.v1",
-            Operation.ATTEMPT: "nmr.provider.execution_attempt.read.response.v1",
+            Operation.ATTEMPT: "nmr.provider.execution_attempt_read_response.v1",
         }.get(operation, "nmr.provider.execution_attempt_" + operation.name.lower() + "_response.v1")
         try:
             document = response_object(raw)
