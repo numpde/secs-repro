@@ -31,7 +31,6 @@ Result schema: secs.elucidation.result.v1.
 
 An analysed result records:
 
-- The interpreter's final explanation.
 - Each selected reader, formula and exact source identity, with its explanation.
 - Rejected choices and their reading errors; the used choice is marked used.
 - The verified length and SHA-256 of every acquired Upload.

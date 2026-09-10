@@ -149,6 +149,8 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual(report["outcome"], "analysed")
         self.assertEqual(report["analysis"], worker.request.return_value["analysis"])
         self.assertTrue(report["input_choices"][0]["used"])
+        self.assertEqual(report["input_choices"][0]["explanation"], "Proton experiment.")
+        self.assertNotIn("explanation", report)
 
     def test_worker_failures_keep_analysis_evidence_without_reclassifying_the_failure(self):
         for failure, code in (({"outcome": "failed", "exception_type": "ValueError", "frames": []}, "scientific_execution_failed"),
