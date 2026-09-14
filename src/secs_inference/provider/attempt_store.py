@@ -126,6 +126,10 @@ class AttemptStore:
                        json.dumps(exception_evidence(error, boundary_details=provider_error_details)))
 
     def load(self) -> AttemptState | None:
+        record = self.load_record()
+        return None if record is None else record[1]
+
+    def load_record(self) -> tuple[bytes, AttemptState] | None:
         """Read the last complete record; malformed state requires operator repair."""
         self._require_usable()
         try:
@@ -143,7 +147,7 @@ class AttemptStore:
         if len(raw) > 3 * 1024 * 1024:
             raise JournalError("Cannot recover the Attempt: the journal record exceeds its byte limit")
         try:
-            return _decode(response_object(raw))
+            return raw, _decode(response_object(raw))
         except (ValueError, TypeError, KeyError, RecursionError, ApiError):
             raise JournalError("Cannot recover the Attempt: the retained journal record is unreadable") from None
 
@@ -178,6 +182,57 @@ class AttemptStore:
                 raise JournalError(f"Cannot retain Attempt journal state {document['stage']!r} while {phase}: {reason}. "
                                    "Durability is unconfirmed; correct the failure, then restart the provider to check retained Attempt state.") from error
             raise
+
+    def archive_record(self, raw: bytes, document: dict, validate_existing) -> Path:
+        """Publish a durable private copy before retiring the exact current bytes."""
+        self._require_writable()
+        current = self.load_record()
+        if current is None or current[0] != raw:
+            raise JournalError("The retained Attempt changed; inspect it again before archival")
+        name = document["record_digest"].removeprefix("sha256:") + ".archive.json"
+        staging = None
+        failed = False
+        try:
+            with NamedTemporaryFile(dir=self.directory, prefix=".archive-", delete=False) as stream:
+                staging = Path(stream.name)
+                stream.write(canonical_json_bytes(document))
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(staging, name, dst_dir_fd=self._directory_fd, follow_symlinks=False)
+            except FileExistsError:
+                descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self._directory_fd)
+                with os.fdopen(descriptor, "rb") as stream:
+                    status = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(status.st_mode) or status.st_uid != os.getuid() or status.st_mode & 0o077:
+                        raise JournalError("The existing archive is not a private regular file")
+                    existing = stream.read(8 * 1024 * 1024 + 1)
+                    if len(existing) > 8 * 1024 * 1024:
+                        raise JournalError("The existing archive exceeds its byte limit")
+                    validate_existing(response_object(existing))
+                    os.fsync(stream.fileno())
+            os.fsync(self._directory_fd)
+        except BaseException as error:
+            failed = True
+            self._usable = False
+            if isinstance(error, (OSError, ValueError, TypeError, KeyError, RecursionError)):
+                raise JournalError("Archive durability could not be confirmed; the active Attempt is retained. Correct storage or archive evidence before retrying.") from error
+            raise
+        finally:
+            if staging is not None:
+                try:
+                    staging.unlink(missing_ok=True)
+                except OSError as error:
+                    self._usable = False
+                    if failed:
+                        _LOG.error("Archive staging cleanup also failed: %s", json.dumps(exception_evidence(error)))
+                    else:
+                        raise JournalError("Archive staging cleanup failed; the active Attempt remains retained. Correct storage before retrying.") from error
+        current = self.load_record()
+        if current is None or current[0] != raw:
+            raise JournalError("The retained Attempt changed during archival; its durable archive exists but active state was not retired")
+        self.clear()
+        return self.directory / name
 
     def diagnose(self, active: ActiveAttempt, error: Exception) -> None:
         """Retain frames and selected boundary evidence under the Attempt identity."""

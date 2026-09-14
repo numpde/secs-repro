@@ -104,3 +104,24 @@ class JournalInspectionTests(unittest.TestCase):
             self.assertEqual(validate_inspection_document(document),document)
             self.assertEqual(validate_inspection_document(start_document),start_document)
             with self.assertRaises(ValueError): parse_inspection_document(b" "*32769)
+
+    def test_record_digest_covers_exact_retained_bytes_including_evidence(self):
+        from hashlib import sha256
+        from secs_inference.provider.journal_inspect import inspect_journal
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "journal"
+            with AttemptStore(root) as store:
+                store.save(complete_command(ACTIVE, REPORT))
+            path = root / "attempt.json"
+            first = path.read_bytes()
+            original = inspect_journal(root)["records"][0]
+            self.assertEqual(original["record_digest"], "sha256:" + sha256(first).hexdigest())
+            document = json.loads(first)
+            document["retained_evidence"] = "Additional diagnostic context"
+            updated = json.dumps(document, indent=2).encode()
+            path.write_bytes(updated)
+            observed = inspect_journal(root)["records"][0]
+            self.assertEqual(observed["record_digest"], "sha256:" + sha256(updated).hexdigest())
+            self.assertNotEqual(observed["record_digest"], original["record_digest"])
+            self.assertEqual(observed["command_fingerprint"], original["command_fingerprint"])
+            self.assertEqual(path.read_bytes(), updated)

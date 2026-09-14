@@ -67,6 +67,8 @@ help:
 	'      Run only the Bruker GA test; still loads the GPU model and full index.' \
 	'  make provider/deployment/journal/inspect DEPLOYMENT=<name>' \
 	'      Inspect retained work after stopping the deployment; no reports are sent.' \
+	'  make provider/deployment/journal/archive-closed DEPLOYMENT=<name> ATTEMPT_REF=<ref> RECORD_DIGEST=<sha256:digest> REASON=<text>' \
+	'      Archive a reviewed held record only after a fresh API read proves closure; see notes/005_closed_attempt_archival.txt.' \
 	'  make test/provider' \
 	'      Verify input selection, signed API transport, recovery and cancellation offline.' \
 	'  make test/deployment' \

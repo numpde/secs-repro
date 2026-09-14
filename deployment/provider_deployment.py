@@ -15,6 +15,7 @@ import re
 import stat
 import sys
 import tomllib
+import uuid
 
 from deployment.compose import ComposeProject
 from deployment.templates import (
@@ -27,6 +28,9 @@ from deployment.templates import (
 _inspection_spec = importlib.util.spec_from_file_location("secs_inspection_document", Path(__file__).resolve().parents[1] / "src/secs_inference/provider/inspection_document.py")
 _inspection_contract = importlib.util.module_from_spec(_inspection_spec)
 _inspection_spec.loader.exec_module(_inspection_contract)
+_archive_spec = importlib.util.spec_from_file_location("secs_archive_document", Path(__file__).resolve().parents[1] / "src/secs_inference/provider/archive_document.py")
+_archive_contract = importlib.util.module_from_spec(_archive_spec)
+_archive_spec.loader.exec_module(_archive_contract)
 
 
 TEMPLATES = {
@@ -189,6 +193,78 @@ def inspect_deployment_journal(repository: Path, name: str) -> dict:
     return document | {"deployment": name, "owner": binding}
 
 
+def archive_deployment_journal(repository: Path, name: str, *, execution_attempt_ref: str,
+                               expected_record_digest: str, reason: str) -> dict:
+    """Archive under lifecycle exclusion using current bound API credentials."""
+    project = _project(repository, name)
+    if any(record["State"].get("Running") is not False for record in project.inventory().values()):
+        raise RuntimeError(f"Journal archival requires a stopped deployment; run make provider/deployment/down DEPLOYMENT={name} first.")
+    state = repository / "secrets/deployments" / name
+    config = configuration_directory(repository, name)
+    journal = state / "state/journal"
+    _private_directory(state)
+    _private_directory(journal)
+    # Unlike offline inspection, this operation uses credentials: existing
+    # ownership must match current inputs, and missing binding cannot be created.
+    _private_file(state / "attempt-owner.json")
+    _bind_attempt_owner(state, config)
+    image = render_deployment(repository, name)["services"]["provider"]["image"]
+    reader_token = uuid.uuid4().hex
+    reader_name = "secs-journal-archive-" + reader_token
+    try:
+        raw = project.command("run", "--rm", "--name", reader_name,
+                              "--label", "io.secs.archive=" + reader_token, "--pull", "never", "--read-only",
+                              "--user", f"{os.getuid()}:{os.getgid()}", "--cap-drop", "ALL",
+                              "--security-opt", "no-new-privileges:true", "--pids-limit", "32",
+                              "--memory", "128m", "--memory-swap", "128m", "--log-driver", "none",
+                              "--mount", f"type=bind,src={journal},dst=/state/journal",
+                              "--mount", f"type=bind,src={config},dst=/run/config/provider,readonly",
+                              "--mount", f"type=bind,src={state / 'provider.signing.private.json'},dst=/run/secrets/provider/signing.private.json,readonly",
+                              "--mount", f"type=bind,src={state / 'attempt-owner.json'},dst=/run/config/attempt-owner.json,readonly",
+                              "--entrypoint", "python", image, "-m", "secs_inference.provider.journal_archive",
+                              "--execution-attempt-ref", execution_attempt_ref,
+                              "--expected-record-digest", expected_record_digest, "--reason", reason)
+    except (Exception, KeyboardInterrupt) as original:
+        try:
+            _remove_archive_reader(project, reader_name, reader_token)
+        except (Exception, KeyboardInterrupt) as cleanup:
+            raise RuntimeError(
+                f"Archival result unconfirmed ({original}); reader cleanup unconfirmed ({cleanup}). "
+                f"Provider operator must inspect name={reader_name}, label=io.secs.archive={reader_token}, "
+                "verify both and remove only that container ID before inspecting retained journal/archive state. "
+                "Preserve all retained work; do not restart until reader shutdown is confirmed."
+            ) from original
+        raise RuntimeError(
+            f"Archival result unconfirmed ({original}); invocation reader stopped. "
+            "Provider operator must inspect the journal and archive before retrying or restarting; preserve both."
+        ) from original
+    document = _archive_contract.parse_archive_document(raw)
+    if document["execution_attempt_ref"] != execution_attempt_ref or document["record_digest"] != expected_record_digest:
+        raise ValueError("Archive result names a different selection; inspect retained state before retrying.")
+    return document | {"deployment": name}
+
+
+def _remove_archive_reader(project, name: str, token: str) -> None:
+    """A timed-out Docker CLI does not prove its writable container stopped."""
+    identifiers = project.command("ps", "-a", "--no-trunc", "--filter",
+                                  "name=^/" + name + "$", "--format", "{{.ID}}").decode("ascii").splitlines()
+    if not identifiers:
+        return
+    if len(identifiers) != 1 or re.fullmatch(r"[0-9a-f]{64}", identifiers[0]) is None:
+        raise ValueError("Archive reader inventory is malformed")
+    identifier = identifiers[0]
+    records = json.loads(project.command("inspect", identifier))
+    if type(records) is not list or len(records) != 1 or type(records[0]) is not dict:
+        raise ValueError("Archive reader inspection is malformed")
+    record = records[0]
+    config = record.get("Config")
+    labels = config.get("Labels") if type(config) is dict else None
+    if (record.get("Id") != identifier or record.get("Name") != "/" + name
+            or type(labels) is not dict or labels.get("io.secs.archive") != token):
+        raise ValueError("Archive reader ownership does not match this invocation")
+    project.command("rm", "-f", identifier)
+
+
 def _status(records: dict) -> dict:
     """Expose lifecycle evidence, not Docker environment or credential-bearing metadata."""
     return {role: {"id": record["Id"], "status": record["State"]["Status"],
@@ -204,10 +280,17 @@ def main(arguments: list[str] | None = None) -> int:
     """Dispatch one named operation; report partial effects without implying rollback."""
     parser = argparse.ArgumentParser(description="Operate a named SECS deployment.")
     parser.add_argument("operation", choices=("init", "config", "up", "status", "down",
-                                              "logs", "inspect", "credential-install", "interpreter-key-install"))
+                                              "logs", "inspect", "archive-closed", "credential-install", "interpreter-key-install"))
     parser.add_argument("deployment")
     parser.add_argument("--source", type=Path)
+    parser.add_argument("--execution-attempt-ref")
+    parser.add_argument("--expected-record-digest")
+    parser.add_argument("--reason")
     options = parser.parse_args(arguments)
+    archive_arguments = (options.execution_attempt_ref, options.expected_record_digest, options.reason)
+    if (options.operation == "archive-closed" and not all(archive_arguments)
+            or options.operation != "archive-closed" and any(value is not None for value in archive_arguments)):
+        parser.error("--execution-attempt-ref, --expected-record-digest and --reason are required only for archive-closed")
     installing = options.operation in {"credential-install", "interpreter-key-install"}
     if installing != (options.source is not None):
         parser.error("--source is required only for credential-install or interpreter-key-install")
@@ -244,6 +327,10 @@ def main(arguments: list[str] | None = None) -> int:
                 print("A successful hello confirms API acceptance, not model readiness.")
             elif options.operation == "inspect":
                 print(json.dumps(inspect_deployment_journal(repository, options.deployment), ensure_ascii=False))
+            elif options.operation == "archive-closed":
+                print(json.dumps(archive_deployment_journal(repository, options.deployment,
+                      execution_attempt_ref=options.execution_attempt_ref,
+                      expected_record_digest=options.expected_record_digest, reason=options.reason), ensure_ascii=False))
             elif options.operation == "down":
                 print(json.dumps(_status(project.stop()), indent=2))
     except (OSError, ValueError, RuntimeError) as error:

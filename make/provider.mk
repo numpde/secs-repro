@@ -16,6 +16,17 @@ provider/deployment/journal/inspect:
 	@cd "$(REPOSITORY_ROOT)"
 	python3 -m deployment.provider_deployment inspect "$${DEPLOYMENT_INPUT}"
 
+.PHONY: provider/deployment/journal/archive-closed
+provider/deployment/journal/archive-closed: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
+provider/deployment/journal/archive-closed: private export ATTEMPT_REF_INPUT := $(value ATTEMPT_REF)
+provider/deployment/journal/archive-closed: private export RECORD_DIGEST_INPUT := $(value RECORD_DIGEST)
+provider/deployment/journal/archive-closed: private export ARCHIVE_REASON_INPUT := $(value REASON)
+provider/deployment/journal/archive-closed:
+	@cd "$(REPOSITORY_ROOT)"
+	python3 -m deployment.provider_deployment archive-closed "$${DEPLOYMENT_INPUT}" \
+		--execution-attempt-ref "$${ATTEMPT_REF_INPUT}" --expected-record-digest "$${RECORD_DIGEST_INPUT}" \
+		--reason "$${ARCHIVE_REASON_INPUT}"
+
 .PHONY: provider/credential/install provider/interpreter-key/install
 provider/credential/install provider/interpreter-key/install: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
 provider/credential/install provider/interpreter-key/install: private export SECRET_SOURCE_INPUT := $(value SOURCE)

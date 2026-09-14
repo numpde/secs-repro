@@ -4,11 +4,12 @@ This validates output shape, not API causes or recovery policy. It imports only
 stdlib so deployment tooling can load this exact source without provider setup.
 """
 import json
+import re
 from datetime import datetime
 
 MAX_DOCUMENT_BYTES = 32768
 _ENVELOPE = {'schema_id', 'record_count', 'observed_at', 'current_automation', 'records'}
-_COMMON = {'provider_ref', 'job_ref', 'provider_attempt_key', 'current_automation', 'next_actor', 'next_action', 'stage', 'restart_behavior'}
+_COMMON = {'record_digest', 'provider_ref', 'job_ref', 'provider_attempt_key', 'current_automation', 'next_actor', 'next_action', 'stage', 'restart_behavior'}
 _TERMINAL = {'execution_attempt_ref', 'operation', 'command_fingerprint', 'command_bytes', 'command_retained', 'delivery'}
 _RECOVERY = {'action', 'code', 'description', 'detail', 'request_id', 'observed_state', 'execution_attempt_ref', 'operation', 'command_fingerprint', 'command_retained', 'delivery', 'automatic_resends', 'automatic_reads', 'new_work', 'next_actor', 'next_action'}
 
@@ -60,6 +61,9 @@ def validate_inspection_document(document):
         elif stage != 'start':
             _reject()
         _fields(record, required)
+        if (type(record['record_digest']) is not str
+                or re.fullmatch(r'sha256:[0-9a-f]{64}', record['record_digest']) is None):
+            _reject()
         if record['current_automation'] != 'stopped':
             _reject()
         for name, value in record.items():
