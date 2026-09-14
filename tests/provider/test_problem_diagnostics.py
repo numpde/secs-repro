@@ -27,7 +27,7 @@ class ProblemDiagnosticsTests(unittest.TestCase):
         self.api = ProviderApi(HttpsEndpoint("https://api.test", "web", 1, 1),
                                "provider:test", "credential:test", Ed25519PrivateKey.generate())
         self.problem = {"type": "urn:nmr-api:problem:bad-request", "title": "Bad request", "status": 400,
-                        "request_id": "request-test", "instance": "/private-path",
+                        "request_id": "request-test", "instance": "urn:nmr-api:request:request-test",
                         "code": "provider_request_invalid", "detail": "The request requires an analysis kind."}
 
     def response(self, problem):
@@ -106,7 +106,22 @@ class ProblemDiagnosticsTests(unittest.TestCase):
             self.hello(response)
         self.assertIn(self.problem["detail"], str(caught.exception))
 
-    def test_service_failure_preserves_correlation_but_not_private_extensions(self):
+    def test_unverified_explanation_is_operator_evidence_not_a_public_failure_message(self):
+        from secs_inference.provider.execution import _public_failure
+
+        problem = self.problem | {"status": 503, "type": "urn:nmr-api:problem:service-unavailable",
+                                  "title": "Service unavailable", "code": "unknown_code",
+                                  "detail": "Unverified upstream diagnostic."}
+        error = self.request_error(self.response(problem))
+        self.assertIn(problem["detail"], str(error))
+        code, message = _public_failure(error)
+        self.assertEqual(code, "api_access_failed")
+        self.assertNotIn(problem["detail"], message)
+        self.assertIn("could not verify", message)
+        self.assertIn("provider operator", message)
+        self.assertIn("request-test", message)
+
+    def test_service_failure_keeps_bounded_unverified_operator_evidence(self):
         problem = self.problem | {"type": "urn:nmr-api:problem:service-unavailable",
                                   "title": "Service unavailable", "status": 503,
                                   "detail": "private-server-trace", "code": "private_code"}
@@ -119,14 +134,13 @@ class ProblemDiagnosticsTests(unittest.TestCase):
         for message in (str(error), " ".join(logs.output)):
             self.assertIn("Service unavailable", message)
             self.assertIn("request-test", message)
-            self.assertIn("no further public explanation", message)
-            self.assertNotIn("private", message)
-        self.assertNotIn("detail", error.diagnostic)
+            self.assertIn("unverified API explanation", message)
+            self.assertIn("private-server-trace", message)
+        self.assertFalse(error.diagnostic["problem_verified"])
+        self.assertEqual(error.diagnostic["detail"], "private-server-trace")
 
     def test_unusable_problem_details_do_not_escape_or_change_http_retry_classification(self):
-        bodies = [b"private non-JSON", b'{"status":400,"status":400,"detail":"private"}',
-                  json.dumps(self.problem | {"status": 503, "detail": "private"}).encode(),
-                  json.dumps(self.problem | {"request_id": "private"}).encode()]
+        bodies = [b"private non-JSON", b'{"status":400,"status":400,"detail":"private"}']
         for detail in ("private\nforged log", "private\u202eforged", "private" * 200, {"private": True}):
             bodies.append(json.dumps(self.problem | {"detail": detail}).encode())
         for body in bodies:
@@ -137,6 +151,27 @@ class ProblemDiagnosticsTests(unittest.TestCase):
                 self.assertIn("request-test", str(error))
                 self.assertNotIn("private", str(error))
                 self.assertNotIn("detail", error.diagnostic)
+
+    def test_safe_conflicting_evidence_stays_unverified_and_out_of_public_messages(self):
+        from secs_inference.provider.execution import _public_failure
+
+        for change in ({"status": 503, "detail": "Unverified diagnostic."},
+                       {"request_id": "unverified-body-id"}):
+            with self.subTest(change=change):
+                error = self.request_error(HttpResponse(400, "request-test", json.dumps(self.problem | change).encode()))
+                self.assertFalse(error.diagnostic["problem_verified"])
+                self.assertIn("unverified API explanation", str(error))
+                _, message = _public_failure(error)
+                self.assertNotIn("Unverified diagnostic.", message)
+                self.assertNotIn("unverified-body-id", message)
+                self.assertIn("request-test", message)
+
+    def test_uncorrelated_hello_problem_cannot_require_changing_fixed_request(self):
+        problem = self.problem | {"request_id": "another-request", "instance": "urn:nmr-api:request:another-request"}
+        with self.assertLogs("secs_inference.provider.process", level="WARNING") as logs:
+            self.hello(self.response(problem))
+        self.assertIn("unverified API explanation", " ".join(logs.output))
+        self.assertIn("retrying in 5 seconds", " ".join(logs.output))
 
     def test_unreadable_conflict_is_evidence_not_authority_to_retire_an_attempt(self):
         for status in (404, 409):

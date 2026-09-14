@@ -183,6 +183,13 @@ class ExecutionLoop:
 
 def _public_failure(error: Exception) -> tuple[str, str]:
     """Publish boundary-owned reasons, including redacted interpreter rejection text."""
+    if isinstance(error, ApiError) and error.diagnostic and error.diagnostic.get("problem_verified") is False:
+        evidence = error.diagnostic
+        return "api_access_failed", (
+            "This Attempt could not finish because the provider could not verify a required API response "
+            f"(HTTP {evidence['status']} for request {evidence.get('request_id') or 'unavailable'}). "
+            "Ask the provider operator to investigate using this Attempt's reference."
+        )
     for error_type, code in ((InterpreterError, "interpretation_failed"), (UploadDownloadError, "input_access_failed"),
                              (ApiError, "api_access_failed"), (JobInputError, "api_access_failed"),
                              (UploadResponseError, "api_access_failed"), (WorkerError, "scientific_execution_failed")):
