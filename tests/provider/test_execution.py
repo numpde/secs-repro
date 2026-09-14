@@ -279,19 +279,20 @@ class ExecutionTests(unittest.TestCase):
             self.assertIn(ACTIVE.execution_attempt_ref, " ".join(logged.output))
             self.assertIsNone(store.load())
 
-    def test_expired_publication_keeps_attempt_identity_in_the_log_after_retirement(self):
+    def test_expired_publication_retains_command_and_observed_state(self):
         with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as store:
-            store.save(complete_command(ACTIVE, REPORT))
+            terminal = complete_command(ACTIVE, REPORT)
+            store.save(terminal)
             api = FakeApi()
             api.publish = lambda _: (_ for _ in ()).throw(ApiError("conflict", status=409))
             api.snapshot = lambda _: AttemptSnapshot("expired", "closed")
-            with self.assertLogs("secs_inference.provider.execution", level="WARNING") as logged:
+            with self.assertRaises(ApiError) as caught:
                 ExecutionLoop(api, store, lambda _: self.fail("Analysis was rerun"), lambda *_: None).step()
-            self.assertIsNone(store.load())
-            message = " ".join(logged.output)
-            self.assertIn(ACTIVE.execution_attempt_ref, message)
-            self.assertIn("Stopped retrying result publication", message)
-            self.assertIn("the Attempt expired. Delivery was not confirmed", message)
+            self.assertEqual(store.load().body, terminal.body)
+            self.assertEqual(store.load().hold.observed_state, "expired")
+            for fact in (ACTIVE.execution_attempt_ref, "exact complete command retained",
+                         "delivery is not confirmed", "including after restart", "provider operator"):
+                self.assertIn(fact, str(caught.exception))
 
     def test_other_provider_or_corrupt_start_record_stops_before_api_effects(self):
         for change in ("provider", "input"):
@@ -328,12 +329,13 @@ class ExecutionTests(unittest.TestCase):
             terminal = complete_command(ACTIVE, REPORT)
             store.save(terminal)
             api = FakeApi()
-            api.publish = lambda _: (_ for _ in ()).throw(ApiError("HTTP 409 for request request-test", status=409))
+            api.publish = lambda _: (_ for _ in ()).throw(ApiError("HTTP 409 for request request-test", status=409, diagnostic={"request_id": "request-test"}))
             api.snapshot = lambda _: AttemptSnapshot("succeeded", "closed")
             with self.assertRaises(ApiError) as caught:
                 ExecutionLoop(api, store, lambda _: self.fail("analysis reran"), lambda *_: None).step()
-            self.assertEqual(store.load(), terminal)
-            for fact in (ACTIVE.execution_attempt_ref, "snapshot is succeeded", "request-test", "command remains retained"):
+            self.assertEqual(store.load().body, terminal.body)
+            self.assertEqual(store.load().hold.observed_state, "succeeded")
+            for fact in (ACTIVE.execution_attempt_ref, "Observed Attempt state: succeeded", "request-test", "command retained"):
                 self.assertIn(fact, str(caught.exception))
 
     def test_second_writer_cannot_take_the_journal(self):

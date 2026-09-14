@@ -101,19 +101,7 @@ class JobApi:
 
     def publish(self, terminal: TerminalPending) -> None:
         """Confirm exact result/failure facts, not merely a matching terminal state."""
-        command = parse_canonical_json_bytes(terminal.body)
-        ref = terminal.active.execution_attempt_ref
-        if type(command) is not dict or command.get("execution_attempt_ref") != ref:
-            raise ApiError("Cannot publish the retained command: it names another Attempt")
-        operation = Operation.COMPLETE if terminal.operation == "complete" else Operation.FAIL
-        if command.get("schema_id") != "nmr.provider.execution_attempt_" + terminal.operation + "_request.v1":
-            raise ApiError("Cannot publish the retained command: its schema does not match its operation")
-        if operation is Operation.COMPLETE:
-            result = b64decode(command["canonical_result_base64"], validate=True)
-            expected = {"execution_attempt_ref": ref, "result_schema_id": command["result_schema_id"],
-                        "result_byte_length": len(result), "result_fingerprint": "sha256:" + sha256(result).hexdigest()}
-        else:
-            expected = {name: command[name] for name in ("execution_attempt_ref", "failure_code", "failure_message")}
+        operation, expected = terminal_receipt_facts(terminal)
         with self._read(operation, body=terminal.body) as receipt:
             if any(type(receipt.get(key)) is not type(value) or receipt[key] != value for key, value in expected.items()):
                 raise ApiError("Cannot confirm Attempt publication: the receipt does not match the retained terminal command")
@@ -148,6 +136,24 @@ class JobApi:
             if document.get("schema_id") != schema:
                 raise ApiError(f"Cannot confirm the Provider API request to {operation.action}: its response schema differs from the required {schema!r}")
             yield document
+
+
+def terminal_receipt_facts(terminal: TerminalPending) -> tuple[Operation, dict]:
+    """Bind retained canonical command bytes to their Attempt and operation."""
+    command = parse_canonical_json_bytes(terminal.body)
+    ref = terminal.active.execution_attempt_ref
+    if type(command) is not dict or command.get("execution_attempt_ref") != ref:
+        raise ApiError("Cannot publish the retained command: it names another Attempt")
+    operation = Operation.COMPLETE if terminal.operation == "complete" else Operation.FAIL
+    if command.get("schema_id") != "nmr.provider.execution_attempt_" + terminal.operation + "_request.v1":
+        raise ApiError("Cannot publish the retained command: its schema does not match its operation")
+    if operation is Operation.COMPLETE:
+        result = b64decode(command["canonical_result_base64"], validate=True)
+        expected = {"execution_attempt_ref": ref, "result_schema_id": command["result_schema_id"],
+                    "result_byte_length": len(result), "result_fingerprint": "sha256:" + sha256(result).hexdigest()}
+    else:
+        expected = {name: command[name] for name in ("execution_attempt_ref", "failure_code", "failure_message")}
+    return operation, expected
 
 
 def complete_command(active: ActiveAttempt, report: dict) -> TerminalPending:

@@ -2,11 +2,13 @@
 
 import logging
 import json
+from dataclasses import asdict, replace
+from hashlib import sha256
 from secrets import token_hex
 
-from secs_inference.provider.attempt_state import ActiveAttempt, StartPending, TerminalPending
+from secs_inference.provider.attempt_state import ActiveAttempt, StartPending, TerminalPending, TerminalHold
 from secs_inference.provider.chat import InterpreterError
-from secs_inference.provider.job_api import ApiError, complete_command, fail_command
+from secs_inference.provider.job_api import ApiError, ApiUnavailable, complete_command, fail_command
 from secs_inference.provider.job_input import JobInputError
 from secs_inference.provider.job_upload import UploadResponseError
 from secs_inference.provider.upload_download import UploadDownloadError
@@ -150,35 +152,83 @@ class ExecutionLoop:
 
     def _publish(self, terminal):
         """Retain exact bytes across outages, even after the work deadline."""
+        if terminal.hold is not None:
+            if terminal.hold.reconciling:
+                self._reconcile_terminal(terminal)
+            self._held(terminal)
         _LOG.info("Attempt %s: sending retained %s command", terminal.active.execution_attempt_ref, terminal.operation)
         try:
             self.api.publish(terminal)
         except ApiError as error:
             if error.status not in {404, 409}:
                 raise
-            try:
-                snapshot = self.api.snapshot(terminal.active)
-            except ApiError as read_error:
-                if read_error.status != 404:
-                    raise
-                reason = "the API no longer exposes this Attempt"
-            else:
-                if snapshot.state != "expired":
-                    raise ApiError(
-                        f"Cannot settle the retained command for Attempt {terminal.active.execution_attempt_ref}: "
-                        f"its snapshot is {snapshot.state}, not expired. {error}. "
-                        "Inspect this Attempt before continuing; its command remains retained."
-                    ) from error
-                reason = "the Attempt expired"
-            _LOG.warning("Stopped retrying %s publication for Attempt %s: %s. Delivery was not confirmed.",
-                         "result" if terminal.operation == "complete" else "failure report",
-                         terminal.active.execution_attempt_ref, reason)
-            self.journal.clear()
-            return
+            facts = error.diagnostic or {}
+            action = facts.get("conflict_action") if facts.get("problem_verified") else None
+            if action not in {"do_not_resend", "reconcile_original"}:
+                action = "reconcile_state"
+            hold = TerminalHold(action, facts.get("code") or "unavailable",
+                                facts.get("conflict_description") or "Reconcile the original retained command against the observed Attempt state.",
+                                facts.get("detail") or "The API refused this terminal command.",
+                                facts.get("request_id") or "unavailable")
+            held = replace(terminal, hold=hold)
+            self.journal.save(held)
+            if held.hold.reconciling:
+                self._reconcile_terminal(held)
+            self._held(held)
         _LOG.info("Attempt %s: %s publication confirmed; journal retirement is pending",
                   terminal.active.execution_attempt_ref, terminal.operation)
         self.journal.clear()
         _LOG.info("Attempt %s: journal retirement confirmed", terminal.active.execution_attempt_ref)
+
+    def _reconcile_terminal(self, terminal):
+        """A retained read obligation cannot turn back into publication on restart."""
+        try:
+            observed = self.api.snapshot(terminal.active).state
+        except ApiError as error:
+            if error.status == 404:
+                observed = "not_visible"
+            else:
+                automatic = isinstance(error, ApiUnavailable)
+                facts = self._hold_facts(terminal) | {
+                    "automatic_reads": "retry_with_backoff" if automatic else "stopped",
+                    "next_actor": "provider" if automatic else "provider_operator",
+                    "next_action": "retry only the Attempt read" if automatic else "investigate the rejected Attempt read before restarting",
+                }
+                kind = ApiUnavailable if automatic else ApiError
+                raise kind(
+                    f"Attempt {facts['execution_attempt_ref']}: exact {facts['operation']} command retained; delivery is unconfirmed. "
+                    "Publication remains paused across restart while current state is unverified. "
+                    f"API code {terminal.hold.code}; request ID {terminal.hold.request_id}: {terminal.hold.detail} "
+                    + ("The provider will automatically retry only the read with backoff. " if automatic
+                       else "Automatic reads stopped; the provider operator must investigate the rejected read before restarting. ")
+                    + f"Read failure: {error}",
+                    diagnostic={"terminal_reconciliation": facts, "read": error.diagnostic},
+                ) from error
+        held = replace(terminal, hold=replace(terminal.hold, observed_state=observed))
+        self.journal.save(held)
+        self._held(held)
+
+    def _hold_facts(self, terminal):
+        hold = terminal.hold
+        return {**asdict(hold), "execution_attempt_ref": terminal.active.execution_attempt_ref,
+                 "operation": terminal.operation, "command_fingerprint": "sha256:" + sha256(terminal.body).hexdigest(),
+                 "command_retained": True, "delivery": "unconfirmed",
+                 "automatic_resends": "stopped_including_restart", "new_work": "stopped",
+                 "next_actor": "provider_operator",
+                 "next_action": "reconcile the original command and API outcome; involve the provider developer to investigate any mismatch"}
+
+    def _held(self, terminal):
+        hold = terminal.hold
+        facts = self._hold_facts(terminal)
+        raise ApiError(
+            f"Attempt {facts['execution_attempt_ref']}: exact {facts['operation']} command retained; "
+            "delivery is not confirmed. Automatic resends and new work are stopped, including after restart. "
+            f"API code {hold.code}; action {hold.action}; request ID {hold.request_id}. "
+            + (f"Observed Attempt state: {hold.observed_state}. " if hold.observed_state else "")
+            + hold.detail + " " + hold.description + f" The provider operator must {facts['next_action']}. "
+            "This hold does not report a new computation outcome.",
+            diagnostic={"terminal_hold": facts},
+        )
 
 
 def _public_failure(error: Exception) -> tuple[str, str]:
