@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -20,6 +21,12 @@ from deployment.templates import (
     configuration_directory, initialize_configuration, _ensure_private_parent,
     _locked_parent, _publish_new_file,
 )
+
+
+# Load the producer's dependency-free presentation contract from its owning source.
+_inspection_spec = importlib.util.spec_from_file_location("secs_inspection_document", Path(__file__).resolve().parents[1] / "src/secs_inference/provider/inspection_document.py")
+_inspection_contract = importlib.util.module_from_spec(_inspection_spec)
+_inspection_spec.loader.exec_module(_inspection_contract)
 
 
 TEMPLATES = {
@@ -157,6 +164,31 @@ def _bind_attempt_owner(state: Path, config: Path) -> None:
         _publish_new_file(binding, content)
 
 
+def inspect_deployment_journal(repository: Path, name: str) -> dict:
+    """Inspect a stopped deployment under its caller's lifecycle exclusion."""
+    project = _project(repository, name)
+    if any(record["State"].get("Running") is not False for record in project.inventory().values()):
+        raise RuntimeError(f"Journal inspection requires a stopped deployment; run make provider/deployment/down DEPLOYMENT={name} first.")
+    state = repository / "secrets/deployments" / name
+    _private_directory(state)
+    journal = state / "state/journal"
+    _private_directory(journal)
+    binding = json.loads(_private_file(state / "attempt-owner.json"))
+    if type(binding) is not dict or set(binding) != {"origin", "provider_ref"} or any(type(value) is not str or not value for value in binding.values()):
+        raise ValueError("Attempt ownership binding is unreadable.")
+    image = render_deployment(repository, name)["services"]["provider"]["image"]
+    raw = project.command("run", "--rm", "--pull", "never", "--network", "none", "--read-only",
+                          "--user", f"{os.getuid()}:{os.getgid()}", "--cap-drop", "ALL",
+                          "--security-opt", "no-new-privileges:true", "--pids-limit", "32",
+                          "--memory", "128m", "--memory-swap", "128m", "--log-driver", "none",
+                          "--mount", f"type=bind,src={journal},dst=/state/journal,readonly",
+                          "--entrypoint", "python", image, "-m", "secs_inference.provider.journal_inspect")
+    document = _inspection_contract.parse_inspection_document(raw)
+    if any(record.get("provider_ref") != binding["provider_ref"] for record in document["records"]):
+        raise ValueError("Retained journal names another provider than this deployment's ownership binding.")
+    return document | {"deployment": name, "owner": binding}
+
+
 def _status(records: dict) -> dict:
     """Expose lifecycle evidence, not Docker environment or credential-bearing metadata."""
     return {role: {"id": record["Id"], "status": record["State"]["Status"],
@@ -172,7 +204,7 @@ def main(arguments: list[str] | None = None) -> int:
     """Dispatch one named operation; report partial effects without implying rollback."""
     parser = argparse.ArgumentParser(description="Operate a named SECS deployment.")
     parser.add_argument("operation", choices=("init", "config", "up", "status", "down",
-                                              "logs", "credential-install", "interpreter-key-install"))
+                                              "logs", "inspect", "credential-install", "interpreter-key-install"))
     parser.add_argument("deployment")
     parser.add_argument("--source", type=Path)
     options = parser.parse_args(arguments)
@@ -210,6 +242,8 @@ def main(arguments: list[str] | None = None) -> int:
                 print(json.dumps(_status(start_deployment(repository, options.deployment)), indent=2))
                 print("Containers started. Check provider logs for hello publication or errors.")
                 print("A successful hello confirms API acceptance, not model readiness.")
+            elif options.operation == "inspect":
+                print(json.dumps(inspect_deployment_journal(repository, options.deployment), ensure_ascii=False))
             elif options.operation == "down":
                 print(json.dumps(_status(project.stop()), indent=2))
     except (OSError, ValueError, RuntimeError) as error:

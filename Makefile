@@ -65,6 +65,8 @@ help:
 	'      One GPU model and full index load are shared across the cases.' \
 	'  make test/integration/challenges/bruker' \
 	'      Run only the Bruker GA test; still loads the GPU model and full index.' \
+	'  make provider/deployment/journal/inspect DEPLOYMENT=<name>' \
+	'      Inspect retained work after stopping the deployment; no reports are sent.' \
 	'  make test/provider' \
 	'      Verify input selection, signed API transport, recovery and cancellation offline.' \
 	'  make test/deployment' \

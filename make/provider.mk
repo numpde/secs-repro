@@ -10,6 +10,12 @@ provider/deployment/init provider/deployment/config provider/deployment/up provi
 	@cd "$(REPOSITORY_ROOT)"
 	python3 -m deployment.provider_deployment "$(@F)" "$${DEPLOYMENT_INPUT}"
 
+.PHONY: provider/deployment/journal/inspect
+provider/deployment/journal/inspect: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
+provider/deployment/journal/inspect:
+	@cd "$(REPOSITORY_ROOT)"
+	python3 -m deployment.provider_deployment inspect "$${DEPLOYMENT_INPUT}"
+
 .PHONY: provider/credential/install provider/interpreter-key/install
 provider/credential/install provider/interpreter-key/install: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
 provider/credential/install provider/interpreter-key/install: private export SECRET_SOURCE_INPUT := $(value SOURCE)
