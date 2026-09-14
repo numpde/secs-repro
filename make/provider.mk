@@ -34,6 +34,17 @@ provider/contracts/check provider/contracts/write:
 		printf '%s\n' 'Set NMR_API_V1_DIR to the API checkout containing the pinned release.' >&2; exit 2; }
 	python3 -I tools/provider_contract.py $(notdir $@) "$${NMR_API_V1_DIRECTORY_INPUT}"
 
+# Shared client provenance is separate from the historical provider contract release.
+.PHONY: provider/client/check provider/client/write
+provider/client/check provider/client/write: private export NMR_API_V1_DIRECTORY_INPUT = $(value NMR_API_V1_DIR)
+provider/client/check provider/client/write:
+	@test -n "$${NMR_API_V1_DIRECTORY_INPUT}" || { \
+		printf '%s\n' 'Set NMR_API_V1_DIR to the API checkout containing the recorded client revisions.' >&2; exit 2; }
+	python3 -B "$${NMR_API_V1_DIRECTORY_INPUT}/clients/provider_python/project.py" $(notdir $@) \
+		--api-repository "$${NMR_API_V1_DIRECTORY_INPUT}" \
+		--package "$(REPOSITORY_ROOT)/src/secs_inference/provider" \
+		--manifest "$(REPOSITORY_ROOT)/contracts/upstream/provider_client.json"
+
 .PHONY: provider/lock/write provider/wheelhouse provider/image
 
 provider/lock/write:

@@ -3,13 +3,14 @@
 import re
 
 from secs_inference.provider.http import HttpResponse
+from secs_inference.provider.operations import Operation
+from secs_inference.provider._nmr_api_failures import interpret_problem
 from secs_inference.provider.response_json import response_object
 
 
 _PROBLEMS = {
     400: ("bad-request", "Bad request"),
     401: ("authentication-failed", "Request authentication failed"),
-    403: ("authorization-denied", "Authorization denied"),
     404: ("not-found", "Resource not found"),
     408: ("request-body-timeout", "Request body timeout"),
     409: ("operation-conflict", "Operation conflict"),
@@ -18,6 +19,18 @@ _PROBLEMS = {
     431: ("request-header-fields-too-large", "Request header fields too large"),
     500: ("internal-error", "Internal server error"),
     503: ("service-unavailable", "Service unavailable"),
+}
+# Local transport operations map explicitly to the published API route identities.
+_API_OPERATIONS = {
+    Operation.HELLO: "provider_hello",
+    Operation.JOBS: "jobs_list",
+    Operation.INPUT: "job_input_read",
+    Operation.UPLOADS: "job_upload_set_read",
+    Operation.CAPABILITY: "job_upload_read_capability",
+    Operation.START: "execution_attempt_start",
+    Operation.ATTEMPT: "execution_attempt_read",
+    Operation.COMPLETE: "execution_attempt_complete",
+    Operation.FAIL: "execution_attempt_fail",
 }
 _EDGE_SPACE = re.compile(r"[ \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]")
 _FORBIDDEN_DIAGNOSTIC = re.compile(
@@ -39,13 +52,15 @@ def is_display_diagnostic(value: str) -> bool:
     return _FORBIDDEN_DIAGNOSTIC.search(value) is None
 
 
-def describe_problem(response: HttpResponse) -> tuple[str, dict]:
+def describe_problem(response: HttpResponse, *, operation: Operation) -> tuple[str, dict]:
     """Project public problem fields only; never disclose bodies or extensions.
 
-    The API permits input explanations only on 400/413/414/431. Server and
-    authentication failures deliberately require request-ID-based diagnosis.
+    The shared client owns current authorization failures. Other statuses retain
+    the historical projection until their shared interpretation is adopted.
     This projection grants no retry, reconciliation, or retirement authority.
     """
+    if response.status == 403:
+        return _authorization_problem(response, operation)
     facts = {"status": response.status, "request_id": response.request_id}
     request = " without a request ID" if response.request_id is None else f" for request {response.request_id}"
     message = f"HTTP {response.status}{request}"
@@ -68,3 +83,29 @@ def describe_problem(response: HttpResponse) -> tuple[str, dict]:
             return message + f"; {detail} (code: {code})", facts
         return message + "; the API input explanation is missing or invalid", facts
     return message + "; the API supplies no further public explanation; inspect API logs using the request ID", facts
+
+
+def _authorization_problem(response: HttpResponse, operation: Operation) -> tuple[str, dict]:
+    # HttpResponse proves that the transport admitted application/problem+json
+    # for a non-success status; malformed media uses ResponseRejected instead.
+    problem = interpret_problem(operation=_API_OPERATIONS[operation], status=response.status,
+                                content_type="application/problem+json",
+                                header_request_id=response.request_id, body=response.body)
+    facts = {"status": response.status, "request_id": problem.header_request_id,
+             "problem_verified": problem.verified, "problem_rejection": problem.rejection,
+             "header_request_id": problem.header_request_id, "body_request_id": problem.body_request_id}
+    for name in ("problem_type", "title", "code", "detail"):
+        value = getattr(problem, name)
+        if value is not None:
+            facts[name] = value
+    message = f"HTTP {response.status}; response request ID {problem.header_request_id or 'unavailable'}"
+    if not problem.verified:
+        message += (f"; unverified API explanation ({problem.rejection}); "
+                    f"body request ID {problem.body_request_id or 'unavailable'}")
+    if problem.title is not None:
+        message += ": " + problem.title
+    if problem.detail is not None:
+        message += "; " + problem.detail
+    if problem.code is not None:
+        message += f" (code: {problem.code})"
+    return message, facts
