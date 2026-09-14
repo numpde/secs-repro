@@ -16,17 +16,19 @@ from pathlib import Path
 import stat
 from tempfile import NamedTemporaryFile
 
-from secs_inference.provider.attempt_state import ActiveAttempt, AttemptState, StartPending, TerminalPending
+from secs_inference.provider.attempt_state import ActiveAttempt, AttemptState, StartPending, TerminalPending, TerminalHold
 from secs_inference.provider.canonical_json import canonical_json_bytes
 from secs_inference.provider.chat import InterpreterError
 from secs_inference.provider.job_input import selected_job_input
-from secs_inference.provider.job_api import ApiError
+from secs_inference.provider.job_api import ApiError, terminal_receipt_facts
 from secs_inference.provider.upload_download import UploadDownloadError
 from secs_inference.provider.response_json import response_object
 from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.worker import WorkerError
 from secs_inference.provider.configuration_error import ConfigurationError
 from secs_inference.provider.analysis_evidence import AnalysisContext
+from secs_inference.provider._nmr_api_failure_contract import EVIDENCE
+from secs_inference.provider._nmr_api_failures import _text as admitted_evidence_text
 
 
 _LOG = logging.getLogger(__name__)
@@ -136,7 +138,7 @@ class AttemptStore:
             raise JournalError("Cannot recover the Attempt: the journal record exceeds its byte limit")
         try:
             return _decode(response_object(raw))
-        except (ValueError, TypeError, KeyError, RecursionError):
+        except (ValueError, TypeError, KeyError, RecursionError, ApiError):
             raise JournalError("Cannot recover the Attempt: the retained journal record is unreadable") from None
 
     def save(self, state: AttemptState) -> None:
@@ -241,8 +243,10 @@ def _encode(state: AttemptState) -> dict:
         return {"stage": "start", **asdict(state)}
     if isinstance(state, ActiveAttempt):
         return {"stage": "active", "start": _encode(state.start), "execution_attempt_ref": state.execution_attempt_ref}
-    return {"stage": "terminal", "active": _encode(state.active), "operation": state.operation,
-            "body_base64": b64encode(state.body).decode("ascii")}
+    stage = "terminal_reconciling" if state.hold and state.hold.reconciling else "terminal_held" if state.hold else "terminal"
+    return {"stage": stage, "active": _encode(state.active),
+            "operation": state.operation, "body_base64": b64encode(state.body).decode("ascii"),
+            **({"hold": asdict(state.hold)} if state.hold else {})}
 
 
 def _decode(document: dict) -> AttemptState:
@@ -260,9 +264,32 @@ def _decode(document: dict) -> AttemptState:
         if re.fullmatch(r"execution_attempt:sha256:[0-9a-f]{64}", ref) is None:
             raise ValueError("Retained Attempt identity is unreadable")
         return ActiveAttempt(start, ref)
-    if stage == "terminal":
+    if stage in {"terminal", "terminal_held", "terminal_reconciling"}:
         active = _decode(document["active"])
         if not isinstance(active, ActiveAttempt) or document["operation"] not in {"complete", "fail"}:
             raise ValueError("Terminal record has no active obligation")
-        return TerminalPending(active, document["operation"], b64decode(document["body_base64"], validate=True))
+        hold = None
+        if stage in {"terminal_held", "terminal_reconciling"}:
+            facts = document["hold"]
+            if type(facts) is not dict or set(facts) != {"action", "code", "description", "detail", "request_id", "observed_state"}:
+                raise ValueError("Held terminal evidence is unreadable")
+            for name, limit in (("action", 32), ("code", 128), ("description", 4096)):
+                value = facts[name]
+                if (type(value) is not str or not value or len(value.encode("utf-8")) > limit
+                        or not value.isprintable()):
+                    raise ValueError("Held terminal evidence is unreadable")
+            for name in ("detail", "request_id"):
+                if admitted_evidence_text(facts[name], EVIDENCE[name]) is None:
+                    raise ValueError("Held API evidence is unreadable")
+            if (facts["action"] not in {"do_not_resend", "reconcile_original", "reconcile_state"}
+                    or facts["observed_state"] not in {None, "in_progress", "succeeded", "failed", "expired", "not_visible"}
+                    or ((stage == "terminal_reconciling") != (facts["action"] == "reconcile_state" and facts["observed_state"] is None))):
+                raise ValueError("Held terminal constraint is unreadable")
+            hold = TerminalHold(**facts)
+        elif "hold" in document:
+            raise ValueError("Terminal hold requires its own stage")
+        terminal = TerminalPending(active, document["operation"], b64decode(document["body_base64"], validate=True), hold)
+        if hold is not None:
+            terminal_receipt_facts(terminal)
+        return terminal
     raise ValueError("Unknown Attempt journal stage")

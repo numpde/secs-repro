@@ -32,7 +32,7 @@ def describe_problem(response: HttpResponse, *, operation: Operation) -> tuple[s
         if value is not None:
             facts[name] = value
     if problem.verified:
-        for name in ("recovery_mode", "recovery_description", "current_send_effect"):
+        for name in ("recovery_mode", "recovery_description", "current_send_effect", "conflict_action", "conflict_description"):
             facts[name] = getattr(problem, name)
     message = f"HTTP {response.status}; response request ID {problem.header_request_id or 'unavailable'}"
     if not problem.verified:
