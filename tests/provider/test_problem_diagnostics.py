@@ -46,6 +46,24 @@ class ProblemDiagnosticsTests(unittest.TestCase):
                 prepared=prepare_hello(display_name="Provider", description="Description", analysis_offerings=()),
                 policy=HelloPolicy("Provider", "Description", 3600, 5), stop=StopAfterWaits(1))
 
+    def test_verified_problem_retains_canonical_recovery_and_send_effect(self):
+        error = self.request_error(self.response(self.problem), Operation.COMPLETE)
+        self.assertEqual(error.diagnostic.get("current_send_effect"), "no_assertion")
+        self.assertEqual(error.diagnostic.get("recovery_mode"), "exact_completion")
+        self.assertIn("unchanged", error.diagnostic.get("recovery_description", ""))
+        unverified = self.request_error(self.response(self.problem | {"request_id": "different"}), Operation.COMPLETE)
+        for name in ("current_send_effect", "recovery_mode", "recovery_description"):
+            self.assertNotIn(name, unverified.diagnostic)
+
+    def test_conflict_preserves_disclosed_upload_reference(self):
+        reference = "upload:sha256:" + "a" * 64
+        problem = self.problem | {"status": 409, "type": "urn:nmr-api:problem:operation-conflict",
+                                  "title": "Operation conflict", "code": "job_upload_selection_pending",
+                                  "detail": "The selected Upload has not been finalized.", "upload_ref": reference}
+        error = self.request_error(self.response(problem), Operation.START)
+        self.assertTrue(error.diagnostic["problem_verified"])
+        self.assertEqual(error.diagnostic.get("upload_ref"), reference)
+
     def test_shared_operation_mapping_matches_existing_route_identity(self):
         from secs_inference.provider.problem import _API_OPERATIONS
         document = json.loads((Path("/workspace/contracts/upstream/nmr_api_v1/openapi/openapi.v1.json")).read_bytes())

@@ -10,7 +10,7 @@ import json
 import re
 from urllib.parse import quote
 
-from ._nmr_api_failure_contract import EVIDENCE, OPERATIONS, PROFILES
+from ._nmr_api_failure_contract import EVIDENCE, OPERATIONS, PROFILES, RECOVERY, SEND_EFFECTS
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +27,11 @@ class FailureInterpretation:
     header_request_id: str | None = None
     instance: str | None = field(default=None, repr=False)
     upload_ref: str | None = field(default=None, repr=False)
+    # Operation constraints, not retry permission or proof of any send outcome.
+    recovery_mode: str | None = None
+    recovery_description: str | None = None
+    # This send only; a later refusal never clears uncertainty about earlier sends.
+    current_send_effect: str | None = None
 
 
 def _text(value: object, profile: dict) -> str | None:
@@ -130,4 +135,7 @@ The decoded body's fields are never evidence of success or an earlier outcome.
     result = replace(result, instance=expected_instance)
     if result.header_request_id != result.body_request_id:
         return replace(result, rejection="request_id_mismatch")
-    return replace(result, verified=True, rejection=None)
+    return replace(result, verified=True, rejection=None,
+                   recovery_mode=RECOVERY[operation]["mode"],
+                   recovery_description=RECOVERY[operation]["description"],
+                   current_send_effect=SEND_EFFECTS[operation][status][result.problem_type][result.code])

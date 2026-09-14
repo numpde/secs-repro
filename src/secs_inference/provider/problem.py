@@ -27,10 +27,13 @@ def describe_problem(response: HttpResponse, *, operation: Operation) -> tuple[s
     facts = {"status": response.status, "request_id": problem.header_request_id,
              "problem_verified": problem.verified, "problem_rejection": problem.rejection,
              "header_request_id": problem.header_request_id, "body_request_id": problem.body_request_id}
-    for name in ("problem_type", "title", "code", "detail"):
+    for name in ("problem_type", "title", "code", "detail", "upload_ref"):
         value = getattr(problem, name)
         if value is not None:
             facts[name] = value
+    if problem.verified:
+        for name in ("recovery_mode", "recovery_description", "current_send_effect"):
+            facts[name] = getattr(problem, name)
     message = f"HTTP {response.status}; response request ID {problem.header_request_id or 'unavailable'}"
     if not problem.verified:
         message += (f"; unverified API explanation ({problem.rejection}); "
