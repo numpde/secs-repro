@@ -1,6 +1,7 @@
 """API explanations survive both job requests and hello's operator surface."""
 
 import json
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -44,6 +45,52 @@ class ProblemDiagnosticsTests(unittest.TestCase):
             publish_hello_until_stopped(api=self.api,
                 prepared=prepare_hello(display_name="Provider", description="Description", analysis_offerings=()),
                 policy=HelloPolicy("Provider", "Description", 3600, 5), stop=StopAfterWaits(1))
+
+    def test_shared_operation_mapping_matches_existing_route_identity(self):
+        from secs_inference.provider.problem import _API_OPERATIONS
+        document = json.loads((Path("/workspace/contracts/upstream/nmr_api_v1/openapi/openapi.v1.json")).read_bytes())
+        self.assertEqual(set(_API_OPERATIONS), set(Operation))
+        for operation, operation_id in _API_OPERATIONS.items():
+            with self.subTest(operation=operation):
+                self.assertEqual(operation_id, document["paths"][operation.path][operation.method.lower()]["operationId"])
+
+    def test_current_authorization_explanation_reaches_requests_and_hello_logs(self):
+        problem = {"type": "urn:nmr-api:problem:authorization-denied", "title": "Authorization denied",
+                   "status": 403, "request_id": "request-test", "instance": "urn:nmr-api:request:request-test",
+                   "code": "authorization_denied",
+                   "detail": "This credential cannot act as a provider. Ask the administrator to review its access."}
+        response = self.response(problem)
+        for operation in Operation:
+            with self.subTest(operation=operation):
+                error = self.request_error(response, operation)
+                self.assertIn(operation.action, str(error))
+                self.assertIn(problem["detail"], str(error))
+                self.assertEqual(error.diagnostic["code"], problem["code"])
+                self.assertTrue(error.diagnostic["problem_verified"])
+        with self.assertLogs("secs_inference.provider.process", level="WARNING") as logs:
+            self.hello(response)
+        self.assertIn(problem["detail"], " ".join(logs.output))
+        self.assertIn("retrying in 5 seconds", " ".join(logs.output))
+
+    def test_unverified_authorization_explanation_keeps_safe_evidence_on_both_surfaces(self):
+        problem = {"type": "urn:nmr-api:problem:authorization-denied", "title": "Authorization denied",
+                   "status": 403, "request_id": "body-request", "instance": "urn:nmr-api:request:body-request",
+                   "code": "authorization_denied", "detail": "Ask the administrator to review provider access."}
+        for changed, reason in (({}, "request_id_mismatch"),
+                                ({"request_id": "request-test", "instance": "urn:nmr-api:request:wrong"}, "invalid_instance")):
+            with self.subTest(reason=reason):
+                response = self.response(problem | changed)
+                error = self.request_error(response, Operation.FAIL)
+                self.assertFalse(error.diagnostic["problem_verified"])
+                self.assertEqual(error.diagnostic["problem_rejection"], reason)
+                self.assertEqual(error.diagnostic["body_request_id"], (problem | changed)["request_id"])
+                self.assertEqual(error.diagnostic["header_request_id"], "request-test")
+                with self.assertLogs("secs_inference.provider.process", level="WARNING") as logs:
+                    self.hello(response)
+                for message in (str(error), " ".join(logs.output)):
+                    self.assertIn(problem["detail"], message)
+                    self.assertIn("unverified", message)
+                    self.assertIn(reason, message)
 
     def test_public_input_explanation_survives_every_execution_operation_and_fixed_hello(self):
         response = self.response(self.problem)

@@ -94,7 +94,7 @@ class ProviderApi:
         if outcome.status == 200:
             return outcome
         request = " without a request ID" if outcome.request_id is None else f" for request {outcome.request_id}"
-        explanation, diagnostic = describe_problem(outcome)
+        explanation, diagnostic = describe_problem(outcome, operation=operation)
         diagnostic = {"operation": operation.action, **diagnostic}
         # Only these problem meanings authorize retirement or reconciliation.
         # A status line alone, even over TLS, is not their application receipt.

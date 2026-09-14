@@ -1,6 +1,6 @@
 .PHONY: test/integration test/integration/challenges
 .PHONY: test/integration/challenges/bruker
-.PHONY: test/integration/bruker-reference test/provider
+.PHONY: test/integration/bruker-reference test/provider test/provider/diagnostics
 .PHONY: test/integration/jcamp-reference test/qualification-tools
 
 test/integration:
@@ -89,7 +89,7 @@ test/integration/challenges test/integration/challenges/bruker: packages/gpu/ima
 		--entrypoint python "$$package_image" \
 		-P /tests/test_published_challenges.py -v "$(CHALLENGE_TEST)"
 
-test/provider:
+test/provider test/provider/diagnostics:
 	@tests_dir=$$(realpath -e tests/provider)
 	provider_image=$$($(MAKE) --no-print-directory provider/image)
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
@@ -100,7 +100,7 @@ test/provider:
 		--mount type=bind,src="$$tests_dir",dst=/workspace/tests/provider,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/contracts",dst=/workspace/contracts,readonly \
 		--entrypoint python "$$provider_image" \
-		-m unittest discover -v -s /workspace/tests/provider -p 'test_*.py'
+		-m unittest discover -v -s /workspace/tests/provider -p '$(if $(filter test/provider/diagnostics,$@),test_problem_diagnostics.py,test_*.py)'
 
 test/qualification-tools:
 	@if test "$(HOST_UID)" -eq 0; then
