@@ -1,0 +1,49 @@
+Closed Attempt archival for provider operators
+
+A held terminal report blocks new work because blindly resending or deleting it
+would discard important facts. After investigation, an operator can archive it
+if a fresh authenticated API read proves the same Attempt is closed. This does
+not prove that the retained report was delivered, and it makes no API mutation.
+
+Stop and inspect the named deployment:
+
+  make provider/deployment/down DEPLOYMENT=<name>
+  make provider/deployment/journal/inspect DEPLOYMENT=<name>
+
+For a terminal_held record, retain its execution_attempt_ref and record_digest.
+The digest covers every byte of the record, including hold/evidence fields, not
+just the terminal request body. Then, using those exact values:
+
+  make provider/deployment/journal/archive-closed DEPLOYMENT=<name> \
+    ATTEMPT_REF=<execution_attempt_ref> RECORD_DIGEST=<record_digest> \
+    REASON='What was investigated and why local retirement is appropriate'
+
+The command requires the existing API/provider ownership binding and current
+signing credential. It uses only the provider image, journal, API configuration,
+and signing credential; no worker, model execution, interpreter or report send.
+The installed image must contain this command. Deploy an updated image through
+the normal image selection workflow before using it.
+
+Success names the private archive and confirms that exact original record bytes,
+API snapshot, API/provider identity and reason were retained before retiring the
+active record. Archives remain beside attempt.json in the deployment's journal.
+Existing diagnostic/report files are preserved there too. Preserve this directory
+for developer investigation. The provider remains stopped. An operator can run
+make provider/deployment/up DEPLOYMENT=<name> to resume eligible new work; this
+never resends the archived report or reruns that Attempt's computation.
+
+A missing/unreadable/live Attempt, mismatched identity, stale digest or pending
+read reconciliation does not authorize archival. Restore API access or inspect
+again as indicated. After a timeout or uncertain retirement, preserve both the
+journal and any archive and inspect before retrying. A failed Docker observer
+may leave its container running: cleanup verifies this invocation's exact ID,
+name and label. If cleanup is unconfirmed, follow the emitted identity checks
+before restarting. Never delete retained results to force progress.
+
+Ownership: the API's immutable clients/provider_python projection owns closure
+classification. SECS owns local held selection, authentication binding, exclusive
+storage and atomic archival mechanics. Closure is not a command receipt. The
+archive is the durable identity/evidence record; terminal API state cannot be
+reopened by replaying the old start key. A new eligible Attempt is separate work.
+The existing GUI receives no new update from archival; do not tell an end user
+that the archived result was delivered.

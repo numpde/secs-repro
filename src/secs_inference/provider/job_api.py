@@ -76,13 +76,14 @@ class JobApi:
             return ActiveAttempt(pending, ref), _state(document)
 
     def snapshot(self, active: ActiveAttempt) -> AttemptSnapshot:
+        document = self.snapshot_document(active)
+        return AttemptSnapshot(document["state"], document["job_state"])
+
+    def snapshot_document(self, active: ActiveAttempt) -> dict:
+        """Retain the same validated point-read facts used by reconciliation."""
         with self._read(Operation.ATTEMPT, path=Operation.ATTEMPT.path.format(execution_attempt_ref=active.execution_attempt_ref)) as document:
-            if document.get("execution_attempt_ref") != active.execution_attempt_ref or document.get("job_ref") != active.start.selected.job_ref:
-                raise ApiError("Cannot reconcile the Attempt: the snapshot names another Attempt or Job")
-            job_state = document.get("job_state")
-            if type(job_state) is not str or job_state not in {"open", "closed", "cancelled"}:
-                raise ApiError("Cannot reconcile the Attempt: the Job lifecycle state is unreadable")
-            return AttemptSnapshot(_state(document), job_state)
+            validate_snapshot(document, active)
+            return document
 
     def specification(self, active: ActiveAttempt):
         selected = active.start.selected
@@ -185,3 +186,16 @@ def _state(document: dict) -> str:
     if type(state) is not str or state not in {"in_progress", "succeeded", "failed", "expired"}:
         raise ApiError("Cannot reconcile the Attempt: its lifecycle state is unreadable")
     return state
+
+
+def validate_snapshot(document: dict, active: ActiveAttempt) -> None:
+    """Validate both fresh reads and retained archival point-read evidence."""
+    if (type(document) is not dict
+            or document.get("schema_id") != "nmr.provider.execution_attempt_read_response.v1"
+            or document.get("execution_attempt_ref") != active.execution_attempt_ref
+            or document.get("job_ref") != active.start.selected.job_ref):
+        raise ApiError("Cannot reconcile the Attempt: the snapshot names another Attempt or Job")
+    job_state = document.get("job_state")
+    if type(job_state) is not str or job_state not in {"open", "closed", "cancelled"}:
+        raise ApiError("Cannot reconcile the Attempt: the Job lifecycle state is unreadable")
+    _state(document)

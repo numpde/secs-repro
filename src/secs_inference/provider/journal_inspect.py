@@ -12,7 +12,8 @@ from hashlib import sha256
 
 def inspect_journal(directory: Path) -> dict:
     with AttemptStore(directory, read_only=True) as journal:
-        record = journal.load()
+        loaded = journal.load_record()
+        record = None if loaded is None else loaded[1]
         if isinstance(record, TerminalPending):
             try:
                 terminal_receipt_facts(record)
@@ -21,7 +22,8 @@ def inspect_journal(directory: Path) -> dict:
         records = []
         if record is not None:
             start = record if isinstance(record, StartPending) else record.start if isinstance(record, ActiveAttempt) else record.active.start
-            facts = {"provider_ref": start.provider_ref, "job_ref": start.selected.job_ref,
+            facts = {"record_digest": "sha256:" + sha256(loaded[0]).hexdigest(),
+                     "provider_ref": start.provider_ref, "job_ref": start.selected.job_ref,
                      "provider_attempt_key": start.provider_attempt_key,
                      "current_automation": "stopped", "next_actor": "provider_operator",
                      "next_action": "Review the retained state before restarting the provider."}
