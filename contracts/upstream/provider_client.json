@@ -1,16 +1,16 @@
 {
-  "api_contract_revision": "ec1b3155967af33502038b328c3ef6d532433e8c",
+  "api_contract_revision": "6402e545753cbb49d4cf65cf9d7b94e4c1d5afac",
   "inputs": {
-    "nmr_api/provider/openapi/openapi.v1.json": "9204d102edec5dc66bc7c59d2ba4beaab50e93060d9e80f0e51a757abfa19af6"
+    "nmr_api/provider/openapi/openapi.v1.json": "078ec9942e257ec8ce098189918209c303162731b86df4b4008defcd77724071"
   },
-  "interpreter_source_revision": "ec1b3155967af33502038b328c3ef6d532433e8c",
+  "interpreter_source_revision": "6402e545753cbb49d4cf65cf9d7b94e4c1d5afac",
   "outputs": {
-    "_nmr_api_failure_contract.py": "30b9c395c1feb5e5797eb4d50f43ecc2c007496e1e00bb6dff6f53884342eb03",
-    "_nmr_api_failures.py": "03b009d423dad554f4b84bfa53220542a94939b9a1645fcbc6a022b80e8c836b"
+    "_nmr_api_failure_contract.py": "885b2a6d0e3334256c78ae6c409b05b4ed0d2896eeb6d4e1037bac23ae85e81c",
+    "_nmr_api_failures.py": "38ff4efd5e61788ac0aad9679233bed09f31e3d91e9db19d7c6576bda59b6dde"
   },
   "sources": {
-    "clients/provider_python/_nmr_api_failures.py": "03b009d423dad554f4b84bfa53220542a94939b9a1645fcbc6a022b80e8c836b",
+    "clients/provider_python/_nmr_api_failures.py": "38ff4efd5e61788ac0aad9679233bed09f31e3d91e9db19d7c6576bda59b6dde",
     "clients/provider_python/project.py": "ecf0ec64ed57a1d727ace35d63274e585eafe7a4345d210ec00263914c86241c",
-    "clients/provider_python/render_failure_contract.py": "965a3b9c5e7229f0ea21ca2db2d3920f447ea88c15d8408b2ba9588320ee32d0"
+    "clients/provider_python/render_failure_contract.py": "1522f3ed696c2525db864aafa1f801555e11c591d000d9e14026dcfe849c7e52"
   }
 }
