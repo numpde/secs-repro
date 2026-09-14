@@ -11,7 +11,6 @@ from secs_inference.provider.hello import (
     HelloAccepted,
     HelloReceiptRejected,
     PreparedHello,
-    is_fixed_hello_problem,
     parse_hello_receipt,
 )
 from secs_inference.provider.http import (
@@ -28,7 +27,6 @@ from secs_inference.provider.http import (
 from secs_inference.provider.signing import sign_request
 from secs_inference.provider.operations import Operation
 from secs_inference.provider.job_api import ApiError, ApiUnavailable
-from secs_inference.provider.response_json import response_object
 from secs_inference.provider.network_errors import network_failure_reason, network_failure_evidence
 from secs_inference.provider.problem import describe_problem
 
@@ -93,20 +91,13 @@ class ProviderApi:
             })
         if outcome.status == 200:
             return outcome
-        request = " without a request ID" if outcome.request_id is None else f" for request {outcome.request_id}"
         explanation, diagnostic = describe_problem(outcome, operation=operation)
         diagnostic = {"operation": operation.action, **diagnostic}
-        # Only these problem meanings authorize retirement or reconciliation.
-        # A status line alone, even over TLS, is not their application receipt.
-        if outcome.status in {404, 409}:
-            meaning = "not-found" if outcome.status == 404 else "operation-conflict"
-            try:
-                problem = response_object(outcome.body)
-            except (ValueError, UnicodeError, RecursionError):
-                problem = {}
-            if problem.get("type") != "urn:nmr-api:problem:" + meaning or problem.get("status") != outcome.status:
-                raise ApiError(f"Cannot reconcile {operation_name} HTTP {outcome.status}{request}: its problem meaning is unreadable",
-                               diagnostic=diagnostic)
+        # Only a fully admitted Problem may authorize reconciliation. A later
+        # response with unreadable meaning cannot retire a retained command.
+        if outcome.status in {404, 409} and not diagnostic["problem_verified"]:
+            raise ApiError(f"Cannot reconcile {operation_name}: {explanation}",
+                           diagnostic=diagnostic)
         # Most operations can retry a 500 using a read or retained command.
         # Capability issuance is different: a lost bearer cannot be replayed,
         # and its contract requires diagnosis before issuing another after 500.
@@ -147,9 +138,7 @@ class ProviderApi:
             if type(receipt) is HelloAccepted:
                 return receipt
             return HelloUnavailable(HelloReceiptRejected(receipt.reason, outcome.request_id))
-        if is_fixed_hello_problem(
-            outcome.body,
-            status=outcome.status,
-        ):
+        _, diagnostic = describe_problem(outcome, operation=Operation.HELLO)
+        if outcome.status in {400, 413, 414, 431} and diagnostic["problem_verified"]:
             return HelloCorrectionRequired(outcome)
         return HelloUnavailable(outcome)

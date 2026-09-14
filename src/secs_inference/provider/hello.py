@@ -11,7 +11,6 @@ import re
 from secs_inference.provider.canonical_json import JsonValue, canonical_json_bytes
 from secs_inference.provider.credential import validate_provider_ref
 from secs_inference.provider.operations import Operation
-from secs_inference.provider.problem import is_display_diagnostic
 
 
 HELLO_PATH = Operation.HELLO.path
@@ -23,33 +22,6 @@ _TIMESTAMP = re.compile(
     r"(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):"
     r"[0-5][0-9]:[0-5][0-9](?:\.(?!000000)[0-9]{6})?Z"
 )
-_VISIBLE_ASCII = re.compile(r"[\x21-\x7e]{1,128}")
-_FIXED_PROBLEM_PROFILES = {
-    400: (
-        "urn:nmr-api:problem:bad-request",
-        "Bad request",
-        frozenset({"provider_request_invalid", "request_query_not_supported"}),
-    ),
-    413: (
-        "urn:nmr-api:problem:request-content-too-large",
-        "Request content too large",
-        frozenset({"request_content_too_large"}),
-    ),
-    414: (
-        "urn:nmr-api:problem:uri-too-long",
-        "URI too long",
-        frozenset({"request_path_too_large", "request_query_too_large"}),
-    ),
-    431: (
-        "urn:nmr-api:problem:request-header-fields-too-large",
-        "Request header fields too large",
-        frozenset(
-            {"request_header_bytes_too_large", "request_header_count_too_large"}
-        ),
-    ),
-}
-
-
 @dataclass(frozen=True, slots=True)
 class AnalysisOffering:
     """One analysis description in the provider's complete hello snapshot."""
@@ -177,53 +149,6 @@ def parse_hello_receipt(
     if provider_ref != expected_provider_ref:
         return HelloReceiptRejected(HelloReceiptRejection.RESPONSE_DRIFT)
     return HelloAccepted()
-
-
-def is_fixed_hello_problem(
-    raw: bytes,
-    *,
-    status: int,
-) -> bool:
-    """Return whether a problem proves that the fixed hello request must change."""
-
-    profile = _FIXED_PROBLEM_PROFILES.get(status)
-    if profile is None:
-        return False
-    try:
-        document = _decode_response_object(raw)
-    except (UnicodeDecodeError, TypeError, ValueError, RecursionError):
-        return False
-    if set(document) != {
-        "type",
-        "title",
-        "status",
-        "instance",
-        "request_id",
-        "code",
-        "detail",
-    }:
-        return False
-    problem_type, title, diagnostic_codes = profile
-    if (document["type"], document["title"], document["status"]) != (
-        problem_type,
-        title,
-        status,
-    ):
-        return False
-    instance = document["instance"]
-    request_id = document["request_id"]
-    code = document["code"]
-    detail = document["detail"]
-    return (
-        type(instance) is str
-        and 1 <= len(instance) <= 404
-        and type(request_id) is str
-        and _VISIBLE_ASCII.fullmatch(request_id) is not None
-        and type(code) is str
-        and code in diagnostic_codes
-        and type(detail) is str
-        and is_display_diagnostic(detail)
-    )
 
 
 def _require_bounded_text(value: object, name: str, maximum_characters: int) -> None:

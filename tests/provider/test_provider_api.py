@@ -206,12 +206,12 @@ class ProviderApiTests(unittest.TestCase):
             with self.subTest(status=status):
                 response = HttpResponse(
                     status,
-                    "request-header",
+                    "request-body",
                     canonical_json_bytes(
                         {
                             "code": code,
                             "detail": "The fixed hello request is invalid.",
-                            "instance": "/provider/v1/problems/test",
+                            "instance": "urn:nmr-api:request:request-body",
                             "request_id": "request-body",
                             "status": status,
                             "title": title,
@@ -250,7 +250,7 @@ class ProviderApiTests(unittest.TestCase):
             {
                 "code": "provider_request_invalid",
                 "detail": "The request is invalid.",
-                "instance": "/provider/v1/problems/test",
+                "instance": "urn:nmr-api:request:request-test",
                 "request_id": "request-test",
                 "status": 413,
                 "title": "Request content too large",
