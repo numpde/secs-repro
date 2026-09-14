@@ -2,11 +2,10 @@
 
 import logging
 import json
-from dataclasses import asdict, replace
-from hashlib import sha256
+from dataclasses import replace
 from secrets import token_hex
 
-from secs_inference.provider.attempt_state import ActiveAttempt, StartPending, TerminalPending, TerminalHold
+from secs_inference.provider.attempt_state import ActiveAttempt, StartPending, TerminalPending, TerminalHold, terminal_recovery_facts
 from secs_inference.provider.chat import InterpreterError
 from secs_inference.provider.job_api import ApiError, ApiUnavailable, complete_command, fail_command
 from secs_inference.provider.job_input import JobInputError
@@ -189,7 +188,7 @@ class ExecutionLoop:
                 observed = "not_visible"
             else:
                 automatic = isinstance(error, ApiUnavailable)
-                facts = self._hold_facts(terminal) | {
+                facts = terminal_recovery_facts(terminal) | {
                     "automatic_reads": "retry_with_backoff" if automatic else "stopped",
                     "next_actor": "provider" if automatic else "provider_operator",
                     "next_action": "retry only the Attempt read" if automatic else "investigate the rejected Attempt read before restarting",
@@ -208,18 +207,9 @@ class ExecutionLoop:
         self.journal.save(held)
         self._held(held)
 
-    def _hold_facts(self, terminal):
-        hold = terminal.hold
-        return {**asdict(hold), "execution_attempt_ref": terminal.active.execution_attempt_ref,
-                 "operation": terminal.operation, "command_fingerprint": "sha256:" + sha256(terminal.body).hexdigest(),
-                 "command_retained": True, "delivery": "unconfirmed",
-                 "automatic_resends": "stopped_including_restart", "new_work": "stopped",
-                 "next_actor": "provider_operator",
-                 "next_action": "reconcile the original command and API outcome; involve the provider developer to investigate any mismatch"}
-
     def _held(self, terminal):
         hold = terminal.hold
-        facts = self._hold_facts(terminal)
+        facts = terminal_recovery_facts(terminal)
         raise ApiError(
             f"Attempt {facts['execution_attempt_ref']}: exact {facts['operation']} command retained; "
             "delivery is not confirmed. Automatic resends and new work are stopped, including after restart. "

@@ -41,35 +41,41 @@ class JournalError(RuntimeError):
 class AttemptStore:
     """Hold the controller's single-writer lock; retained state survives release."""
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, *, read_only: bool = False):
         self.directory = directory
+        self._read_only = read_only
         self._directory_fd = self._lock_fd = -1
         self._usable = False
         phase = "creating the private journal directory"
         try:
-            directory.mkdir(mode=0o700, exist_ok=True)
-            phase = "opening the parent directory"
-            parent_fd = os.open(directory.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                phase = "syncing the parent directory"
-                os.fsync(parent_fd)
-            except BaseException:
+            if not read_only:
+                directory.mkdir(mode=0o700, exist_ok=True)
+                phase = "opening the parent directory"
+                parent_fd = os.open(directory.parent, os.O_RDONLY | os.O_DIRECTORY)
                 try:
+                    phase = "syncing the parent directory"
+                    os.fsync(parent_fd)
+                except BaseException:
+                    try:
+                        os.close(parent_fd)
+                    except OSError as cleanup:
+                        _LOG.error("Cannot close the journal's parent directory after failed synchronization: %s",
+                                   json.dumps(exception_evidence(cleanup)))
+                    raise
+                else:
+                    phase = "closing the parent directory"
                     os.close(parent_fd)
-                except OSError as cleanup:
-                    _LOG.error("Cannot close the journal's parent directory after failed synchronization: %s",
-                               json.dumps(exception_evidence(cleanup)))
-                raise
-            else:
-                phase = "closing the parent directory"
-                os.close(parent_fd)
             phase = "opening the journal directory"
             self._directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             status = os.fstat(self._directory_fd)
             if status.st_uid != os.getuid() or status.st_mode & 0o077:
                 raise JournalError("Cannot own the Attempt journal: its directory must be private to the provider user")
             phase = "opening the ownership lock"
-            self._lock_fd = os.open("owner.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=self._directory_fd)
+            flags = os.O_RDONLY if read_only else os.O_RDWR | os.O_CREAT
+            self._lock_fd = os.open("owner.lock", flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=self._directory_fd)
+            lock_status = os.fstat(self._lock_fd)
+            if not stat.S_ISREG(lock_status.st_mode) or lock_status.st_uid != os.getuid() or lock_status.st_mode & 0o077:
+                raise JournalError("Cannot own the Attempt journal: its lock must be a private regular file")
             phase = "acquiring exclusive journal ownership"
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BaseException as error:
@@ -143,7 +149,7 @@ class AttemptStore:
 
     def save(self, state: AttemptState) -> None:
         """Confirm file and directory durability before the next external effect."""
-        self._require_usable()
+        self._require_writable()
         document = _encode(state)
         raw = canonical_json_bytes(document)
         staging = None
@@ -188,7 +194,7 @@ class AttemptStore:
 
     def _write_evidence(self, active: ActiveAttempt, kind: str, document: dict) -> None:
         """Create private Attempt evidence once, without replacing earlier facts."""
-        self._require_usable()
+        self._require_writable()
         name = active.execution_attempt_ref.removeprefix("execution_attempt:sha256:") + f".{kind}.json"
         raw = canonical_json_bytes(document)
         phase = "creating the evidence file"
@@ -209,7 +215,7 @@ class AttemptStore:
 
     def clear(self) -> None:
         """Retire only a reconciled obligation; this is not cancellation."""
-        self._require_usable()
+        self._require_writable()
         phase = "removing the retained record"
         try:
             os.unlink("attempt.json", dir_fd=self._directory_fd)
@@ -220,6 +226,11 @@ class AttemptStore:
             reason = os.strerror(error.errno) if error.errno is not None else "an operating-system error occurred without a recorded reason"
             raise JournalError(f"Cannot confirm Attempt journal retirement while {phase}: {reason}. "
                                "Retirement durability is unconfirmed; correct the failure, then restart the provider to check retained Attempt state.") from error
+
+    def _require_writable(self):
+        self._require_usable()
+        if self._read_only:
+            raise JournalError("The Attempt journal is open for read-only inspection")
 
     def _require_usable(self):
         if not self._usable or self._directory_fd < 0:
