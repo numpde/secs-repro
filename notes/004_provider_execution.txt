@@ -29,13 +29,20 @@ What the result says
 
 Result schema: secs.elucidation.result.v1.
 
-An analysed result records:
+A completed execution report records:
 
 - Each selected reader, formula and exact source identity, with its explanation.
 - Rejected choices and their reading errors; the used choice is marked used.
 - The verified length and SHA-256 of every acquired Upload.
 - Ranked candidate SMILES and scores, actual GA counts and search settings.
 - Spectrum preparation and configured inference mode and retrieval budget.
+
+If retrieval returns no starting molecules, the report's top-level outcome is
+no_starting_candidates. No elucidation was produced: Graph GA did not run and
+evaluated no structures. The API Attempt still completes with its full report;
+its succeeded state describes execution completion, not scientific success.
+Refinement results retain the analysed outcome. Earlier reports used analysed
+even when retrieval returned no starting molecules; they are not rewritten.
 
 Scores and ppm endpoints are decimal strings because this provider's canonical
 JSON encoder does not admit floating-point numbers. Compute mode does not

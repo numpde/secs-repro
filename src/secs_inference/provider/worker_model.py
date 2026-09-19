@@ -79,7 +79,9 @@ class ScientificHandler:
                 return {"outcome": "inspected", "facts": access.inspect(SourceRef(**command["source"]))}
             if command["operation"] != "analyse":
                 raise AssertionError("No scientific operation is bound to the worker request")
-            return {"outcome": "analysed", "analysis": self._analyse(access, command["selection"])}
+            analysis = self._analyse(access, command["selection"])
+            outcome = "no_starting_candidates" if analysis["search"]["outcome"] == "no_starting_candidates" else "analysed"
+            return {"outcome": outcome, "analysis": analysis}
         except (InputReadError, SpectrumReadError, FormulaError) as error:
             return {"outcome": "input_rejected", "reason": str(error)[:2048]}
 
@@ -111,7 +113,7 @@ class ScientificHandler:
             candidates = []
             search = {
                 "outcome": "no_starting_candidates", "generations": 0, "evaluated": 0,
-                "explanation": "Candidate retrieval returned no starting molecules under the configured search. "
+                "explanation": "No elucidation was produced. Candidate retrieval returned no starting molecules under the configured search. "
                                "Graph GA was not run. This does not establish that the formula is invalid "
                                "or that no matching structure exists.",
             }

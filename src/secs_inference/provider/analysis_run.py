@@ -192,7 +192,7 @@ def run_analysis(
                     session.reject(response["reason"])
                     continue
                 choice["used"] = True
-                return {"schema_id": RESULT_SCHEMA_ID, "outcome": "analysed",
+                return {"schema_id": RESULT_SCHEMA_ID, "outcome": response["outcome"],
                         "interpretation_rejections": session.rejections,
                         "input_choices": choices, "acquired_uploads": _upload_evidence(sources), "analysis": response["analysis"]}
         except (WorkerStopUnconfirmed, ProviderStopping, AnalysisCancelled, AttemptNoLongerActive):
@@ -270,7 +270,7 @@ def _worker_request(worker, sources, request, deadline, check_running=lambda: No
             error = WorkerError(f"Cannot finish {operation}: the SECS worker encountered an internal error; inspect this Attempt's operator diagnostics")
             error.diagnostic = response
             raise error
-        if response.get("outcome") not in {"inspected", "input_rejected", "analysed"}:
+        if response.get("outcome") not in {"inspected", "input_rejected", "analysed", "no_starting_candidates"}:
             raise WorkerError(f"Cannot confirm {operation}: the SECS worker returned an unrecognized operation outcome")
     except WorkerError:
         # Raise the response failure first so a failed stop retains it as

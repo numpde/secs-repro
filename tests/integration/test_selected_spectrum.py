@@ -53,7 +53,7 @@ class SelectedSpectrumTests(unittest.TestCase):
                 "directory": directory, "selection": {"reader": "jcamp",
                 "source": {"upload_ref": "upload:chosen", "member": None}, "formula": "C7H8ClN",
                 "explanation": "The selected file is the proton spectrum."}})
-        self.assertEqual(response["outcome"], "analysed")
+        self.assertEqual(response["outcome"], "no_starting_candidates")
         self.assertEqual(response["analysis"]["candidates"], [])
         search = response["analysis"]["search"]
         self.assertEqual(search["outcome"], "no_starting_candidates")
