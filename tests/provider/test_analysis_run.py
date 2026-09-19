@@ -1,6 +1,7 @@
 """Acquisition outages and observed membership changes have different owners."""
 
 from dataclasses import replace
+from base64 import b64decode
 
 from datetime import datetime, timezone
 import errno
@@ -32,6 +33,33 @@ GRANT = UploadReadCapability(UPLOAD.upload_ref, 4, "sha256:" + "b" * 64,
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_no_starting_candidates_is_published_with_its_input_evidence(self):
+        api = FakeApi()
+        api.specification = Mock(return_value=JobSpecification("job:test", "C2H6O"))
+        api.uploads = Mock(return_value=(UPLOAD,))
+        api.capability = Mock(return_value=GRANT)
+        chat = ScriptedChat(tool("read_jcamp", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None},
+                                               "formula": "C2H6O", "explanation": "Proton experiment."}))
+        analysis = {"candidates": [], "search": {"outcome": "no_starting_candidates", "generations": 0, "evaluated": 0}}
+        worker = Mock()
+        worker.request.return_value = {"outcome": "no_starting_candidates", "analysis": analysis}
+        with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as journal, patch(
+                "secs_inference.provider.analysis_run.download_upload", return_value=Path(directory) / "verified"):
+            def analyse(active):
+                return run_analysis(api=api, active=active, chat=chat, worker=worker, store=None,
+                    directory=Path(directory) / "current", work_deadline=monotonic() + 10,
+                    interpretation_seconds=5, max_turns=1, max_total_bytes=100)
+            ExecutionLoop(api, journal, analyse, journal.diagnose).step()
+            self.assertIsNone(journal.load())
+        command = json.loads(api.calls[-1])
+        self.assertEqual(command["schema_id"], "nmr.provider.execution_attempt_complete_request.v1")
+        report = json.loads(b64decode(command["canonical_result_base64"]))
+        self.assertEqual(report["outcome"], "no_starting_candidates")
+        self.assertEqual(report["analysis"], analysis)
+        self.assertTrue(report["input_choices"][0]["used"])
+        self.assertEqual(report["acquired_uploads"][UPLOAD.upload_ref]["content_hash"], GRANT.content_hash)
+        worker.request.assert_called_once()
+
     def test_transient_metadata_outages_do_not_restart_admission_or_interpretation(self):
         api = FakeApi()
         api.specification = Mock(side_effect=[ApiUnavailable("specification offline"), JobSpecification("job:test", "C2H6O")])
