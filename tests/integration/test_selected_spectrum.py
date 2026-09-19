@@ -38,28 +38,45 @@ class SelectedSpectrumTests(unittest.TestCase):
                     "explanation": "The selected file is the proton spectrum."}})
         self.assertIs(caught.exception, failure)
 
-    def test_empty_retrieval_returns_an_explained_search_result_not_a_worker_fault(self):
+    def test_retrieval_counts_distinguish_empty_index_formula_rejection_and_population_limit(self):
         import faiss
-        from secs.elucidation import FaissCandidateSource
+        from secs.elucidation import FaissCandidateSource, OptimizerResult
 
-        inference = Mock(embed_spectrum=Mock(return_value=np.array([1., 0.], dtype=np.float32)))
-        index = faiss.IndexFlatIP(2)
-        index.add(np.array([[1., 0.]], dtype=np.float32))
-        candidates = FaissCandidateSource(index, ["C" * 30], ["C30H62"], n_neighbours=1)
-        worker = ScientificHandler(inference, candidates,
-            ScientificWorkerConfig("unused", "unused", device="cpu", neighbours=1))
-        with TemporaryDirectory() as directory:
-            response = worker({"operation": "analyse", "files": {"upload:chosen": str(JCAMP)},
-                "directory": directory, "selection": {"reader": "jcamp",
-                "source": {"upload_ref": "upload:chosen", "member": None}, "formula": "C7H8ClN",
-                "explanation": "The selected file is the proton spectrum."}})
-        self.assertEqual(response["outcome"], "no_starting_candidates")
-        self.assertEqual(response["analysis"]["candidates"], [])
-        search = response["analysis"]["search"]
-        self.assertEqual(search["outcome"], "no_starting_candidates")
-        self.assertEqual((search["generations"], search["evaluated"]), (0, 0))
-        self.assertIn("Graph GA was not run", search["explanation"])
-        self.assertIn("does not establish", search["explanation"])
+        for formulas, outcome, matches, starting in (
+            ([], "no_starting_candidates", 0, 0),
+            (["C30H62"], "no_starting_candidates", 0, 0),
+            (["C7H8ClN"] * 3, "analysed", 3, 2),
+        ):
+            with self.subTest(formulas=formulas), TemporaryDirectory() as directory:
+                inference = Mock(embed_spectrum=Mock(return_value=np.array([1., 0.], dtype=np.float32)))
+                index = faiss.IndexFlatIP(2)
+                index.add(np.array([[1., 0.]] * len(formulas), dtype=np.float32).reshape(-1, 2))
+                candidates = FaissCandidateSource(index, ["NCc1ccc(Cl)cc1"] * len(formulas), formulas, n_neighbours=8)
+                worker = ScientificHandler(inference, candidates,
+                    ScientificWorkerConfig("unused", "unused", device="cpu", neighbours=8, initial_population_size=2))
+                optimized = OptimizerResult(population=[("NCc1ccc(Cl)cc1", 1.0)], generations=1, n_evaluated=2)
+                with patch("secs.elucidation.GraphGAOptimizer.run", return_value=optimized) as refine:
+                    response = worker({"operation": "analyse", "files": {"upload:chosen": str(JCAMP)},
+                        "directory": directory, "selection": {"reader": "jcamp",
+                        "source": {"upload_ref": "upload:chosen", "member": None}, "formula": "C7H8ClN",
+                        "explanation": "The selected file is the proton spectrum."}})
+                self.assertEqual(response["outcome"], outcome)
+                analysis = response["analysis"]
+                self.assertEqual(analysis["retrieval"], {"index_size": len(formulas), "neighbours_returned": len(formulas),
+                    "formula_matches": matches, "starting_candidates": starting})
+                search = analysis["search"]
+                if starting:
+                    refine.assert_called_once()
+                    self.assertEqual(len(refine.call_args.args[0]), starting)
+                    self.assertEqual(search["outcome"], "optimized")
+                    self.assertEqual(analysis["candidates"], [{"smiles": "NCc1ccc(Cl)cc1", "score": "1.0"}])
+                else:
+                    refine.assert_not_called()
+                    self.assertEqual(analysis["candidates"], [])
+                    self.assertEqual(search["outcome"], "no_starting_candidates")
+                    self.assertEqual((search["generations"], search["evaluated"]), (0, 0))
+                    self.assertIn("Graph GA was not run", search["explanation"])
+                    self.assertIn("does not establish", search["explanation"])
 
     def test_explicit_jcamp_member_matches_the_direct_reader(self):
         with TemporaryDirectory() as directory:

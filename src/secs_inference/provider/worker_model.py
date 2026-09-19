@@ -1,6 +1,6 @@
 """Load warm scientific state in the offline child, not the API controller."""
 
-from dataclasses import MISSING, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, fields
 import json
 from pathlib import Path
 import sys
@@ -88,7 +88,7 @@ class ScientificHandler:
     def _analyse(self, access, document):
         """Read the chosen input and report refinement or observed empty retrieval."""
         from secs.elucidation import GraphGAOptimizer
-        from secs_inference.elucidation import NoStartingCandidates, SecsElucidator
+        from secs_inference.elucidation import SecsElucidator
         from secs_inference.provider.input_operations import BrukerSelection, JcampSelection, SourceRef
         from secs_inference.provider.spectrum_input import prepare_selected_spectrum
         from secs_inference.spectra.secs import SECS_PPM_FROM, SECS_PPM_TO, SECS_SPECTRUM_POINTS
@@ -109,7 +109,7 @@ class ScientificHandler:
         result = elucidator.elucidate(spectrum, selection.formula)
         # This provider's canonical JSON excludes floating-point numbers. Scientific
         # decimal values travel as text; counts and discrete settings stay integers.
-        if isinstance(result, NoStartingCandidates):
+        if result.optimization is None:
             candidates = []
             search = {
                 "outcome": "no_starting_candidates", "generations": 0, "evaluated": 0,
@@ -118,10 +118,14 @@ class ScientificHandler:
                                "or that no matching structure exists.",
             }
         else:
-            candidates = [{"smiles": smiles, "score": str(float(score))} for smiles, score in result.population]
-            search = {"outcome": "optimized", "generations": result.generations, "evaluated": result.n_evaluated}
+            candidates = [{"smiles": smiles, "score": str(float(score))} for smiles, score in result.optimization.population]
+            search = {"outcome": "optimized", "generations": result.optimization.generations, "evaluated": result.optimization.n_evaluated}
+        retrieval = {"starting_candidates": len(result.proposal.smiles)}
+        if result.proposal.retrieval is not None:
+            retrieval.update(asdict(result.proposal.retrieval))
         return {
             "candidates": candidates,
+            "retrieval": retrieval,
             "search": {**search, "optimizer": "graph_ga",
                        "initial_population_size": self.config.initial_population_size,
                        "population_size": self.config.population_size, "offspring_size": self.config.offspring_size,

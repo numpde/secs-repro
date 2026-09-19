@@ -92,6 +92,13 @@ Molecular formula: C21H22N2O2.</pre>
     <code>succeeded</code> means execution completed, not that a structure was found.
     This search limitation does not establish that the formula is invalid or
     that no matching structure exists.</p>
+  <p>The report's <code>analysis.retrieval</code> counts show where retrieval
+    stopped: <code>neighbours_returned</code> counts the molecules returned by
+    the index search; <code>formula_matches</code> counts those that passed its
+    formula filter; <code>starting_candidates</code> counts those selected for
+    refinement after the population limit. These counts do not show whether
+    suitable molecules exist elsewhere in the index. The configured retrieval
+    limit is not the number of molecules actually returned.</p>
   <p>If the interpreter cannot select usable input, the attempt fails with
     <code>cannot_analyse</code>: no analysis was produced. Its failure message
     includes the interpreter's explanation. That explanation is the model's

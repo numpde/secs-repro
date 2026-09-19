@@ -36,6 +36,15 @@ A completed execution report records:
 - The verified length and SHA-256 of every acquired Upload.
 - Ranked candidate SMILES and scores, actual GA counts and search settings.
 - Spectrum preparation and configured inference mode and retrieval budget.
+- Retrieval counts: index_size, neighbours_returned, formula_matches (among
+  returned neighbours, before the population limit), and starting_candidates.
+
+The configured retrieval_neighbours is a limit, not an observed count. Zero
+neighbours_returned means the index search returned no neighbours; a positive
+count with zero formula_matches means the formula filter rejected them all.
+These counts do not establish whether suitable formulas exist elsewhere in
+the index. Static or HTTP candidate sources report only starting_candidates
+because they do not expose FAISS search counts.
 
 If retrieval returns no starting molecules, the report's top-level outcome is
 no_starting_candidates. No elucidation was produced: Graph GA did not run and

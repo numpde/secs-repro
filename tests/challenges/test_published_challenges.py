@@ -14,7 +14,7 @@ from secs.elucidation import FaissCandidateSource, GraphGAOptimizer, ScoreOnlyOp
 from secs.elucidation.caching import TrajectoryCallback
 from secs.elucidation.optimizers.base import OptimizerResult
 from secs.utils.elucidation import smiles_to_molecular_formula
-from secs_inference.elucidation import NoStartingCandidates, SecsElucidator
+from secs_inference.elucidation import SecsElucidator
 from secs_inference.model import SecsInference
 from secs_inference.spectra.bruker import read_bruker_pdata
 from secs_inference.spectra.secs import prepare_secs_spectrum
@@ -111,7 +111,7 @@ class PublishedChallengeTest(unittest.TestCase):
 
         # The title identifies strychnine; PubChem CID 441071 gives C21H22N2O2.
         # https://pubchem.ncbi.nlm.nih.gov/compound/441071
-        result = elucidator.elucidate(spectrum, "C21H22N2O2")
+        result = elucidator.elucidate(spectrum, "C21H22N2O2").optimization
 
         self.assertIsInstance(result, OptimizerResult)
         self.assertEqual(result.generations, 1)
@@ -133,7 +133,7 @@ class PublishedChallengeTest(unittest.TestCase):
 
                 result = self.elucidator.elucidate(spectrum, case["formula"])
                 # Empty retrieval means no recovered structure in this baseline.
-                population = [] if isinstance(result, NoStartingCandidates) else result.population
+                population = [] if result.optimization is None else result.optimization.population
                 rank = rank_expected_structure(
                     population,
                     case["formula"],
