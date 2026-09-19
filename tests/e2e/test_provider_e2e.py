@@ -137,6 +137,11 @@ class ProviderEndToEndTests(unittest.TestCase):
                 self.assertEqual(report["input_choices"][-1]["source"]["member"], "experiment2/proton.jdx")
                 self.assertEqual(report["acquired_uploads"][UPLOAD]["content_hash"], "sha256:" + sha256(archive_bytes).hexdigest())
                 self.assertTrue(report["analysis"]["candidates"])
+                retrieval = report["analysis"]["retrieval"]
+                self.assertEqual(retrieval["index_size"], 8)
+                self.assertEqual(retrieval["neighbours_returned"], 8)
+                self.assertGreater(retrieval["starting_candidates"], 0)
+                self.assertEqual(retrieval["starting_candidates"], retrieval["formula_matches"])
                 self.assertEqual(report["analysis"]["search"]["generations"], 1)
                 self.assertEqual(report["analysis"]["inference"]["smiles_batch_size"], 8)
                 self.assertEqual(report["analysis"]["inference"]["retrieval_neighbours"], 8)

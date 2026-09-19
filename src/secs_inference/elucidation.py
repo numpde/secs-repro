@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import torch
 
-from secs.elucidation.candidates import CandidateSource
+from secs.elucidation.candidates import CandidateProposal, CandidateSource
 from secs.elucidation.components import spectral_objective
 from secs.elucidation.optimizers.base import MoleculeOptimizer, OptimizerResult
 from secs.utils.elucidation import build_formula_string, get_atom_counts_from_formula
@@ -18,8 +18,11 @@ class FormulaError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class NoStartingCandidates:
-    """Retrieval completed without starting molecules; optimization did not run."""
+class ElucidationResult:
+    """Per-call retrieval evidence and refinement, absent when retrieval is empty."""
+
+    proposal: CandidateProposal
+    optimization: OptimizerResult | None
 
 
 class _HnmrCandidateEmbedder:
@@ -50,8 +53,8 @@ class SecsElucidator:
 
     def elucidate(
         self, spectrum: Sequence[float] | FloatArray, formula: str
-    ) -> OptimizerResult | NoStartingCandidates:
-        """Return refinement results, or NoStartingCandidates for empty retrieval.
+    ) -> ElucidationResult:
+        """Return retrieval evidence and any refinement that ran.
 
         Malformed formulas are rejected before model work. Empty retrieval is
         a search limitation, not evidence that the supplied formula is invalid.
@@ -64,15 +67,15 @@ class SecsElucidator:
         canonical_formula = build_formula_string(target_atom_counts)
         spectrum_embedding = torch.from_numpy(self._inference.embed_spectrum(spectrum))
 
-        initial_population = self._candidate_source.propose(
+        proposal = self._candidate_source.propose(
             spectrum_embedding,
             canonical_formula,
             self._initial_population_size,
         )
-        if not initial_population:
+        if not proposal.smiles:
             # Keep empty retrieval distinct from an optimizer that ran and
             # returned no survivors; callers must report the observed stage.
-            return NoStartingCandidates()
+            return ElucidationResult(proposal, None)
 
         candidate_embedder = _HnmrCandidateEmbedder(self._inference)
         objective = spectral_objective(
@@ -81,4 +84,4 @@ class SecsElucidator:
             target_atom_counts,
         )
 
-        return self._optimizer.run(initial_population, objective)
+        return ElucidationResult(proposal, self._optimizer.run(proposal.smiles, objective))

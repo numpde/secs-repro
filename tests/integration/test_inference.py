@@ -130,7 +130,7 @@ class SecsIntegrationTest(unittest.TestCase):
             initial_population_size=len(initial_population),
         )
 
-        result = elucidator.elucidate(spectrum, "C2H6O")
+        result = elucidator.elucidate(spectrum, "C2H6O").optimization
 
         self.assertIsInstance(result, OptimizerResult)
         self.assertTrue(result.population)
