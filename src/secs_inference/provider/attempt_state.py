@@ -17,6 +17,11 @@ class StartPending:
 class ActiveAttempt:
     start: StartPending
     execution_attempt_ref: str
+    local_phase: str | None = None
+
+    def __post_init__(self):
+        if self.local_phase not in {None, "preparing", "running"}:
+            raise ValueError("Invalid retained execution phase")
 
 
 @dataclass(frozen=True, slots=True)

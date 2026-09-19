@@ -133,6 +133,7 @@ def run_analysis(
     work_deadline: float, interpretation_seconds: float, max_turns: int,
     max_total_bytes: int,
     check_running=lambda: None,
+    execution_entered=lambda: None,
 ) -> dict:
     """Return an observed outcome; the execution owner maps it to API status."""
     specification = _read_job_metadata(api.specification, active, work_deadline, check_running)
@@ -184,6 +185,7 @@ def run_analysis(
                     choice["reading_error"] = str(error)
                     session.reject(str(error))
                     continue
+                execution_entered()
                 response = _worker_request(worker, sources, {"operation": "analyse", "selection": choice}, work_deadline, check_running)
                 if response["outcome"] == "input_rejected":
                     choice["reading_error"] = response["reason"]

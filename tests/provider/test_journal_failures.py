@@ -1,5 +1,7 @@
 """Storage uncertainty halts API effects without erasing earlier failure evidence."""
 
+from dataclasses import replace
+
 import errno
 import json
 import os
@@ -174,7 +176,7 @@ class JournalFailureTests(unittest.TestCase):
                     self.assertNotIn("private-", json.dumps(evidence))
                     self.assertFalse(any(isinstance(call, bytes) for call in api.calls))
                 with AttemptStore(journal_path) as recovered:
-                    self.assertEqual(recovered.load(), ACTIVE)
+                    self.assertEqual(recovered.load(), replace(ACTIVE, local_phase="preparing"))
 
     def test_unconfirmed_stop_keeps_original_context_when_diagnostic_storage_also_fails(self):
         with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as store:
@@ -193,7 +195,7 @@ class JournalFailureTests(unittest.TestCase):
                         ExecutionLoop(api, store, analyse, store.diagnose).step()
             self.assertIs(caught.exception, stop)
             self.assertIs(stop.__context__, primary)
-            self.assertEqual(store.load(), ACTIVE)
+            self.assertEqual(store.load(), replace(ACTIVE, local_phase="preparing"))
             self.assertFalse(any(isinstance(call, bytes) for call in api.calls))
             rendered = "\n".join(captured.output)
             self.assertIn(ACTIVE.execution_attempt_ref, rendered)

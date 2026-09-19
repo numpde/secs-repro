@@ -12,6 +12,7 @@ from secs_inference.provider.canonical_json import canonical_json_bytes, parse_c
 from secs_inference.provider.job_input import JobInputError, SelectedJobInput, parse_job_input_read_response, selected_job_input
 from secs_inference.provider.job_upload import UploadResponseError, parse_job_upload_set_response, parse_upload_read_capability_response
 from secs_inference.provider.operations import Operation
+from secs_inference.provider.hello import _is_timestamp
 from secs_inference.provider.response_json import response_object
 
 
@@ -73,7 +74,7 @@ class JobApi:
             ref = document.get("execution_attempt_ref")
             if type(ref) is not str or re.fullmatch(r"execution_attempt:sha256:[0-9a-f]{64}", ref) is None:
                 raise ApiError("Cannot confirm Attempt start: the receipt has no usable Attempt identity")
-            return ActiveAttempt(pending, ref), _state(document)
+            return ActiveAttempt(pending, ref, "preparing"), _state(document)
 
     def snapshot(self, active: ActiveAttempt) -> AttemptSnapshot:
         document = self.snapshot_document(active)
@@ -99,6 +100,17 @@ class JobApi:
         path = Operation.CAPABILITY.path.format(job_ref=active.start.selected.job_ref, upload_ref=upload.upload_ref)
         with self._response(Operation.CAPABILITY, path=path) as raw:
             return parse_upload_read_capability_response(raw, selected=upload)
+
+    def progress(self, active, condition):
+        expected = {"execution_attempt_ref": active.execution_attempt_ref,
+                    "phase": active.local_phase, "condition_code": condition}
+        body = canonical_json_bytes({"schema_id": "nmr.provider.execution_attempt_progress_request.v1",
+                                     "phase": active.local_phase, "condition_code": condition})
+        path = Operation.PROGRESS.path.format(execution_attempt_ref=active.execution_attempt_ref)
+        with self._read(Operation.PROGRESS, path=path, body=body) as receipt:
+            if any(receipt.get(key) != value for key, value in expected.items()) or not _is_timestamp(receipt.get("updated_at")):
+                raise ApiError("Cannot confirm reporting observation: receipt facts differ")
+            return receipt.get("updated_at")
 
     def publish(self, terminal: TerminalPending) -> None:
         """Confirm exact result/failure facts, not merely a matching terminal state."""

@@ -16,6 +16,7 @@ _API_OPERATIONS = {
     Operation.ATTEMPT: "execution_attempt_read",
     Operation.COMPLETE: "execution_attempt_complete",
     Operation.FAIL: "execution_attempt_fail",
+    Operation.PROGRESS: "execution_attempt_progress",
 }
 def describe_problem(response: HttpResponse, *, operation: Operation) -> tuple[str, dict]:
     """Retain shared validated evidence, explicitly marking unverified explanations."""

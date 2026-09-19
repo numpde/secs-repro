@@ -1,5 +1,7 @@
 """Acquisition outages and observed membership changes have different owners."""
 
+from dataclasses import replace
+
 from datetime import datetime, timezone
 import errno
 import json
@@ -51,8 +53,14 @@ class AcquisitionTests(unittest.TestCase):
             def analyse(active):
                 return run_analysis(api=api, active=active, chat=chat, worker=worker, store=None,
                                     directory=Path(directory) / "current", work_deadline=20,
-                                    interpretation_seconds=5, max_turns=1, max_total_bytes=100)
-            ExecutionLoop(api, journal, analyse, journal.diagnose).step()
+                                    interpretation_seconds=5, max_turns=1, max_total_bytes=100,
+                                    execution_entered=loop.mark_execution_entered)
+            def request(*args, **kwargs):
+                self.assertEqual(journal.load().local_phase, "running")
+                return {"outcome": "analysed", "analysis": {"candidates": []}}
+            worker.request.side_effect = request
+            loop = ExecutionLoop(api, journal, analyse, journal.diagnose)
+            loop.step()
             self.assertIsNone(journal.load())
         self.assertEqual(len(api.calls), 3)
         self.assertEqual(json.loads(api.calls[-1])["schema_id"], "nmr.provider.execution_attempt_complete_request.v1")
@@ -148,7 +156,7 @@ class AcquisitionTests(unittest.TestCase):
                     with self.assertRaises(WorkerStopUnconfirmed) as caught:
                         ExecutionLoop(api, journal, analyse, journal.diagnose).step()
                     self.assertIs(caught.exception, stopped)
-                    self.assertEqual(journal.load(), ACTIVE)
+                    self.assertEqual(journal.load(), replace(ACTIVE, local_phase="preparing"))
                 self.assertTrue((root / "current").exists())
                 self.assertFalse(any(isinstance(call, bytes) for call in api.calls))
                 evidence = json.loads(next((root / "journal").glob("*.diagnostic.json")).read_bytes())
