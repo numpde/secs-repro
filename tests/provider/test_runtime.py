@@ -49,7 +49,7 @@ class RuntimeTests(unittest.TestCase):
                     raise WorkerError("Child exited while idle")
                 old.check_ready.side_effect = probe
                 class Loop:
-                    def __init__(self, jobs, journal, analyse, diagnose, before_start):
+                    def __init__(self, jobs, journal, analyse, diagnose, before_start, *, retry_pending):
                         self.before_start = before_start
                     def step(self):
                         self.before_start(START)
@@ -301,7 +301,7 @@ class RuntimeTests(unittest.TestCase):
                 worker = Mock(stopped=False)
                 admissions = []
                 class Loop:
-                    def __init__(self, jobs, journal, analyse, diagnose, before_start):
+                    def __init__(self, jobs, journal, analyse, diagnose, before_start, *, retry_pending):
                         self.before_start = before_start
                     def step(self):
                         self.before_start(START)

@@ -31,6 +31,10 @@ class Operation(Enum):
         "read the Attempt's state", "GET", "/provider/v1/execution-attempts/{execution_attempt_ref}",
         0, 65_536, False, {404},
     )
+    PROGRESS = (
+        "report Attempt progress", "PUT", "/provider/v1/execution-attempts/{execution_attempt_ref}/progress",
+        4096, 65_536, False, {404, 409, 413},
+    )
     COMPLETE = (
         "publish an analysis result", "POST", "/provider/v1/execution-attempts/complete",
         2_097_152, 65_536, False, {404, 409, 413},

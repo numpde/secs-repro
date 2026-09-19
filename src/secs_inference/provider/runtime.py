@@ -81,9 +81,10 @@ def run_execution(*, api, config, chat, upload_store, stop, journal):
             directory=SOURCE_DIRECTORY, work_deadline=monotonic() + config.work_seconds,
             interpretation_seconds=config.interpretation_seconds, max_turns=config.max_turns,
             max_total_bytes=config.max_total_bytes, check_running=check_running,
+            execution_entered=loop.mark_execution_entered,
         )
 
-    loop = ExecutionLoop(jobs, journal, analyse, journal.diagnose, before_start)
+    loop = ExecutionLoop(jobs, journal, analyse, journal.diagnose, before_start, retry_pending=lambda: not stop.is_set())
     retry_seconds = config.poll_seconds
     stop_unconfirmed = False
     try:

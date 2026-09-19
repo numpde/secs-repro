@@ -308,7 +308,8 @@ def _encode(state: AttemptState) -> dict:
     if isinstance(state, StartPending):
         return {"stage": "start", **asdict(state)}
     if isinstance(state, ActiveAttempt):
-        return {"stage": "active", "start": _encode(state.start), "execution_attempt_ref": state.execution_attempt_ref}
+        return {"stage": "active", "start": _encode(state.start), "execution_attempt_ref": state.execution_attempt_ref,
+                **({"local_phase": state.local_phase} if state.local_phase is not None else {})}
     stage = "terminal_reconciling" if state.hold and state.hold.reconciling else "terminal_held" if state.hold else "terminal"
     return {"stage": stage, "active": _encode(state.active),
             "operation": state.operation, "body_base64": b64encode(state.body).decode("ascii"),
@@ -329,7 +330,7 @@ def _decode(document: dict) -> AttemptState:
         ref = document["execution_attempt_ref"]
         if re.fullmatch(r"execution_attempt:sha256:[0-9a-f]{64}", ref) is None:
             raise ValueError("Retained Attempt identity is unreadable")
-        return ActiveAttempt(start, ref)
+        return ActiveAttempt(start, ref, document.get("local_phase"))
     if stage in {"terminal", "terminal_held", "terminal_reconciling"}:
         active = _decode(document["active"])
         if not isinstance(active, ActiveAttempt) or document["operation"] not in {"complete", "fail"}:

@@ -1,0 +1,34 @@
+Terminal reporting conditions and human delivery
+
+The API-owned catalog and shared selector are projected from immutable API
+revision 27614dc63b20f90446a974da4d1be14327d7f706. Refresh both explicit
+source and contract revisions with clients/provider_python/project.py;
+make provider/client/check NMR_API_V1_DIR=<api-repository> verifies provenance.
+
+Real admission retains preparing. Before dispatching scientific analysis, the
+execution owner persists running. A failed phase write stops settlement and
+cannot become computation failure. Retained terminal reports carry the same
+active identity and phase. Legacy records omit unknown phase on re-encoding;
+recovery does not guess their phase or change their command bytes.
+
+Terminal delivery and read reconciliation have priority. On an API error, one
+disposable progress observation may follow. Runtime explicitly declares whether
+retry remains scheduled; shutdown cannot produce a fresh retrying claim.
+Retryable terminal sends select retrying, retryable reconciliation reads select
+reconciling, and failures requiring intervention select held. Known closed or
+not-visible Attempts suppress obsolete conditions. Reporting failure neither
+replaces the original API exception nor changes terminal bytes or recovery.
+Only a correlated progress receipt with a valid observation timestamp confirms
+that observation; it never confirms terminal delivery.
+
+API conditions explain impact, uncertainty, and next actor/action in the bounded
+GUI integration. Provider logs retain correlation and original API diagnostics.
+Unknown legacy phase is disclosed locally; absence in the GUI remains an
+observation limit rather than a claim about provider health. Total isolation
+cannot disclose new provider-local facts to end users.
+
+Tests first exposed absent phase/conditions, then storage-failure translation
+and incomplete observation-receipt validation. Native tests cover preparation,
+execution, legacy round trips, original-error preservation, reconciliation to
+hold across restart, closed-state suppression, and scheduler shutdown. Actual
+installed-provider API-to-GUI qualification remains required separately.

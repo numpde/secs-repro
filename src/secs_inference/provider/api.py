@@ -103,7 +103,7 @@ class ProviderApi:
         # and its contract requires diagnosis before issuing another after 500.
         retryable = outcome.status in {408, 503} or (
             outcome.status == 500 and (operation.method == "GET" or operation in {
-                Operation.START, Operation.COMPLETE, Operation.FAIL, Operation.HELLO,
+                Operation.START, Operation.COMPLETE, Operation.FAIL, Operation.HELLO, Operation.PROGRESS,
             })
         )
         error_type = ApiUnavailable if retryable else ApiError

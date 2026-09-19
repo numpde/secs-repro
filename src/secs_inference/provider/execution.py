@@ -14,6 +14,7 @@ from secs_inference.provider.upload_download import UploadDownloadError
 from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
 from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.attempt_store import JournalError, provider_error_details
+from secs_inference.provider._nmr_api_failures import terminal_report_condition
 
 
 _LOG = logging.getLogger(__name__)
@@ -42,10 +43,17 @@ class AttemptNoLongerActive(RuntimeError):
 class ExecutionLoop:
     """The journal owns recovery facts; work never restarts from ActiveAttempt."""
 
-    def __init__(self, api, journal, analyse, diagnose, before_start=lambda start: None):
+    def __init__(self, api, journal, analyse, diagnose, before_start=lambda start: None, *, retry_pending=lambda: False):
         self.api, self.journal = api, journal
         self.analyse, self.diagnose = analyse, diagnose
         self.before_start = before_start
+        self.retry_pending = retry_pending
+
+    def mark_execution_entered(self):
+        active = self.journal.load()
+        if not isinstance(active, ActiveAttempt):
+            raise JournalError("Cannot enter execution without its retained active Attempt")
+        self.journal.save(replace(active, local_phase="running"))
 
     def step(self) -> bool:
         """Settle retained state or admit one Job; return False for an empty feed."""
@@ -89,6 +97,7 @@ class ExecutionLoop:
             return True
         _LOG.info("Job %s: API confirmed Attempt %s in progress; local active-state retention is pending",
                   retained.selected.job_ref, active.execution_attempt_ref)
+        active = replace(active, local_phase="preparing")
         self.journal.save(active)
         _LOG.info("Attempt %s: active state retained; beginning analysis", active.execution_attempt_ref)
         # Journal uncertainty must escape, never become an Attempt failure.
@@ -102,6 +111,8 @@ class ExecutionLoop:
                 failed_report = report
             else:
                 terminal = complete_command(active, report)
+        except JournalError:
+            raise
         except WorkerStopUnconfirmed as stopped:
             # The source workspace and active record survive for recovery.
             try:
@@ -127,6 +138,10 @@ class ExecutionLoop:
         # privately before publication; storage uncertainty must escape here.
         if failed_report is not None:
             self.journal.record_report(active, failed_report)
+        current = self.journal.load()
+        if not isinstance(current, ActiveAttempt) or current.execution_attempt_ref != active.execution_attempt_ref:
+            raise JournalError("Cannot retain an outcome without the same active Attempt")
+        terminal = replace(terminal, active=current)
         self.journal.save(terminal)
         self._publish(terminal)
         return True
@@ -150,6 +165,33 @@ class ExecutionLoop:
         self._publish(terminal)
 
     def _publish(self, terminal):
+        try:
+            self._publish_terminal(terminal)
+        except ApiError as error:
+            latest = self.journal.load()
+            if isinstance(latest, TerminalPending):
+                retrying = isinstance(error, ApiUnavailable)
+                if not retrying or self.retry_pending():
+                    automation = ("reconciling" if latest.hold and latest.hold.reconciling else "retrying") if retrying else "held"
+                    self._report_condition(latest, automation)
+            raise
+
+    def _report_condition(self, terminal, automation):
+        if terminal.hold and terminal.hold.observed_state in {"succeeded", "failed", "expired", "not_visible"}:
+            return
+        active = terminal.active
+        if active.local_phase is None:
+            _LOG.warning("Attempt %s: legacy phase is unknown; no reporting condition sent. Exact report retained for provider ops inspection.", active.execution_attempt_ref)
+            return
+        condition = terminal_report_condition(automation)
+        try:
+            accepted_at = self.api.progress(active, condition)
+        except Exception as error:
+            _LOG.warning("Attempt %s: condition %s is unconfirmed (%s); terminal recovery unchanged.", active.execution_attempt_ref, condition, type(error).__name__)
+        else:
+            _LOG.info("Attempt %s: API accepted condition %s at %s; terminal delivery remains unconfirmed.", active.execution_attempt_ref, condition, accepted_at)
+
+    def _publish_terminal(self, terminal):
         """Retain exact bytes across outages, even after the work deadline."""
         if terminal.hold is not None:
             if terminal.hold.reconciling:
