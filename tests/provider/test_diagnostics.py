@@ -10,7 +10,7 @@ import unittest
 
 from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.attempt_store import AttemptStore
-from secs_inference.provider.execution import WorkDeadlineExceeded
+from secs_inference.provider.outcomes import WorkDeadlineExceeded
 from secs_inference.provider.upload_download import UploadUnavailable
 from test_execution import ACTIVE
 

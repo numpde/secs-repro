@@ -29,6 +29,13 @@ What the result says
 
 Result schema: secs.elucidation.result.v1.
 
+The executable terminal-outcome policy is src/secs_inference/provider/outcomes.py.
+It owns report classification and public failure reasons. The scientific worker
+establishes that an analysed result has candidates with finite scores before
+serialization. The execution loop owns settlement safety, retained evidence,
+and publication; intermediate input rejections and uncertain effects are not
+terminal analysis outcomes.
+
 A completed execution report records:
 
 - Each selected reader, formula and exact source identity, with its explanation.
@@ -48,18 +55,20 @@ because they do not expose FAISS search counts.
 
 If retrieval returns no starting molecules, the report's top-level outcome is
 no_starting_candidates. No elucidation was produced: Graph GA did not run and
-evaluated no structures. The API Attempt still completes with its full report;
-its succeeded state describes execution completion, not scientific success.
-Refinement results retain the analysed outcome. Earlier reports used analysed
-even when retrieval returned no starting molecules; they are not rewritten.
+evaluated no structures. The API Attempt fails with that code; the complete
+report is retained privately. Only an explicit analysed outcome completes the
+Attempt successfully. Missing or unrecognized outcomes are provider faults.
+Earlier reports completed successfully even when retrieval returned no starting
+molecules; existing Attempts are not rewritten.
 
 Scores and ppm endpoints are decimal strings because this provider's canonical
 JSON encoder does not admit floating-point numbers. Compute mode does not
 describe checkpoint or FAISS storage precision.
 
-A cannot_analyse outcome fails the Attempt: no analysis was produced. The public
-failure message attributes its explanation to the interpreter. The API failure
-endpoint cannot attach a result; the full report is retained privately as
+A cannot_analyse outcome also fails the Attempt: no analysis was produced. Its
+public failure message attributes the explanation to the interpreter. For both
+unsuccessful report outcomes, the API failure endpoint cannot attach a result;
+the full report is retained privately as
 <attempt-hash>.report.json in the journal, including selection history and actual
 tool-call or inspection rejections. These are evidence, not the model's account
 of what happened. Earlier deployments published cannot_analyse as success;

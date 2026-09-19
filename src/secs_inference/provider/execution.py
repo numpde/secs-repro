@@ -6,12 +6,9 @@ from dataclasses import replace
 from secrets import token_hex
 
 from secs_inference.provider.attempt_state import ActiveAttempt, StartPending, TerminalPending, TerminalHold, terminal_recovery_facts
-from secs_inference.provider.chat import InterpreterError
 from secs_inference.provider.job_api import ApiError, ApiUnavailable, complete_command, fail_command
-from secs_inference.provider.job_input import JobInputError
-from secs_inference.provider.job_upload import UploadResponseError
-from secs_inference.provider.upload_download import UploadDownloadError
-from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
+from secs_inference.provider.worker import WorkerStopUnconfirmed
+from secs_inference.provider import outcomes
 from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.attempt_store import JournalError, provider_error_details
 from secs_inference.provider._nmr_api_failures import terminal_report_condition
@@ -26,10 +23,6 @@ class ProviderStopping(RuntimeError):
 
 class AnalysisCancelled(RuntimeError):
     """An observed Job cancellation requests a policy stop, not a model failure."""
-
-
-class WorkDeadlineExceeded(TimeoutError):
-    """An execution boundary supplies a public-safe phase and stop outcome."""
 
 
 class AttemptNoLongerActive(RuntimeError):
@@ -105,12 +98,12 @@ class ExecutionLoop:
         failed_report = None
         try:
             report = self.analyse(active)
-            if report.get("outcome") == "cannot_analyse":
-                terminal = fail_command(active, "cannot_analyse",
-                    "No analysis was produced. Interpreter explanation: " + report["explanation"])
-                failed_report = report
-            else:
+            failure = outcomes.report_failure(report)
+            if failure is None:
                 terminal = complete_command(active, report)
+            else:
+                terminal = fail_command(active, *failure)
+                failed_report = report
         except JournalError:
             raise
         except WorkerStopUnconfirmed as stopped:
@@ -124,16 +117,16 @@ class ExecutionLoop:
                            active.execution_attempt_ref, json.dumps(exception_evidence(retention_error, boundary_details=provider_error_details)))
             raise
         except ProviderStopping:
-            terminal = fail_command(active, "provider_stopping", "Analysis stopped because the provider is shutting down.")
+            terminal = fail_command(active, *outcomes.PROVIDER_STOPPING)
         except AnalysisCancelled:
-            terminal = fail_command(active, "job_cancelled", "Analysis stopped because the Job was cancelled.")
+            terminal = fail_command(active, *outcomes.JOB_CANCELLED)
         except AttemptNoLongerActive as ended:
             _LOG.info("Scientific work stopped after observing Attempt %s already %s", active.execution_attempt_ref, ended.state)
             self.journal.clear()
             return True
         except Exception as error:
             self.diagnose(active, error)
-            terminal = fail_command(active, *_public_failure(error))
+            terminal = fail_command(active, *outcomes.exception_failure(error))
         # The API failure endpoint cannot attach a result. Keep the full report
         # privately before publication; storage uncertainty must escape here.
         if failed_report is not None:
@@ -160,7 +153,7 @@ class ExecutionLoop:
             _LOG.info("Interrupted Attempt %s is already %s", active.execution_attempt_ref, snapshot.state)
             self.journal.clear()
             return
-        terminal = fail_command(active, "provider_interrupted", "Analysis was interrupted by a provider restart; it was not rerun.")
+        terminal = fail_command(active, *outcomes.PROVIDER_INTERRUPTED)
         self.journal.save(terminal)
         self._publish(terminal)
 
@@ -261,24 +254,3 @@ class ExecutionLoop:
             "This hold does not report a new computation outcome.",
             diagnostic={"terminal_hold": facts},
         )
-
-
-def _public_failure(error: Exception) -> tuple[str, str]:
-    """Publish boundary-owned reasons, including redacted interpreter rejection text."""
-    if isinstance(error, ApiError) and error.diagnostic and error.diagnostic.get("problem_verified") is False:
-        evidence = error.diagnostic
-        return "api_access_failed", (
-            "This Attempt could not finish because the provider could not verify a required API response "
-            f"(HTTP {evidence['status']} for request {evidence.get('request_id') or 'unavailable'}). "
-            "Ask the provider operator to investigate using this Attempt's reference."
-        )
-    for error_type, code in ((InterpreterError, "interpretation_failed"), (UploadDownloadError, "input_access_failed"),
-                             (ApiError, "api_access_failed"), (JobInputError, "api_access_failed"),
-                             (UploadResponseError, "api_access_failed"), (WorkerError, "scientific_execution_failed")):
-        if isinstance(error, error_type):
-            return code, str(error)
-    if isinstance(error, WorkDeadlineExceeded):
-        return "work_deadline_exceeded", str(error)
-    if isinstance(error, TimeoutError):
-        return "provider_execution_failed", "Analysis stopped after an internal operation timed out; the operator can inspect diagnostics recorded for this Attempt."
-    return "provider_execution_failed", "Analysis could not finish because of an internal provider error; the operator can inspect diagnostics recorded for this Attempt."

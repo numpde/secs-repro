@@ -1,7 +1,6 @@
 """Acquisition outages and observed membership changes have different owners."""
 
 from dataclasses import replace
-from base64 import b64decode
 
 from datetime import datetime, timezone
 import errno
@@ -18,13 +17,14 @@ from secs_inference.provider.chat import InterpreterError
 from secs_inference.provider.attempt_store import AttemptStore
 from secs_inference.provider.job_input import JobSpecification
 from secs_inference.provider.job_api import ApiError, ApiUnavailable, AttemptSnapshot
-from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive, ExecutionLoop, ProviderStopping, WorkDeadlineExceeded
+from secs_inference.provider.outcomes import WorkDeadlineExceeded
+from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive, ExecutionLoop, ProviderStopping
 from secs_inference.provider.job_upload import JobUpload, UploadReadCapability
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
 from secs_inference.provider.upload_download import UploadUnavailable
 from test_interpreter import ScriptedChat, tool
-from test_execution import FakeApi, ACTIVE, START
+from test_execution import FakeApi, ACTIVE, START, REPORT
 
 
 UPLOAD = JobUpload("upload:sha256:" + "a" * 64, "Proton experiment", 4, None)
@@ -33,7 +33,7 @@ GRANT = UploadReadCapability(UPLOAD.upload_ref, 4, "sha256:" + "b" * 64,
 
 
 class AcquisitionTests(unittest.TestCase):
-    def test_no_starting_candidates_is_published_with_its_input_evidence(self):
+    def test_no_starting_candidates_fails_with_private_input_evidence(self):
         api = FakeApi()
         api.specification = Mock(return_value=JobSpecification("job:test", "C2H6O"))
         api.uploads = Mock(return_value=(UPLOAD,))
@@ -51,9 +51,11 @@ class AcquisitionTests(unittest.TestCase):
                     interpretation_seconds=5, max_turns=1, max_total_bytes=100)
             ExecutionLoop(api, journal, analyse, journal.diagnose).step()
             self.assertIsNone(journal.load())
+            report = json.loads((journal.directory / ("b" * 64 + ".report.json")).read_bytes())
         command = json.loads(api.calls[-1])
-        self.assertEqual(command["schema_id"], "nmr.provider.execution_attempt_complete_request.v1")
-        report = json.loads(b64decode(command["canonical_result_base64"]))
+        self.assertEqual(command["schema_id"], "nmr.provider.execution_attempt_fail_request.v1")
+        self.assertEqual(command["failure_code"], "no_starting_candidates")
+        self.assertIn("Graph GA was not run", command["failure_message"])
         self.assertEqual(report["outcome"], "no_starting_candidates")
         self.assertEqual(report["analysis"], analysis)
         self.assertTrue(report["input_choices"][0]["used"])
@@ -68,7 +70,7 @@ class AcquisitionTests(unittest.TestCase):
         chat = ScriptedChat(tool("read_jcamp", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None},
                                                "formula": "C2H6O", "explanation": "Proton experiment."}))
         worker = Mock()
-        worker.request.return_value = {"outcome": "analysed", "analysis": {"candidates": []}}
+        worker.request.return_value = {"outcome": "analysed", "analysis": REPORT["analysis"]}
         clock = [10.0]
         def advance(seconds):
             clock[0] += seconds
@@ -85,7 +87,7 @@ class AcquisitionTests(unittest.TestCase):
                                     execution_entered=loop.mark_execution_entered)
             def request(*args, **kwargs):
                 self.assertEqual(journal.load().local_phase, "running")
-                return {"outcome": "analysed", "analysis": {"candidates": []}}
+                return {"outcome": "analysed", "analysis": REPORT["analysis"]}
             worker.request.side_effect = request
             loop = ExecutionLoop(api, journal, analyse, journal.diagnose)
             loop.step()
@@ -226,7 +228,7 @@ class AcquisitionTests(unittest.TestCase):
         chat = ScriptedChat(tool("read_jcamp", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None},
             "formula": "C2H6O", "explanation": "Proton experiment."}))
         worker = Mock()
-        worker.request.return_value = {"outcome": "analysed", "analysis": {"candidates": []}}
+        worker.request.return_value = {"outcome": "analysed", "analysis": REPORT["analysis"]}
         with TemporaryDirectory() as directory, patch("secs_inference.provider.analysis_run.download_upload",
                 return_value=Path(directory) / "verified"):
             with self.assertLogs("secs_inference.provider.analysis_run", level="ERROR"), patch(
@@ -395,7 +397,7 @@ class AcquisitionTests(unittest.TestCase):
                 )
                 worker = Mock()
                 worker.request.side_effect = ([inspection_failure] if inspection_failure else
-                                               [{"outcome": "inspected", "facts": {}}, {"outcome": "analysed", "analysis": {}}])
+                                               [{"outcome": "inspected", "facts": {}}, {"outcome": "analysed", "analysis": REPORT["analysis"]}])
                 work_deadline = monotonic() + 1800
                 with patch("secs_inference.provider.analysis_run.download_upload", return_value=Path(directory) / "verified") as download:
                     def run():
