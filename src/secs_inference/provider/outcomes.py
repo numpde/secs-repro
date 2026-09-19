@@ -28,7 +28,10 @@ class WorkDeadlineExceeded(TimeoutError):
 
 
 def report_failure(report: dict) -> tuple[str, str] | None:
-    """Return a public failure, or permit completion for an explicit scientific result."""
+    """Return a public failure code and message, or None for an analysed report.
+
+    Missing or unknown outcomes are classification errors.
+    """
     outcome = report.get("outcome")
     if outcome == AnalysisOutcome.ANALYSED:
         return None
@@ -40,7 +43,7 @@ def report_failure(report: dict) -> tuple[str, str] | None:
 
 
 def exception_failure(error: Exception) -> tuple[str, str]:
-    """Publish boundary-owned reasons, including redacted interpreter rejection text."""
+    """Return a public failure code and message from boundary-owned evidence."""
     # Scientific workers share report vocabulary without loading controller dependencies.
     from secs_inference.provider.chat import InterpreterError
     from secs_inference.provider.job_api import ApiError

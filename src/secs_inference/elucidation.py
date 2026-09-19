@@ -19,7 +19,10 @@ class FormulaError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ElucidationResult:
-    """Per-call retrieval evidence and refinement, absent when retrieval is empty."""
+    """Per-call retrieval evidence and optional refinement.
+
+    Optimization is absent only when retrieval supplied no starting molecules.
+    """
 
     proposal: CandidateProposal
     optimization: OptimizerResult | None
