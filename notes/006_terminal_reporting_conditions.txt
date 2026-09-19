@@ -1,7 +1,7 @@
 Terminal reporting conditions and human delivery
 
 The API-owned catalog and shared selector are projected from immutable API
-revision 27614dc63b20f90446a974da4d1be14327d7f706. Refresh both explicit
+revision 27c8b94075961ffb057f1ad28e5d52e9f991acd6. Refresh both explicit
 source and contract revisions with clients/provider_python/project.py;
 make provider/client/check NMR_API_V1_DIR=<api-repository> verifies provenance.
 
