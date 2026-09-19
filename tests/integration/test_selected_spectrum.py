@@ -25,6 +25,22 @@ JCAMP = FIXTURES / "jcamp/4-chlorobenzylamine/4-chlorobenzylamine.jdx"
 
 
 class SelectedSpectrumTests(unittest.TestCase):
+    def test_empty_or_nonfinite_optimizer_output_is_a_scientific_fault(self):
+        from secs.elucidation import OptimizerResult, StaticCandidateSource
+
+        for population, reason in (([], "empty population"), ([("CCO", float("nan"))], "nonfinite"),
+                                   ([("CCO", float("inf"))], "nonfinite"), ([("CCO", float("-inf"))], "nonfinite")):
+            with self.subTest(reason=reason, population=population), TemporaryDirectory() as directory:
+                inference = Mock(embed_spectrum=Mock(return_value=np.array([1., 0.], dtype=np.float32)))
+                worker = ScientificHandler(inference, StaticCandidateSource(["CCO"]),
+                    ScientificWorkerConfig("unused", "unused", device="cpu"))
+                with patch("secs.elucidation.GraphGAOptimizer.run", return_value=OptimizerResult(population=population)):
+                    with self.assertRaisesRegex(RuntimeError, reason):
+                        worker({"operation": "analyse", "files": {"upload:chosen": str(JCAMP)},
+                            "directory": directory, "selection": {"reader": "jcamp",
+                            "source": {"upload_ref": "upload:chosen", "member": None}, "formula": "C2H6O",
+                            "explanation": "The selected file is the proton spectrum."}})
+
     def test_candidate_retrieval_bug_remains_an_operational_failure(self):
         inference = Mock(embed_spectrum=Mock(return_value=np.array([1., 0.], dtype=np.float32)))
         failure = ValueError("private retrieval detail")

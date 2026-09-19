@@ -125,14 +125,14 @@ class ProblemDiagnosticsTests(unittest.TestCase):
         self.assertIn(self.problem["detail"], str(caught.exception))
 
     def test_unverified_explanation_is_operator_evidence_not_a_public_failure_message(self):
-        from secs_inference.provider.execution import _public_failure
+        from secs_inference.provider.outcomes import exception_failure
 
         problem = self.problem | {"status": 503, "type": "urn:nmr-api:problem:service-unavailable",
                                   "title": "Service unavailable", "code": "unknown_code",
                                   "detail": "Unverified upstream diagnostic."}
         error = self.request_error(self.response(problem))
         self.assertIn(problem["detail"], str(error))
-        code, message = _public_failure(error)
+        code, message = exception_failure(error)
         self.assertEqual(code, "api_access_failed")
         self.assertNotIn(problem["detail"], message)
         self.assertIn("could not verify", message)
@@ -171,7 +171,7 @@ class ProblemDiagnosticsTests(unittest.TestCase):
                 self.assertNotIn("detail", error.diagnostic)
 
     def test_safe_conflicting_evidence_stays_unverified_and_out_of_public_messages(self):
-        from secs_inference.provider.execution import _public_failure
+        from secs_inference.provider.outcomes import exception_failure
 
         for change in ({"status": 503, "detail": "Unverified diagnostic."},
                        {"request_id": "unverified-body-id"}):
@@ -179,7 +179,7 @@ class ProblemDiagnosticsTests(unittest.TestCase):
                 error = self.request_error(HttpResponse(400, "request-test", json.dumps(self.problem | change).encode()))
                 self.assertFalse(error.diagnostic["problem_verified"])
                 self.assertIn("unverified API explanation", str(error))
-                _, message = _public_failure(error)
+                _, message = exception_failure(error)
                 self.assertNotIn("Unverified diagnostic.", message)
                 self.assertNotIn("unverified-body-id", message)
                 self.assertIn("request-test", message)

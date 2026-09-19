@@ -2,11 +2,13 @@
 
 from dataclasses import MISSING, asdict, dataclass, fields
 import json
+import math
 from pathlib import Path
 import sys
 import tomllib
 from secs_inference.provider.configuration_error import ConfigurationError
 from secs_inference.provider.diagnostics import exception_evidence
+from secs_inference.provider.outcomes import AnalysisOutcome, NO_STARTING_CANDIDATES_MESSAGE
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,8 +82,10 @@ class ScientificHandler:
             if command["operation"] != "analyse":
                 raise AssertionError("No scientific operation is bound to the worker request")
             analysis = self._analyse(access, command["selection"])
-            outcome = "no_starting_candidates" if analysis["search"]["outcome"] == "no_starting_candidates" else "analysed"
-            return {"outcome": outcome, "analysis": analysis}
+            outcome = (AnalysisOutcome.NO_STARTING_CANDIDATES
+                       if analysis["search"]["outcome"] == AnalysisOutcome.NO_STARTING_CANDIDATES
+                       else AnalysisOutcome.ANALYSED)
+            return {"outcome": outcome.value, "analysis": analysis}
         except (InputReadError, SpectrumReadError, FormulaError) as error:
             return {"outcome": "input_rejected", "reason": str(error)[:2048]}
 
@@ -112,13 +116,18 @@ class ScientificHandler:
         if result.optimization is None:
             candidates = []
             search = {
-                "outcome": "no_starting_candidates", "generations": 0, "evaluated": 0,
-                "explanation": "No elucidation was produced. Candidate retrieval returned no starting molecules under the configured search. "
-                               "Graph GA was not run. This does not establish that the formula is invalid "
-                               "or that no matching structure exists.",
+                "outcome": AnalysisOutcome.NO_STARTING_CANDIDATES.value, "generations": 0, "evaluated": 0,
+                "explanation": NO_STARTING_CANDIDATES_MESSAGE,
             }
         else:
-            candidates = [{"smiles": smiles, "score": str(float(score))} for smiles, score in result.optimization.population]
+            if not result.optimization.population:
+                raise RuntimeError("Cannot produce an elucidation result: Graph GA returned an empty population after receiving starting candidates")
+            candidates = []
+            for smiles, score in result.optimization.population:
+                score = float(score)
+                if not math.isfinite(score):
+                    raise RuntimeError("Cannot rank the elucidation candidates: Graph GA returned a nonfinite score")
+                candidates.append({"smiles": smiles, "score": str(score)})
             search = {"outcome": "optimized", "generations": result.optimization.generations, "evaluated": result.optimization.n_evaluated}
         retrieval = {"starting_candidates": len(result.proposal.smiles)}
         if result.proposal.retrieval is not None:

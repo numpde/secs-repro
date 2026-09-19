@@ -10,7 +10,8 @@ from time import monotonic, sleep
 
 from secs_inference.provider.input_operations import BrukerSelection, CannotAnalyse, JcampSelection
 from secs_inference.provider.interpreter import InterpretationSession
-from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive, ProviderStopping, WorkDeadlineExceeded
+from secs_inference.provider.outcomes import AnalysisOutcome, WorkDeadlineExceeded
+from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive, ProviderStopping
 from secs_inference.provider.job_api import ApiError, ApiUnavailable
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.upload_download import UploadDownloadError, UploadUnavailable, download_upload
@@ -163,7 +164,7 @@ def run_analysis(
                 decision = session.select()
                 check_running()
                 if isinstance(decision, CannotAnalyse):
-                    return {"schema_id": RESULT_SCHEMA_ID, "outcome": "cannot_analyse",
+                    return {"schema_id": RESULT_SCHEMA_ID, "outcome": AnalysisOutcome.CANNOT_ANALYSE.value,
                             "explanation": decision.explanation, "input_choices": choices,
                             "interpretation_rejections": session.rejections,
                             "acquired_uploads": _upload_evidence(sources)}
@@ -270,7 +271,8 @@ def _worker_request(worker, sources, request, deadline, check_running=lambda: No
             error = WorkerError(f"Cannot finish {operation}: the SECS worker encountered an internal error; inspect this Attempt's operator diagnostics")
             error.diagnostic = response
             raise error
-        if response.get("outcome") not in {"inspected", "input_rejected", "analysed", "no_starting_candidates"}:
+        if response.get("outcome") not in {"inspected", "input_rejected",
+                                           AnalysisOutcome.ANALYSED, AnalysisOutcome.NO_STARTING_CANDIDATES}:
             raise WorkerError(f"Cannot confirm {operation}: the SECS worker returned an unrecognized operation outcome")
     except WorkerError:
         # Raise the response failure first so a failed stop retains it as

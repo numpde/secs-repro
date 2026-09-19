@@ -86,10 +86,9 @@ Molecular formula: C21H22N2O2.</pre>
     assignments. The example above demonstrates input preparation, not a
     guarantee of recovering strychnine.</p>
   <p>If retrieval finds no starting molecules, no elucidation is produced.
-    The result's top-level <code>outcome</code> is <code>no_starting_candidates</code>:
-    Graph GA refinement did not run and evaluated no structures. The attempt is
-    completed so its full report remains available; an API status of
-    <code>succeeded</code> means execution completed, not that a structure was found.
+    The attempt fails with <code>no_starting_candidates</code>:
+    Graph GA refinement did not run and evaluated no structures. The deployment
+    operator retains the full report under the attempt identifier.
     This search limitation does not establish that the formula is invalid or
     that no matching structure exists.</p>
   <p>The report's <code>analysis.retrieval</code> counts show where retrieval
@@ -99,6 +98,9 @@ Molecular formula: C21H22N2O2.</pre>
     refinement after the population limit. These counts do not show whether
     suitable molecules exist elsewhere in the index. The configured retrieval
     limit is not the number of molecules actually returned.</p>
+  <p>A successful attempt produced ranked candidate proposals. It does not
+    establish a validated structure assignment. Earlier attempts may show
+    <code>no_starting_candidates</code> as successful; those records are not rewritten.</p>
   <p>If the interpreter cannot select usable input, the attempt fails with
     <code>cannot_analyse</code>: no analysis was produced. Its failure message
     includes the interpreter's explanation. That explanation is the model's

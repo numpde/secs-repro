@@ -24,7 +24,9 @@ from secs_inference.provider.http import HttpsEndpoint, HttpResponse, RequestDel
 
 START = StartPending("provider:test", SelectedJobInput("job:test", "nmr.job.specification.text.v1", "sha256:" + "a" * 64, 4), "logical-start")
 ACTIVE = ActiveAttempt(START, "execution_attempt:sha256:" + "b" * 64)
-REPORT = {"schema_id": "secs.elucidation.result.v1", "outcome": "analysed", "analysis": {}}
+REPORT = {"schema_id": "secs.elucidation.result.v1", "outcome": "analysed",
+          "analysis": {"candidates": [{"smiles": "CCO", "score": "0.5"}],
+                       "search": {"outcome": "optimized", "generations": 1, "evaluated": 8}}}
 
 
 class FakeApi:
@@ -134,43 +136,62 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(caught.exception.diagnostic["request_id"], "request-test")
         self.assertIsNone(caught.exception.status)
 
-    def test_inability_is_failed_with_private_evidence_and_identical_publication_replay(self):
-        report = {"schema_id": REPORT["schema_id"], "outcome": "cannot_analyse",
-                  "explanation": "The reader rejected the input.", "input_choices": [],
-                  "interpretation_rejections": [{"stage": "tool_call", "reason": "Missing formula argument."}]}
-        with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as store:
-            api = FakeApi()
-            analyse = Mock(return_value=report)
-            loop = ExecutionLoop(api, store, analyse, store.diagnose)
-            api.fail_publication = True
-            with self.assertRaises(ApiUnavailable):
+    def test_unsuccessful_reports_keep_private_evidence_and_identical_failure_replay(self):
+        for outcome in ("cannot_analyse", "no_starting_candidates"):
+            report = {"schema_id": REPORT["schema_id"], "outcome": outcome,
+                      "explanation": "The reader rejected the input.", "input_choices": [],
+                      "interpretation_rejections": [{"stage": "tool_call", "reason": "Missing formula argument."}]}
+            with self.subTest(outcome=outcome), TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as store:
+                api = FakeApi()
+                analyse = Mock(return_value=report)
+                loop = ExecutionLoop(api, store, analyse, store.diagnose)
+                api.fail_publication = True
+                with self.assertRaises(ApiUnavailable):
+                    loop.step()
+                terminal = store.load()
+                self.assertEqual(terminal.operation, "fail")
+                body = json.loads(terminal.body)
+                self.assertEqual(body["failure_code"], outcome)
+                if outcome == "cannot_analyse":
+                    self.assertIn("Interpreter explanation: " + report["explanation"], body["failure_message"])
+                else:
+                    self.assertIn("Graph GA was not run", body["failure_message"])
+                    self.assertNotIn(report["explanation"], body["failure_message"])
+                self.assertNotIn("canonical_result_base64", body)
+                evidence = store.directory / ("b" * 64 + ".report.json")
+                self.assertEqual(json.loads(evidence.read_bytes()), report)
+                self.assertEqual(evidence.stat().st_mode & 0o777, 0o600)
+                api.fail_publication = False
                 loop.step()
-            terminal = store.load()
-            self.assertEqual(terminal.operation, "fail")
-            body = json.loads(terminal.body)
-            self.assertEqual(body["failure_code"], "cannot_analyse")
-            self.assertIn("Interpreter explanation: " + report["explanation"], body["failure_message"])
-            self.assertNotIn("canonical_result_base64", body)
-            evidence = store.directory / ("b" * 64 + ".report.json")
-            self.assertEqual(json.loads(evidence.read_bytes()), report)
-            self.assertEqual(evidence.stat().st_mode & 0o777, 0o600)
-            api.fail_publication = False
-            loop.step()
-            analyse.assert_called_once()
-            self.assertEqual(api.calls[-2:], [terminal.body, terminal.body])
+                analyse.assert_called_once()
+                self.assertEqual(api.calls[-2:], [terminal.body, terminal.body])
 
-    def test_inability_evidence_write_failure_does_not_publish_or_retire_active_work(self):
-        with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as store:
-            api = FakeApi()
-            report = REPORT | {"outcome": "cannot_analyse", "explanation": "Missing spectrum."}
-            with patch.object(store, "record_report", side_effect=OSError("disk full")):
-                with self.assertRaises(OSError):
-                    ExecutionLoop(api, store, lambda _: report, store.diagnose).step()
-            self.assertIsInstance(store.load(), ActiveAttempt)
-            self.assertFalse(any(isinstance(call, bytes) for call in api.calls))
+    def test_unsuccessful_report_write_failure_does_not_publish_or_retire_active_work(self):
+        for outcome in ("cannot_analyse", "no_starting_candidates"):
+            with self.subTest(outcome=outcome), TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as store:
+                api = FakeApi()
+                report = REPORT | {"outcome": outcome, "explanation": "Missing spectrum."}
+                with patch.object(store, "record_report", side_effect=OSError("disk full")):
+                    with self.assertRaises(OSError):
+                        ExecutionLoop(api, store, lambda _: report, store.diagnose).step()
+                self.assertIsInstance(store.load(), ActiveAttempt)
+                self.assertFalse(any(isinstance(call, bytes) for call in api.calls))
+
+    def test_unknown_missing_or_intermediate_report_outcomes_cannot_complete(self):
+        for outcome in (None, "future_outcome", "inspected", "input_rejected"):
+            report = {key: value for key, value in REPORT.items() if key != "outcome"}
+            if outcome is not None:
+                report["outcome"] = outcome
+            with self.subTest(outcome=outcome), TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as store:
+                api = FakeApi()
+                ExecutionLoop(api, store, lambda _: report, store.diagnose).step()
+                command = json.loads(api.calls[-1])
+                self.assertEqual(command["schema_id"], "nmr.provider.execution_attempt_fail_request.v1")
+                self.assertEqual(command["failure_code"], "provider_execution_failed")
+                self.assertNotIn("canonical_result_base64", command)
 
     def test_oversize_report_explains_the_limit_but_unknown_errors_stay_private(self):
-        for report in ({"text": "x" * 786433}, {"bug": object()}):
+        for report in (REPORT | {"text": "x" * 786433}, REPORT | {"bug": object()}):
             with self.subTest(oversize="text" in report), TemporaryDirectory() as directory:
                 with AttemptStore(Path(directory) / "journal") as store:
                     api = FakeApi()
