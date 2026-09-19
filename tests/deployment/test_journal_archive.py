@@ -86,7 +86,9 @@ class JournalArchiveDeploymentTests(TestCase):
                     if args[0] == 'run':
                         invocation['name'] = args[args.index('--name') + 1]
                         invocation['label'] = args[args.index('--label') + 1]
-                        raise RuntimeError('Docker run observation timed out')
+                        error = RuntimeError('Docker run observation timed out')
+                        error.add_note('Private Docker diagnostic: /tmp/original-reader.log')
+                        raise error
                     if args[0] == 'ps':
                         return (identifier + '\n').encode()
                     if args[0] == 'inspect':
@@ -102,11 +104,36 @@ class JournalArchiveDeploymentTests(TestCase):
                     with self.assertRaises(RuntimeError) as caught:
                         self.archive(root)
                 message = str(caught.exception)
+                self.assertIn('Private Docker diagnostic: /tmp/original-reader.log', getattr(caught.exception, '__notes__', ()))
                 self.assertIn('timed out', message)
                 self.assertIn('inspect', message.lower())
                 self.assertIn('unconfirmed', message.lower())
                 removals = [call.args for call in project.command.call_args_list if call.args[0] == 'rm']
                 self.assertEqual(len(removals), 0 if foreign else 1)
+
+    def test_cleanup_failure_retains_both_private_diagnostic_references(self):
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from deployment.provider_deployment import main
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.prepare(root)
+            project = Mock()
+            project.inventory.return_value = {}
+            original = RuntimeError('Docker reader failed')
+            original.add_note('Private Docker diagnostic: /tmp/reader.log')
+            cleanup = RuntimeError('Docker cleanup failed')
+            cleanup.add_note('Private Docker diagnostic: /tmp/cleanup.log')
+            project.command.side_effect = original
+            stderr = StringIO()
+            with patch('deployment.provider_deployment.__file__', str(root / 'deployment/cli.py')), patch('deployment.provider_deployment._project', return_value=project), patch('deployment.provider_deployment.render_deployment', return_value={'services': {'provider': {'image': 'sha256:'+'c'*64}}}), patch('deployment.provider_deployment._remove_archive_reader', side_effect=cleanup), redirect_stderr(stderr):
+                self.assertEqual(main(['archive-closed', 'test', '--execution-attempt-ref', 'execution_attempt:sha256:'+'a'*64,
+                                       '--expected-record-digest', 'sha256:'+'b'*64, '--reason', 'Investigated.']), 1)
+            output = stderr.getvalue()
+            self.assertIn('Private Docker diagnostic: /tmp/reader.log', output)
+            self.assertIn('Private Docker diagnostic: /tmp/cleanup.log', output)
+            self.assertIn('reader cleanup unconfirmed', output)
+            self.assertIn('do not restart', output)
 
     def test_public_dispatch_holds_lifecycle_lock_during_archive(self):
         import fcntl

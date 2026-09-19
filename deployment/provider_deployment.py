@@ -228,16 +228,23 @@ def archive_deployment_journal(repository: Path, name: str, *, execution_attempt
         try:
             _remove_archive_reader(project, reader_name, reader_token)
         except (Exception, KeyboardInterrupt) as cleanup:
-            raise RuntimeError(
+            failure = RuntimeError(
                 f"Archival result unconfirmed ({original}); reader cleanup unconfirmed ({cleanup}). "
                 f"Provider operator must inspect name={reader_name}, label=io.secs.archive={reader_token}, "
                 "verify both and remove only that container ID before inspecting retained journal/archive state. "
                 "Preserve all retained work; do not restart until reader shutdown is confirmed."
-            ) from original
-        raise RuntimeError(
+            )
+            for error in (original, cleanup):
+                for note in getattr(error, "__notes__", ()):
+                    failure.add_note(note)
+            raise failure from original
+        failure = RuntimeError(
             f"Archival result unconfirmed ({original}); invocation reader stopped. "
             "Provider operator must inspect the journal and archive before retrying or restarting; preserve both."
-        ) from original
+        )
+        for note in getattr(original, "__notes__", ()):
+            failure.add_note(note)
+        raise failure from original
     document = _archive_contract.parse_archive_document(raw)
     if document["execution_attempt_ref"] != execution_attempt_ref or document["record_digest"] != expected_record_digest:
         raise ValueError("Archive result names a different selection; inspect retained state before retrying.")

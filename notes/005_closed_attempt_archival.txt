@@ -47,3 +47,11 @@ archive is the durable identity/evidence record; terminal API state cannot be
 reopened by replaying the old start key. A new eligible Attempt is separate work.
 The existing GUI receives no new update from archival; do not tell an end user
 that the archived result was delivered.
+
+Public-command verification exposed a lost private diagnostic reference when
+archival wrapped a reader error after cleanup. The wrapper now preserves the
+reader's notes, and cleanup-failure notes when present, for the CLI to print.
+Only references to owner-only diagnostic files are shown; captured Docker
+output stays private. Archival uncertainty and exact-invocation cleanup rules
+are unchanged. The operator can inspect the referenced file for the actual
+API-response rejection or local-journal cause before retrying.
