@@ -36,12 +36,13 @@ serialization. The execution loop owns settlement safety, retained evidence,
 and publication; intermediate input rejections and uncertain effects are not
 terminal analysis outcomes.
 
-A completed execution report records:
+An analysed or no_starting_candidates report records:
 
 - Each selected reader, formula and exact source identity, with its explanation.
 - Rejected choices and their reading errors; the used choice is marked used.
 - The verified length and SHA-256 of every acquired Upload.
-- Ranked candidate SMILES and scores, actual GA counts and search settings.
+- Ranked candidate SMILES and scores when candidates were produced, plus
+  actual GA counts and search settings.
 - Spectrum preparation and configured inference mode and retrieval budget.
 - Retrieval counts: index_size, neighbours_returned, formula_matches (among
   returned neighbours, before the population limit), and starting_candidates.
@@ -71,7 +72,10 @@ unsuccessful report outcomes, the API failure endpoint cannot attach a result;
 the full report is retained privately as
 <attempt-hash>.report.json in the journal, including selection history and actual
 tool-call or inspection rejections. These are evidence, not the model's account
-of what happened. Earlier deployments published cannot_analyse as success;
+of what happened. In a named deployment, the report is at
+secrets/deployments/<name>/state/journal/<attempt-hash>.report.json; remove the
+execution_attempt:sha256: prefix from the Attempt identifier to obtain the hash.
+Earlier deployments published cannot_analyse as success;
 existing Attempts are not rewritten.
 
 Operational failures use the API failure code/message. Private diagnostics
@@ -170,6 +174,11 @@ Down stops the provider before its worker, retaining containers and all data:
 
 Use down before up to apply changed configuration. Status, logs, and down do not
 read credentials. Secrets and attempt state live in secrets/deployments/<name>.
+For this outcome-policy upgrade, rebuild both images from the same source
+revision and replace both PROVIDER_IMAGE_REF and WORKER_IMAGE_REF in the existing
+config/deployments/<name>/deployment.env before down/up. Updating the controller
+alone can leave empty retrieval marked successful when an older worker still
+labels its report analysed. Initialization does not update an existing deployment.
 Attempt ownership is fixed to the API origin and provider reference; changing
 either requires another deployment name. Do not copy journals across names.
 The earlier hand-assembled secrets/fw-remote and secrets/nmr-dapp32-com layouts
