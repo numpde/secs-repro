@@ -1,0 +1,15 @@
+##TITLE=Synthetic parameters
+##JCAMPDX=5.00
+##DATATYPE=Parameter Values
+##ORIGIN=secs-repro synthetic fixture
+##OWNER=secs-repro contributors; AGPL-3.0-only
+##$SI= 64
+##$SF= 400
+##$SW_p= 4000
+##$OFFSET= 10
+##$BYTORDP= 0
+##$DTYPP= 0
+##$PPARMOD= 0
+##$AXNUC= <1H>
+##$NC_proc= 0
+##END=

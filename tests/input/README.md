@@ -56,6 +56,14 @@ succeeds. Building that image may need dependency access; ordinary tests and
 generation runtime are offline. Review regenerated differences explicitly.
 Ordinary tests never update goldens and check recorded artifact integrity.
 
+The Bruker and Varian companion files are stored flat in the corpus; tests
+restore native experiment paths in archive wrappers. Generation verifies raw
+and processed datasets with automatic processing disabled. The processed
+Bruker pair-only case preserves existing behavior: the pinned reference loader
+requires `acqus` too, so adopting it alone would narrow current support.
+The raw and processed synthetic signals are independent examples, not a claim
+that one was produced by processing the other.
+
 The corpus includes reference vectors for selection and preparation tests. This
 suite checks discovery, fixture integrity and exact selected model inputs.
 Reference comparisons use the existing lanes' one-Float32-ULP allowance.
