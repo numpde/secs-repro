@@ -11,6 +11,11 @@ class SourceRef:
     member: str | None = None
 
 
+def source_document(source: SourceRef) -> dict:
+    """Serialize the sole source identity shared by discovery and claims."""
+    return {"upload_ref": source.upload_ref, "member": source.member}
+
+
 @dataclass(frozen=True, slots=True)
 class SelectedRepresentation:
     representation_id: str
