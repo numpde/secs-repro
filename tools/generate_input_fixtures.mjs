@@ -154,6 +154,65 @@ await save('ethanol.sdf', mol + '$$$$\n', 'Single-record SDF wrapper of ethanol.
 
 const core = new NMRiumCore();
 core.registerPlugins(plugins.recommended(core));
+
+async function readMembers(members) {
+  const collection = new FileCollection();
+  await collection.appendFileList(members.map(([path, bytes]) => {
+    const file = new File([bytes], path.split('/').at(-1));
+    Object.defineProperty(file, 'webkitRelativePath', { value: path });
+    return file;
+  }));
+  return core.read(collection, { onLoadProcessing: { autoProcessing: false } });
+}
+
+const smiles = 'CCO\nCC(=O)O\n';
+await save('structures.smi', smiles, 'Authored ethanol and acetic acid SMILES records for the reference archive-member loader');
+const smilesState = await readMembers([['sample/structures.smi', smiles]]);
+if (smilesState.state.data.molecules.length !== 2 || smilesState.state.data.spectra.length !== 0) {
+  throw Error('Cannot admit structures.smi: the reference must discover two structures and no spectrum');
+}
+
+const annotated = mol + `
+>  <NMREDATA_VERSION>
+1.0
+
+>  <NMREDATA_ASSIGNMENT>
+a, 2.03125, H1
+b, 7, H2
+
+>  <NMREDATA_1D_1H>
+Larmor=400
+Jcamp_location=file:proton.jdx
+2.03125, S=s, L=a, N=3
+7, S=s, L=b, N=2
+
+$$$$
+`;
+await save('annotations.sdf', annotated,
+  'Authored NMReDATA 1.0: ethanol connection table and two synthetic assigned shifts referring to proton.jdx; N=3/2 are declared atom counts, not measured integrals or an experimental ethanol spectrum',
+  { generator: 'tools/generate_input_fixtures.mjs', author: 'secs-repro contributors',
+    licence: 'AGPL-3.0-only', licence_text: 'LICENSE',
+    basis: 'ethanol.mol extended with authored assignments at the mathematical proton.jdx peaks and an explicit relative resource link',
+    parents: ['ethanol.mol', 'proton.jdx'].map((path) => ({ path, sha256: files.find((item) => item.path === path).sha256 })) });
+const annotatedState = await readMembers([['sample/annotations.sdf', annotated], ['sample/proton.jdx', spectrum]]);
+const annotatedSpectra = annotatedState.state.data.spectra;
+if (annotatedState.state.data.molecules.length !== 1 || annotatedSpectra.length !== 1
+    || annotatedSpectra[0].data.re.length !== 257 || annotatedSpectra[0].info.nucleus !== '1H') {
+  throw Error('Cannot admit annotations.sdf: the reference must associate one structure with the 257-point proton resource');
+}
+const ranges = annotatedSpectra[0].ranges?.values;
+const expectedAnnotations = [[2.03125, 3], [7, 2]];
+if (ranges?.length !== 2 || expectedAnnotations.some(([shift, count], i) =>
+  ranges[i].integration !== count || ranges[i].signals.length !== 1
+  || ranges[i].signals[0].delta !== shift || ranges[i].signals[0].multiplicity !== 's'
+  || !ranges[i].signals[0].diaIDs?.length)) {
+  throw Error('Cannot admit annotations.sdf: the reference must preserve both authored shifts, declared counts, multiplicities and assignments');
+}
+const annotationOnly = await readMembers([['sample/annotations.sdf', annotated]]);
+if (annotationOnly.state.data.molecules.length !== 1 || annotationOnly.state.data.spectra.length !== 0) {
+  throw Error('Cannot admit standalone annotations.sdf: annotation rows must not become a dense spectrum');
+}
+
 const collection = new FileCollection();
 await collection.appendFileList([new File([spectrum], 'proton.jdx'), new File([affn(x, y, '13C')], 'carbon.jdx')]);
 const loadedState = await core.read(collection, { onLoadProcessing: { autoProcessing: false } });
@@ -284,14 +343,7 @@ for (const [format, members, isFid] of [
   ['Varian FID', [['sample/procpar', procpar], ['sample/fid', varianFid]], true],
   ['JEOL processed', [['sample/synthetic.jdf', jeol]], false],
 ]) {
-  const collection = new FileCollection();
-  const files = members.map(([path, bytes]) => {
-    const file = new File([bytes], path.split('/').at(-1));
-    Object.defineProperty(file, 'webkitRelativePath', { value: path });
-    return file;
-  });
-  await collection.appendFileList(files);
-  const result = await core.read(collection, { onLoadProcessing: { autoProcessing: false } });
+  const result = await readMembers(members);
   const spectra = result.state.data.spectra;
   if (spectra.length !== 1 || spectra[0].info.nucleus !== '1H'
       || spectra[0].data.re.length !== 64 || spectra[0].info.isFid !== isFid) {
