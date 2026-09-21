@@ -27,9 +27,10 @@ fixtures/input/write:
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 64 --cpus 2 --memory 2g --memory-swap 2g \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
-		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/generate_input_fixtures.mjs,dst=/generator.mjs,readonly" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/generate_input_fixtures.mjs,dst=/tools/generate_input_fixtures.mjs,readonly" \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/generate_nmrium_fixtures.mjs,dst=/tools/generate_nmrium_fixtures.mjs,readonly" \
 		--mount "type=bind,src=$$stage,dst=/output" \
-		--entrypoint node "$$image" /generator.mjs
+		--entrypoint node "$$image" /tools/generate_input_fixtures.mjs
 	# A failed reference read must not publish a partly generated corpus.
 	for artifact in "$$stage"/*; do mv -f -- "$$artifact" "$$output_directory/"; done
 

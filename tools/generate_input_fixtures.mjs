@@ -8,6 +8,7 @@ import { normalizeSpectrum } from '/opt/frontend/src/spectrum/normalize.ts';
 import { NMRiumCore } from '/opt/frontend/node_modules/@zakodium/nmrium-core/dist/nmrium-core.js';
 import * as plugins from '/opt/frontend/node_modules/@zakodium/nmrium-core-plugins/dist/nmrium-core-plugins.js';
 import { FileCollection } from '/opt/frontend/node_modules/file-collection/lib/index.js';
+import { generateNmriumFixtures } from './generate_nmrium_fixtures.mjs';
 
 const revision = '5ab78f61e9fb679f3f0b9823be5217ae250e213f';
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -31,9 +32,9 @@ const x = Array.from({ length: 257 }, (_, i) => 10 - i * 12 / 256);
 const y = x.map((v) => Math.round(10000 * Math.exp(-(((v - 2.03125) / 0.12) ** 2))
   + 6000 * Math.exp(-(((v - 7) / 0.18) ** 2))));
 
-async function save(name, bytes, description, source = null, parent = null) {
+async function save(name, bytes, description, source = null, parent = null, members = null) {
   await writeFile(`/output/${name}`, bytes);
-  files.push({ path: name, sha256: hash(bytes), description, ...(parent ? { parent } : {}),
+  files.push({ path: name, sha256: hash(bytes), description, ...(parent ? { parent } : {}), ...(members ? { members } : {}),
     origin: source ?? { generator: 'tools/generate_input_fixtures.mjs',
       author: 'secs-repro contributors', licence: 'AGPL-3.0-only',
       licence_text: 'LICENSE', basis: 'New synthetic test data; no experimental measurements copied' } });
@@ -159,6 +160,7 @@ const loadedState = await core.read(collection, { onLoadProcessing: { autoProces
 loadedState.state.data.spectra.forEach((item, index) => { item.id = `synthetic-${index}`; });
 await save('mixed.nmrium', JSON.stringify(core.serializeNmriumState(loadedState.state)) + '\n',
   'NMRium serialization of authored proton/carbon spectra; data and processing preserved by reference core');
+await generateNmriumFixtures({ protonBytes: Buffer.from(spectrum), revision, save });
 
 const direct = Array.from({ length: 8 }, (_, i) => i);
 const indirect = Array.from({ length: 4 }, (_, i) => 2 * i);
@@ -314,11 +316,15 @@ for (const record of [...files].filter((item) => item.path.endsWith('.jdx')
     nucleus: loaded.meta.nucleus, dimension: loaded.dimension, points: loaded.data.y.length,
     from_fid: loaded.fromFid, magnitude: loaded.magnitude,
     first_ppm: loaded.data.x[0], last_ppm: loaded.data.x.at(-1),
+    entrypoint: 'readSpectrum', auto_processing: true, normalization: 'normalizeSpectrum', float32_cast: false,
     intensities: Array.from(normalized.spectrum.y) };
   await save(`${record.path}.reference.json`, JSON.stringify(reference) + '\n',
     `Pinned reference normalization of ${record.path}`,
     { ...record.origin, basis: `Derived by pinned reference normalization of ${record.path}` }, record.path);
 }
 await writeFile('/output/provenance.json', JSON.stringify({ frontend_revision: revision,
-  reference_sources: referenceSources, processing: { autoProcessing: true, normalization: 'normalizeSpectrum', float32_cast: false },
-  generator_sha256: hash(await readFile('/generator.mjs')), exporter: `${exporter.name}@${exporter.version} (${exporter.license})`, files }, null, 2) + '\n');
+  reference_sources: referenceSources,
+  generator_sources: {
+    'tools/generate_input_fixtures.mjs': hash(await readFile(new URL(import.meta.url))),
+    'tools/generate_nmrium_fixtures.mjs': hash(await readFile(new URL('./generate_nmrium_fixtures.mjs', import.meta.url))),
+  }, exporter: `${exporter.name}@${exporter.version} (${exporter.license})`, files }, null, 2) + '\n');

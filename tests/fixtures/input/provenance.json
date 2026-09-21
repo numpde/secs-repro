@@ -10,12 +10,10 @@
     "src/spectrum/phaseSearch.ts": "f661b4b89800eec5083b6e2a789a297b8f3b29f615fdfe0fa0c2affe541ea792",
     "src/spectrum/integral.ts": "14f998d63e16417a3daad245251c9e30b4858169cb95257fd2c60704d4e9c042"
   },
-  "processing": {
-    "autoProcessing": true,
-    "normalization": "normalizeSpectrum",
-    "float32_cast": false
+  "generator_sources": {
+    "tools/generate_input_fixtures.mjs": "71e0a3f603ce417adfe4c55884d6df0d09e47a8055747d2038d412a634774106",
+    "tools/generate_nmrium_fixtures.mjs": "d19f9f9080854a9187baed676aba5698cf8eaeb61c3ecfc82bbaca08de46a0e3"
   },
-  "generator_sha256": "4088960bed464b7f5dbab1ee4e8e92c4be091dcf12a5a711b3224071756be9f4",
   "exporter": "convert-to-jcamp@7.0.1 (MIT)",
   "files": [
     {
@@ -239,6 +237,157 @@
       }
     },
     {
+      "path": "resource-wrapper.nmrium",
+      "sha256": "c0c6a6c4356ddff08d4fb3b56ee0937dca838fef9096507b3613a2fd5e335376",
+      "description": "Genuine URL-backed state with no embedded arrays; not satisfied by an arbitrary sibling filename",
+      "parent": "proton.jdx",
+      "origin": {
+        "generator": "tools/generate_nmrium_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "Serialized dataSource state from authored proton.jdx; no shift applied; URL supplied by an in-memory fixture stub"
+      }
+    },
+    {
+      "path": "stored-shift.nmrium",
+      "sha256": "a6092f828124ba2c606144fe27e22245ba6056bbb8846bdbb0244fa6d8722f3f",
+      "description": "Raw proton data plus an enabled +1 ppm shift, to be applied exactly once",
+      "parent": "proton.jdx",
+      "origin": {
+        "generator": "tools/generate_nmrium_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "Authored proton.jdx, serialized through the pinned core with a stored +1 ppm shift"
+      }
+    },
+    {
+      "path": "resource-embedded.nmrium.zip",
+      "sha256": "a70d10cb6507d24a5aea32b42285b9aab09904f3287e108ecd0270369e69982e",
+      "description": "Native NMRium archive with a stored +1 ppm shift and its actual embedded resource; canonical UUIDs and 1980 ZIP timestamps",
+      "parent": "proton.jdx",
+      "members": [
+        {
+          "path": ".mimetype",
+          "sha256": "d14fba981974fd56e4011f25fdd4cdd0f4ba3e3872e6701ee6f82e94e17f63a0",
+          "parent": "stored-shift.nmrium",
+          "origin": {
+            "generator": "tools/generate_nmrium_fixtures.mjs",
+            "author": "secs-repro contributors",
+            "licence": "AGPL-3.0-only",
+            "licence_text": "LICENSE",
+            "basis": "Core-generated package metadata; UUIDs and ZIP timestamps canonicalized"
+          }
+        },
+        {
+          "path": "data/authored-proton/proton.jdx",
+          "sha256": "5ca3cf4be2aef92c1dbe0b4b259a740fc36bf29930581cd23439628b8cbb4e7d",
+          "parent": "proton.jdx",
+          "origin": {
+            "generator": "tools/generate_nmrium_fixtures.mjs",
+            "author": "secs-repro contributors",
+            "licence": "AGPL-3.0-only",
+            "licence_text": "LICENSE",
+            "basis": "Unchanged embedded proton.jdx"
+          }
+        },
+        {
+          "path": "META-INF/NMRIUM_ARCHIVE",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "parent": "stored-shift.nmrium",
+          "origin": {
+            "generator": "tools/generate_nmrium_fixtures.mjs",
+            "author": "secs-repro contributors",
+            "licence": "AGPL-3.0-only",
+            "licence_text": "LICENSE",
+            "basis": "Core-generated package metadata; UUIDs and ZIP timestamps canonicalized"
+          }
+        },
+        {
+          "path": "META-INF/VERSION",
+          "sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+          "parent": "stored-shift.nmrium",
+          "origin": {
+            "generator": "tools/generate_nmrium_fixtures.mjs",
+            "author": "secs-repro contributors",
+            "licence": "AGPL-3.0-only",
+            "licence_text": "LICENSE",
+            "basis": "Core-generated package metadata; UUIDs and ZIP timestamps canonicalized"
+          }
+        },
+        {
+          "path": "state.json",
+          "sha256": "4bf6567b9373b6360be5b60d78d22d7ab5493f0f372b29c2414a56d3f67a7ed7",
+          "parent": "stored-shift.nmrium",
+          "origin": {
+            "generator": "tools/generate_nmrium_fixtures.mjs",
+            "author": "secs-repro contributors",
+            "licence": "AGPL-3.0-only",
+            "licence_text": "LICENSE",
+            "basis": "Core-generated package metadata; UUIDs and ZIP timestamps canonicalized"
+          }
+        },
+        {
+          "path": "index.txt",
+          "sha256": "eed19d9758e62859437af29e64d21ab0210314f33502ab8b41f65cae5a9e930a",
+          "parent": "stored-shift.nmrium",
+          "origin": {
+            "generator": "tools/generate_nmrium_fixtures.mjs",
+            "author": "secs-repro contributors",
+            "licence": "AGPL-3.0-only",
+            "licence_text": "LICENSE",
+            "basis": "Core-generated package metadata; UUIDs and ZIP timestamps canonicalized"
+          }
+        },
+        {
+          "path": "index.json",
+          "sha256": "94bee6e1759283074184045d93d87328a3a96c745834fd6dc9655f12855b9f90",
+          "parent": "stored-shift.nmrium",
+          "origin": {
+            "generator": "tools/generate_nmrium_fixtures.mjs",
+            "author": "secs-repro contributors",
+            "licence": "AGPL-3.0-only",
+            "licence_text": "LICENSE",
+            "basis": "Core-generated package metadata; UUIDs and ZIP timestamps canonicalized"
+          }
+        }
+      ],
+      "origin": {
+        "generator": "tools/generate_nmrium_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "Authored proton.jdx, serialized through the pinned core with a stored +1 ppm shift"
+      }
+    },
+    {
+      "path": "stored-shift.nmrium.reference.json",
+      "sha256": "fcb9a9e03f3ea5228a93d4e7d0d3f0c8e416dc9c1c4f24db8ddbb5f30e9625b1",
+      "description": "Pinned readNMRiumObject then normalization of stored processing",
+      "parent": "stored-shift.nmrium",
+      "origin": {
+        "generator": "tools/generate_nmrium_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "Reference decoding and normalization of stored-shift.nmrium"
+      }
+    },
+    {
+      "path": "resource-embedded.nmrium.zip.reference.json",
+      "sha256": "71098d1ce6a4d6663f9114cfc56dd84300d4ac636284ded3fb9dad1fe70360bd",
+      "description": "Pinned readNMRiumArchive then normalization of stored processing",
+      "parent": "resource-embedded.nmrium.zip",
+      "origin": {
+        "generator": "tools/generate_nmrium_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "Reference decoding and normalization of resource-embedded.nmrium.zip"
+      }
+    },
+    {
       "path": "synthetic-2d.jdx",
       "sha256": "5e36484e753255065345919afd87cc956599ef37f7972be1ca70fc663279c8e5",
       "description": "Authored 4x8 1H/1H matrix z[row][column]=10*row+column+1; exporter scalar NUC1/NUC2 records removed, NTUPLES/end terminators appended",
@@ -336,7 +485,7 @@
     },
     {
       "path": "upstream-4-chlorobenzylamine.jdx.reference.json",
-      "sha256": "b83058e890539340ac9a4a7e525348efb9538f9d2c702f9ef1e8c721967bfa59",
+      "sha256": "79c19f24f6c68f263928f2b58574b5af6370407f62da97a0a080c91357cb5cf7",
       "description": "Pinned reference normalization of upstream-4-chlorobenzylamine.jdx",
       "parent": "upstream-4-chlorobenzylamine.jdx",
       "origin": {
@@ -353,7 +502,7 @@
     },
     {
       "path": "proton.jdx.reference.json",
-      "sha256": "f2ce0f7209e8a958fa5ab85aac93d92b3ea8c4de1750869c1470e0f23ed5a4aa",
+      "sha256": "f7616cc1e6ec2e9777fc7be6f50dc2e722ea6d66cd9d31e4f70bf86ae10a9f9a",
       "description": "Pinned reference normalization of proton.jdx",
       "parent": "proton.jdx",
       "origin": {
@@ -366,7 +515,7 @@
     },
     {
       "path": "alternate.jdx.reference.json",
-      "sha256": "ee68a301d63a42059f87ddfdadeb77e0887eb970f506d29494b98f523908302d",
+      "sha256": "f263f9e2451837d36d2b03c6f627c224c529ba6919836bdfc78f4074c5a64ee6",
       "description": "Pinned reference normalization of alternate.jdx",
       "parent": "alternate.jdx",
       "origin": {
@@ -379,7 +528,7 @@
     },
     {
       "path": "ascending.jdx.reference.json",
-      "sha256": "e4568b890e649f825b97a6fb6bd08e85a26f38194b55d4306f489924b3c4a346",
+      "sha256": "2ef1a819503b349a774935118fce21576c52554903a4761cd9ea781865c93c4e",
       "description": "Pinned reference normalization of ascending.jdx",
       "parent": "ascending.jdx",
       "origin": {
@@ -392,7 +541,7 @@
     },
     {
       "path": "linked.jdx.reference.json",
-      "sha256": "b8e231ef84173a193fca3ab5301346420ae045e0106f716deb1f0fc92a33358d",
+      "sha256": "2955e13f8aa90647d120c13981cc93b9734d42abfb5588bfde477ca257a32c5d",
       "description": "Pinned reference normalization of linked.jdx",
       "parent": "linked.jdx",
       "origin": {
@@ -405,7 +554,7 @@
     },
     {
       "path": "encoded-fix.jdx.reference.json",
-      "sha256": "0c570290c0e13514c1506faa99d1e7d90711d8fdfde8b83938117360606c9deb",
+      "sha256": "884242853f477f0215840c4599081abff3b0bab4a1d28fcbc729a24ab0f1959b",
       "description": "Pinned reference normalization of encoded-fix.jdx",
       "parent": "encoded-fix.jdx",
       "origin": {
@@ -418,7 +567,7 @@
     },
     {
       "path": "encoded-sqz.jdx.reference.json",
-      "sha256": "004df5410f37fe1e2b4a4bf69dcfbb0dd392b3fb7cc4cad33b7ccb9ad57da0c2",
+      "sha256": "df3618579adb16487f9d8803357e8209ba4f0b7df7a7799ca0ca1f77a3298b63",
       "description": "Pinned reference normalization of encoded-sqz.jdx",
       "parent": "encoded-sqz.jdx",
       "origin": {
@@ -431,7 +580,7 @@
     },
     {
       "path": "encoded-dif.jdx.reference.json",
-      "sha256": "f79b49e026fd7dd37af1013b4224003ce1d0d16e17e024e212dd768948ad8149",
+      "sha256": "5ca497b13b4c770bff2f46f4afcb3c1a07eebdf4f663feda53d895b6ee2a2a49",
       "description": "Pinned reference normalization of encoded-dif.jdx",
       "parent": "encoded-dif.jdx",
       "origin": {
@@ -444,7 +593,7 @@
     },
     {
       "path": "encoded-difdup.jdx.reference.json",
-      "sha256": "2e67fc12166717d6691fcd3de4c492bf78459cfb097e6621c0579fa09184c04e",
+      "sha256": "528ee9845c0259fc19584dd1d9d51c56a8fdc4c73685ddaddd91f6bf5e6d963f",
       "description": "Pinned reference normalization of encoded-difdup.jdx",
       "parent": "encoded-difdup.jdx",
       "origin": {
@@ -457,7 +606,7 @@
     },
     {
       "path": "encoded-pac.jdx.reference.json",
-      "sha256": "f9c684490d0fb9167663ee579e043adfb4e00755fb58980f5c47e97cf225de87",
+      "sha256": "2c7f9e70d52f7c268597432390b0183695cdfab449b51509d0acf5c6b9b7e124",
       "description": "Pinned reference normalization of encoded-pac.jdx",
       "parent": "encoded-pac.jdx",
       "origin": {
@@ -470,7 +619,7 @@
     },
     {
       "path": "complex.jdx.reference.json",
-      "sha256": "61fb3c9ef41c977aaaae2458c3a3bb34a4939bde6644fc55e679d962cda16d02",
+      "sha256": "b30785d837240c878921d088ad04433cd442f300ac274dd5dc66d1c645f5cece",
       "description": "Pinned reference normalization of complex.jdx",
       "parent": "complex.jdx",
       "origin": {
@@ -483,7 +632,7 @@
     },
     {
       "path": "fid.jdx.reference.json",
-      "sha256": "e25654698ab9d1406dce231527ecd57415025b4ffee341bd9a08dea988258fdd",
+      "sha256": "87cb973cacf9038379c7aa455183ad987904c3017644904e2b6db13bf83175d0",
       "description": "Pinned reference normalization of fid.jdx",
       "parent": "fid.jdx",
       "origin": {
@@ -496,7 +645,7 @@
     },
     {
       "path": "fid-magnitude.jdx.reference.json",
-      "sha256": "8f3402ed587938b402a657628b5eadc7bc6a76dda791d66420a3995bfbb469f5",
+      "sha256": "a636078000eb6687029fc5b1085bd9aff0fe5ce4b59a8d7decf4394d456c5173",
       "description": "Pinned reference normalization of fid-magnitude.jdx",
       "parent": "fid-magnitude.jdx",
       "origin": {
