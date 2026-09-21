@@ -14,13 +14,25 @@
     "normalization": "normalizeSpectrum",
     "float32_cast": false
   },
-  "generator_sha256": "a3901ef0f08cc3420d4ccd8ef1b59171dcbcde825e8521b75bb3532f7e4e1697",
+  "generator_sha256": "defd5d9fc12b4a8152d287dc1303227f9673cee2b291d1ad930a727441d10f4a",
   "exporter": "convert-to-jcamp@7.0.1 (MIT)",
   "files": [
     {
       "path": "proton.jdx",
       "sha256": "5ca3cf4be2aef92c1dbe0b4b259a740fc36bf29930581cd23439628b8cbb4e7d",
       "description": "257-point descending ppm spectrum; rounded Gaussian peaks at 2.03125 and 7 ppm",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "alternate.jdx",
+      "sha256": "9fa28624cdf929375782b586bb07ba37da0474fa023ec0f36a0c3c98240bc1aa",
+      "description": "Distinct proton signal: rounded samples of Gaussians centered at 4 and 8 ppm with amplitudes 10000 and 3000",
       "origin": {
         "generator": "tools/generate_input_fixtures.mjs",
         "author": "secs-repro contributors",
@@ -202,6 +214,19 @@
       "sha256": "f2ce0f7209e8a958fa5ab85aac93d92b3ea8c4de1750869c1470e0f23ed5a4aa",
       "description": "Pinned reference normalization of proton.jdx",
       "parent": "proton.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "alternate.jdx.reference.json",
+      "sha256": "ee68a301d63a42059f87ddfdadeb77e0887eb970f506d29494b98f523908302d",
+      "description": "Pinned reference normalization of alternate.jdx",
+      "parent": "alternate.jdx",
       "origin": {
         "generator": "tools/generate_input_fixtures.mjs",
         "author": "secs-repro contributors",
