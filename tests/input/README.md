@@ -4,9 +4,10 @@ These are tests-first requirements for design note 007. Production still uses
 the legacy readers. Missing behavior must fail; do not add skips or translate
 the requests back to legacy readers in test helpers.
 
-`make test/input` runs the input suite in the offline CPU image; the initial
-slice is normative discovery (`make test/input/normative`). Adversarial and
-selected-input tests follow in separately reviewed slices. There is no checkpoint or index;
+`make test/input` runs the input suite in the offline CPU image. Normative
+discovery and adversarial checks can run separately with
+`make test/input/normative` and `make test/input/adversarial`.
+Selected-input tests follow in separately reviewed slices. There is no checkpoint or index;
 the current scientific package's eager imports require the existing verified
 MolFormer configuration/tokenizer cache. No model weights are loaded. This is
 a temporary import dependency, not a reason to mock scientific input handling.
@@ -52,6 +53,9 @@ Ordinary tests never update goldens and check recorded artifact integrity.
 The corpus includes reference vectors for later preparation tests. This
 initial slice checks discovery and fixture integrity; it does not yet establish
 numerical agreement or independent peak-position correctness.
+Adversarial tests check worker source rejection, operational-error propagation,
+partial discovery and misleading metadata. Instruction-like titles test parser
+facts; they do not establish resistance to prompt injection in a live interpreter.
 Reference generation does not prove all vendor variants work, and repeated
 failure at missing discovery does not exercise assertions later in a test.
 Scripted interpreter replies prove transport/orchestration, not judgment.
