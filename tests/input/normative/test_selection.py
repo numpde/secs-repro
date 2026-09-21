@@ -126,6 +126,13 @@ class SelectedInputTests(WorkerCase):
                 peak_ppm = 10 - int(np.argmax(tensor)) * 12 / 9999
                 self.assertAlmostEqual(peak_ppm, 3.03125, delta=.002)
 
+    def test_annotations_do_not_change_the_selected_spectrums_encoder_input(self):
+        self.archive([(f'sample/{name}', (FIXTURES / name).read_bytes())
+                      for name in ('annotations.sdf', 'proton.jdx')])
+        response = self.analyse(self.one(self.discover()))
+        self.assertEqual(response['outcome'], 'no_starting_candidates')
+        self.assert_encoder_input(self.reference('proton.jdx'))
+
     def test_encoder_adapter_uses_training_order_without_discovery(self):
         reference = self.reference('alternate.jdx')
         self.inference.embed_spectrum(reference)

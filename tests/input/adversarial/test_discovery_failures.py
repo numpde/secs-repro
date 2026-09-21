@@ -4,6 +4,22 @@ from input.helpers import FIXTURES, WorkerCase
 
 
 class DiscoveryFailureTests(WorkerCase):
+    def test_nmredata_cannot_borrow_a_named_resource_from_another_upload(self):
+        self.archive([('sample/annotations.sdf', (FIXTURES / 'annotations.sdf').read_bytes())])
+        self.archive([('sample/proton.jdx', (FIXTURES / 'proton.jdx').read_bytes())], 'upload:proton')
+        facts = self.discover()
+        self.assertFalse(facts['complete'])
+        for item in facts['representations']:
+            self.assertTrue(all(source['upload_ref'] == 'upload:sample' for source in item['sources']))
+        structure = self.one(facts, 'structure', nucleus=None)
+        self.assertEqual(structure['sources'], [{'upload_ref': 'upload:sample', 'member': 'sample/annotations.sdf'}])
+        issues = [issue for issue in facts['issues'] if issue['source'] == structure['sources'][0]]
+        self.assertTrue(issues)
+        self.assertIn('proton.jdx', ' '.join(issue['reason'] for issue in issues).lower())
+        spectrum = self.one(self.discover('upload:proton'))
+        self.assertEqual(spectrum['sources'], [{'upload_ref': 'upload:proton', 'member': 'sample/proton.jdx'}])
+        self.assertNotIn(structure['id'], spectrum.get('related_ids', []))
+
     def test_missing_nucleus_is_unknown_instead_of_default_proton(self):
         contents = (FIXTURES / 'proton.jdx').read_text()
         self.assertEqual(contents.count('##.OBSERVE NUCLEUS=^1H\n'), 1)
