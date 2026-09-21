@@ -133,6 +133,69 @@ loadedState.state.data.spectra.forEach((item, index) => { item.id = `synthetic-$
 await save('mixed.nmrium', JSON.stringify(core.serializeNmriumState(loadedState.state)) + '\n',
   'NMRium serialization of authored proton/carbon spectra; data and processing preserved by reference core');
 
+function brukerParameters(fields) {
+  return '##TITLE=Synthetic parameters\n##JCAMPDX=5.00\n##DATATYPE=Parameter Values\n'
+    + '##ORIGIN=secs-repro synthetic fixture\n##OWNER=secs-repro contributors; AGPL-3.0-only\n'
+    + Object.entries(fields).map(([key, value]) => `##$${key}= ${value}`).join('\n') + '\n##END=\n';
+}
+const acqus = brukerParameters({ NUC1: '<1H>', SFO1: 400, BF1: 400, SW: 10, SW_h: 4000,
+  TD: 128, PARMODE: 0, SOLVENT: '<DMSO>', AQ_mod: 3, BYTORDA: 0, DTYPA: 2,
+  GRPDLY: 0, DSPFVS: 20, DECIM: 1, O1: 0 });
+const procs = brukerParameters({ SI: 64, SF: 400, SW_p: 4000, OFFSET: 10,
+  BYTORDP: 0, DTYPP: 0, PPARMOD: 0, AXNUC: '<1H>', NC_proc: 0 });
+const brukerReal = Buffer.alloc(64 * 4);
+const brukerFid = Buffer.alloc(64 * 16);
+for (let i = 0; i < 64; i++) {
+  brukerReal.writeInt32LE(Math.round(10000 * Math.exp(-(((i - 20) / 3) ** 2))), i * 4);
+  brukerFid.writeDoubleLE(Math.exp(-i / 16) * Math.cos(2 * Math.PI * i / 8), i * 16);
+  brukerFid.writeDoubleLE(Math.exp(-i / 16) * Math.sin(2 * Math.PI * i / 8), i * 16 + 8);
+}
+await save('bruker-acqus.txt', acqus, 'Authored acquisition parameters for a 64-complex-point 1H FID');
+await save('bruker-procs.txt', procs, 'Authored 64-point processed proton parameters; sufficient for the existing 1r/procs reader');
+await save('bruker-1r.bin', brukerReal, '64 little-endian int32 samples round(10000 exp(-((i-20)/3)^2))');
+await save('bruker-fid.bin', brukerFid, '64 interleaved little-endian complex Float64 samples exp(-i/16) exp(2pi sqrt(-1) i/8)');
+
+const varianParameters = { np: 128, at: .016, sfrq: 400, reffrq: 400, sw: 4000,
+  rfl: 2000, rfp: 0, rp: 0, temp: 25, tn: 'H1', solvent: 'DMSO' };
+const procpar = Object.entries(varianParameters).map(([name, value]) =>
+  `${name} 7 ${typeof value === 'string' ? 2 : 1} 32767 0 0 2 1 0 1 64\n1 ${JSON.stringify(value)}\n0\n`).join('');
+const varianFid = Buffer.alloc(32 + 28 + 128 * 4);
+// One block, one trace, 128 real/imaginary Float32 values, one block header.
+[1, 1, 128, 4, 512, 540].forEach((value, i) => varianFid.writeInt32BE(value, i * 4));
+varianFid.writeInt16BE(0, 24);
+varianFid.writeInt16BE(201, 26);
+varianFid.writeInt32BE(1, 28);
+[0, 137, 1, 0].forEach((value, i) => varianFid.writeInt16BE(value, 32 + i * 2));
+varianFid.writeInt32BE(1, 40);
+for (let i = 0; i < 64; i++) {
+  varianFid.writeFloatBE(Math.exp(-i / 16) * Math.cos(2 * Math.PI * i / 8), 60 + i * 8);
+  varianFid.writeFloatBE(Math.exp(-i / 16) * Math.sin(2 * Math.PI * i / 8), 64 + i * 8);
+}
+await save('varian-procpar.txt', procpar, 'Authored Varian procpar for a 64-complex-point 1H FID');
+await save('varian-fid.bin', varianFid, 'One-block big-endian Float32 FID; exp(-i/16) exp(2pi sqrt(-1) i/8)');
+
+for (const [format, members, isFid] of [
+  ['Bruker processed', [['sample/1/acqus', acqus], ['sample/1/pdata/1/procs', procs], ['sample/1/pdata/1/1r', brukerReal]], false],
+  ['Bruker FID', [['sample/1/acqus', acqus], ['sample/1/fid', brukerFid]], true],
+  ['Varian FID', [['sample/procpar', procpar], ['sample/fid', varianFid]], true],
+]) {
+  const collection = new FileCollection();
+  const files = members.map(([path, bytes]) => {
+    const file = new File([bytes], path.split('/').at(-1));
+    Object.defineProperty(file, 'webkitRelativePath', { value: path });
+    return file;
+  });
+  await collection.appendFileList(files);
+  const result = await core.read(collection, { onLoadProcessing: { autoProcessing: false } });
+  const spectra = result.state.data.spectra;
+  if (spectra.length !== 1 || spectra[0].info.nucleus !== '1H'
+      || spectra[0].data.re.length !== 64 || spectra[0].info.isFid !== isFid) {
+    const observed = spectra.map((item) => ({ nucleus: item.info.nucleus,
+      points: item.data.re.length, isFid: item.info.isFid }));
+    throw Error(`Cannot admit the synthetic ${format} fixture: expected one 64-point proton ${isFid ? 'FID' : 'spectrum'}; observed ${JSON.stringify(observed)}`);
+  }
+}
+
 for (const record of [...files].filter((item) => item.path.endsWith('.jdx') && item.path !== 'peaks.jdx' && item.path !== 'carbon.jdx')) {
   const bytes = await readFile(`/output/${record.path}`);
   const loaded = await readSpectrum([new File([bytes], record.path)]);

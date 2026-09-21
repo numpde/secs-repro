@@ -14,7 +14,7 @@
     "normalization": "normalizeSpectrum",
     "float32_cast": false
   },
-  "generator_sha256": "defd5d9fc12b4a8152d287dc1303227f9673cee2b291d1ad930a727441d10f4a",
+  "generator_sha256": "0621a73bbbd71fd1e1f9b84049d0f04b5f7fc53fcfb30b31390e223867c1983a",
   "exporter": "convert-to-jcamp@7.0.1 (MIT)",
   "files": [
     {
@@ -201,6 +201,78 @@
       "path": "mixed.nmrium",
       "sha256": "01304ee308bc98bee7c45d70a8b7e04240f22def480bba3ce772f55a7ebc7fef",
       "description": "NMRium serialization of authored proton/carbon spectra; data and processing preserved by reference core",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "bruker-acqus.txt",
+      "sha256": "5f3abe39e3ce0c453c05aa7f57442d34fca4354ad5975d01c6ac0dbf88db6958",
+      "description": "Authored acquisition parameters for a 64-complex-point 1H FID",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "bruker-procs.txt",
+      "sha256": "1614a2a6a51e083e2aa4fbac75e9a2d6eeb68f6605ba419490518fa807760b35",
+      "description": "Authored 64-point processed proton parameters; sufficient for the existing 1r/procs reader",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "bruker-1r.bin",
+      "sha256": "d0a7b1b79ae2711d25f36bc8a352eb94b4a640a5dd5975a73ec7d655f66c490e",
+      "description": "64 little-endian int32 samples round(10000 exp(-((i-20)/3)^2))",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "bruker-fid.bin",
+      "sha256": "6ef876051bfb6e99347f288621cf4c632a1dc8f9a9c6898758f26a6af3798729",
+      "description": "64 interleaved little-endian complex Float64 samples exp(-i/16) exp(2pi sqrt(-1) i/8)",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "varian-procpar.txt",
+      "sha256": "74fff432ed253f9f880ffc9bbc2f5de8cc0997f9038c64f24eb12f8bac800d2e",
+      "description": "Authored Varian procpar for a 64-complex-point 1H FID",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "varian-fid.bin",
+      "sha256": "4b78b4939f9a000a341206a3bf4c47ff75ae4173f4555f15deb06f22dd3fe934",
+      "description": "One-block big-endian Float32 FID; exp(-i/16) exp(2pi sqrt(-1) i/8)",
       "origin": {
         "generator": "tools/generate_input_fixtures.mjs",
         "author": "secs-repro contributors",
