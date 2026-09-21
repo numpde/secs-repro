@@ -83,10 +83,19 @@ class SelectedInputTests(WorkerCase):
                 self.assert_encoder_input(self.reference('proton.jdx' if name == 'mixed.nmrium' else name))
 
     def test_explicit_fid_processing_matches_reference(self):
-        self.upload('fid.jdx')
-        response = self.analyse(self.one(self.discover(), 'fid'), processing='auto')
-        self.assertEqual(response['outcome'], 'no_starting_candidates')
-        self.assert_encoder_input(self.reference('fid.jdx'))
+        for name, magnitude in (('fid.jdx', False), ('fid-magnitude.jdx', True)):
+            with self.subTest(fixture=name):
+                reference = json.loads((FIXTURES / f'{name}.reference.json').read_text())
+                self.assertIs(reference['from_fid'], True)
+                self.assertIs(reference['magnitude'], magnitude)
+                self.reset_observations()
+                self.upload(name)
+                response = self.analyse(self.one(self.discover(), 'fid'), processing='auto')
+                self.assertEqual(response['outcome'], 'no_starting_candidates')
+                self.assert_encoder_input(np.asarray(reference['intensities'], dtype=np.float32))
+                preparation = response['analysis']['preparation']
+                self.assertIs(preparation['from_fid'], True)
+                self.assertIs(preparation['magnitude'], magnitude)
 
     def test_encoder_adapter_uses_training_order_without_discovery(self):
         reference = self.reference('alternate.jdx')
