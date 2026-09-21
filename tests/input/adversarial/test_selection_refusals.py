@@ -5,6 +5,20 @@ from pathlib import Path
 
 
 class SelectionRefusalTests(WorkerCase):
+    def test_annotation_evidence_cannot_execute_without_its_dense_resource(self):
+        self.upload('annotations.sdf')
+        facts = self.discover()
+        self.assertFalse(facts['complete'])
+        self.assertTrue(facts['representations'], 'The structure remains discoverable')
+        # Known spectrum metadata may remain visible despite its missing data.
+        for item in facts['representations']:
+            with self.subTest(kind=item['kind']):
+                if item['kind'] == 'spectrum':
+                    response = self.rejected(self.selection(item['id']), 'proton.jdx')
+                    self.assertRegex(response['reason'].lower(), r'missing|unavailable|unresolved|not (available|provided)|cannot.*(find|resolve|load)')
+                else:
+                    self.rejected(self.selection(item['id']), 'proton', 'spectrum')
+
     def test_two_dimensional_proton_data_are_not_flattened_for_secs(self):
         self.upload('synthetic-2d.jdx')
         item = self.one(self.discover(), nucleus=None)
@@ -22,6 +36,7 @@ class SelectionRefusalTests(WorkerCase):
         self.assertNotIn(str(self.root), response['reason'])
         self.assertEqual(self.inference.mock_calls, [])
         self.assertEqual(self.candidates.mock_calls, [])
+        return response
 
     def test_unknown_selection_cannot_fall_back_to_available_proton_data(self):
         self.upload('proton.jdx')

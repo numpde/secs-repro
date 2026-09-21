@@ -1,6 +1,6 @@
 # Omni-parser acceptance tests
 
-These are tests-first requirements for design note 007. Production still uses
+These are tests-first requirements for [design note 007](../../notes/007_omni_parser_tests_first_20260921.txt). Production still uses
 the legacy readers. Missing behavior must fail; do not add skips or translate
 the requests back to legacy readers in test helpers.
 
@@ -22,6 +22,8 @@ this preparation may use network access. No checkpoint is required.
 ## Proposed consumer contract
 
 The existing worker `inspect` request identifies an Upload or exact ZIP member.
+Discovery must not start inference or candidate retrieval; invalid selections
+must fail before either operation.
 Its `facts` should contain `representations`, `complete` and localized `issues`.
 Each representation has an opaque `id`, `kind`, exact `sources` (Upload/member
 pairs), scientific `metadata`, and `related_ids` where relationships are known.
@@ -48,6 +50,16 @@ A URL-only state does not authorize a fetch or establish a relationship to an
 unrelated file with the same name. A loopback canary checks actual connections
 during inspection, including from another process; it does not test detached
 process supervision.
+NMReDATA annotations accompany the spectrum as `metadata.annotations`, with
+supplied `shift`, `multiplicity`, `atom_count` and `assignment` evidence; existing
+`related_ids` identify the associated structure. Assignments retain their
+source `label` and `atoms`, so swapped assignments cannot pass merely because
+both rows contain an opaque identifier. These labels
+record the supplied annotation; they do not validate the molecule's identity.
+The `N` declarations are atom counts, even though the reference uses them for
+display integration.
+They do not establish measured integrals. Missing relative resources remain
+unresolved across Upload namespaces; annotation rows are not dense spectra.
 
 All alternatives from each inspected Upload remain visible. A localized parse
 failure may coexist with useful choices; it cannot be reported as an exhaustive
@@ -60,7 +72,8 @@ structure files; archive companion paths retain their separate meaning.
 
 ## Evidence and scope
 
-Locally authored fixtures in `/fixtures/input` are mathematical signals and
+Locally authored fixtures in `tests/fixtures/input` (mounted at `/fixtures/input`
+inside the test container) are mathematical signals and
 structure tables, licensed AGPL-3.0-only under the repository LICENSE. The
 unchanged upstream 4-chlorobenzylamine fixture retains its embedded public-domain
 declaration; its individual creator is not stated and is recorded as unknown.
@@ -71,7 +84,9 @@ retain their parent fixture's licence; the test describes the transformation.
 The generator verifies its reference source hashes before writing.
 `make fixtures/input/write` builds the pinned reference image, generates into
 private staging without runtime network, and publishes only after generation
-succeeds. Building that image may need dependency access; ordinary tests and
+succeeds. It requires the pinned commit in `FRONTEND_REFERENCE_REPOSITORY`
+(default `../fork-of-elucidation.cheminfo.org`); dependency preparation does not
+create that checkout. Building the image may need dependency access; ordinary tests and
 generation runtime are offline. Review regenerated differences explicitly.
 Ordinary tests never update goldens and check recorded artifact integrity.
 Native NMRium archives also record every member's provenance and hash. Their
@@ -99,3 +114,33 @@ Reference generation does not prove all vendor variants work, and repeated
 failure at missing discovery does not exercise assertions later in a test.
 Scripted interpreter replies prove transport/orchestration, not judgment.
 Real-LLM and deployed GUI/API qualification remain separate roadmap obligations.
+
+## Coverage map and implementation handoff
+
+This map names acceptance requirements, not working parser capabilities.
+
+| Input or boundary | Requirements in this suite |
+| --- | --- |
+| JCAMP | AFFN, FIX, SQZ, DIF, DIFDUP, PAC; ascending axes; complex channels; LINK alternatives and peak tables; 2D discovery and SECS refusal |
+| Bruker, Varian, JEOL | Raw Bruker/Varian and processed Bruker/JEOL discovery; companion ownership, multiple experiments and pdata directories, incomplete datasets, nameless JEOL content |
+| NMRium | Multiple nuclei, stored shift replay, native embedded resources, unresolved URL resources and observed no-fetch behavior |
+| MOL, SDF, SMILES, NMReDATA | Structure formula evidence, separate records, explicit annotation relationships, supplied counts/assignments, missing resources |
+| Multiple Uploads and archives | Order independence, exact member choices, duplicate bytes/names, separate namespaces, partial inventories |
+| Selection and preparation | Opaque selection identity, stale/removed sources, explicit formula/processing, unsuitable-data refusal, selected encoder tensors, FID magnitude reporting |
+| Interpreter and scenarios | Analysis-kind authority, all admitted Upload metadata, selection-tool transport, explicit formula with unrelated evidence, correction before execution |
+| Source failures | Membership, missing/duplicate/nonregular members, archive limits, storage faults, localized malformed data and misleading metadata |
+
+Passing fixture checks verify recorded attribution and byte integrity;
+explicit generation separately verifies reference admission. Neither establishes
+parser parity. The vendor acceptance cases currently cover discovery; automatic
+Bruker/Varian FID preparation still needs numerical qualification through
+selection. The user's original JDX
+is a separate local regression and has not been admitted to this shared corpus.
+Additional instrument variants, live interpreter judgment and complete API/GUI
+flows remain qualification work rather than implied coverage.
+
+Implement against these requirements in small slices. Replace legacy reader
+dispatch and its obsolete restrictions as the corresponding cases pass; retain
+the source, scientific and outcome protections they still own. Design note 007
+defines the deletion gates. Do not make the red suite pass by translating its
+new selection contract back to the old reader-specific test inputs.
