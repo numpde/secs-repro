@@ -48,9 +48,6 @@ class AnnotationTests(WorkerCase):
         facts = self.discover()
         self.assertFalse(facts['complete'])
         self.assertEqual(self.one(facts, 'structure', nucleus=None)['metadata']['formula'], 'C2H6O')
-        issues = [issue for issue in facts['issues']
-                  if issue['source'] == {'upload_ref': 'upload:sample', 'member': None}]
-        self.assertTrue(issues)
-        reason = ' '.join(issue['reason'] for issue in issues).lower()
-        self.assertIn('proton.jdx', reason)
-        self.assertRegex(reason, r'missing|unavailable|unresolved|not (available|provided)|cannot.*resolve')
+        self.assert_issue_mentions(
+            facts, {'upload_ref': 'upload:sample', 'member': None},
+            'unavailable', 'proton.jdx')

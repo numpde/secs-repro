@@ -14,15 +14,17 @@ class SelectionRefusalTests(WorkerCase):
         for item in facts['representations']:
             with self.subTest(kind=item['kind']):
                 if item['kind'] == 'spectrum':
-                    response = self.rejected(self.selection(item['id']), 'proton.jdx')
-                    self.assertRegex(response['reason'].lower(), r'missing|unavailable|unresolved|not (available|provided)|cannot.*(find|resolve|load)')
+                    self.rejected(self.selection(item['id']),
+                                  'cannot execute', 'unavailable', 'proton.jdx')
                 else:
-                    self.rejected(self.selection(item['id']), 'proton', 'spectrum')
+                    self.rejected(self.selection(item['id']),
+                                  'selected structure', 'requires 1H spectrum')
 
     def test_two_dimensional_proton_data_are_not_flattened_for_secs(self):
         self.upload('synthetic-2d.jdx')
         item = self.one(self.discover(), nucleus=None)
-        self.rejected(self.selection(item['id']), '2D', '1D')
+        self.rejected(self.selection(item['id']),
+                      'selected 2D spectrum', 'requires 1D spectrum')
 
     def selection(self, identity):
         return {'representation_id': identity, 'formula': 'C22H36O7',
@@ -31,12 +33,11 @@ class SelectionRefusalTests(WorkerCase):
     def rejected(self, selection, *evidence):
         response = self.request('analyse', selection=selection)
         self.assertEqual(response['outcome'], 'input_rejected')
+        self.assert_safe_reason(response['reason'])
         for term in evidence:
             self.assertIn(term.lower(), response['reason'].lower())
-        self.assertNotIn(str(self.root), response['reason'])
         self.assertEqual(self.inference.mock_calls, [])
         self.assertEqual(self.candidates.mock_calls, [])
-        return response
 
     def test_unknown_selection_cannot_fall_back_to_available_proton_data(self):
         self.upload('proton.jdx')
@@ -51,18 +52,18 @@ class SelectionRefusalTests(WorkerCase):
     def test_peak_table_and_carbon_cannot_be_substituted_with_proton_data(self):
         self.upload('proton.jdx', 'upload:alternative')
         for fixture, kind, nucleus, evidence in (
-            ('peaks.jdx', 'peak_table', '1H', 'peak'),
-            ('carbon.jdx', 'spectrum', '13C', '13C'),
+            ('peaks.jdx', 'peak_table', '1H', ('selected peak table', 'requires 1H spectrum')),
+            ('carbon.jdx', 'spectrum', '13C', ('selected 13C spectrum', 'requires 1H spectrum')),
         ):
             with self.subTest(fixture=fixture):
                 self.upload(fixture)
                 item = self.one(self.discover(), kind, nucleus)
-                self.rejected(self.selection(item['id']), evidence, 'proton')
+                self.rejected(self.selection(item['id']), *evidence)
 
     def test_raw_fid_cannot_run_as_stored(self):
         self.upload('fid.jdx')
         item = self.one(self.discover(), 'fid')
-        self.rejected(self.selection(item['id']), 'processing')
+        self.rejected(self.selection(item['id']), 'selected FID', 'requires processing')
 
     def test_missing_formula_is_not_inferred_from_an_unselected_structure(self):
         self.upload('proton.jdx')

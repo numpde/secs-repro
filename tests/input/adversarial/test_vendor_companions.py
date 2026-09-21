@@ -8,18 +8,13 @@ class VendorCompanionTests(WorkerCase):
         self.upload('truncated.jdf', contents=(FIXTURES / 'synthetic.jdf').read_bytes()[:4096])
         facts = self.discover()
         self.assertFalse(facts['complete'])
-        issues = [issue for issue in facts['issues']
-                  if issue['source'] == {'upload_ref': 'upload:sample', 'member': None}]
-        self.assertTrue(issues)
-        self.assertRegex(' '.join(issue['reason'] for issue in issues).lower(),
-                         r'truncat|incomplete|missing.*(data|point)|expect.*(data|point|byte)')
+        self.assert_issue_mentions(
+            facts, {'upload_ref': 'upload:sample', 'member': None},
+            'incomplete', 'spectrum data')
 
     def missing_procs(self, facts, source):
         self.assertFalse(facts['complete'])
-        issues = [issue for issue in facts['issues'] if issue['source'] == source]
-        self.assertTrue(issues, 'The incomplete data source needs its own missing-companion issue')
-        self.assertRegex(' '.join(issue['reason'] for issue in issues).lower(),
-                         r'(missing|not found|need|required|without).*procs|procs.*(missing|not found|need|required)')
+        self.assert_issue_mentions(facts, source, 'unavailable', 'procs')
 
     def test_separate_uploads_do_not_supply_implicit_bruker_companions(self):
         self.archive([('sample/pdata/1/1r', (FIXTURES / 'bruker-1r.bin').read_bytes())], 'upload:data')
@@ -46,8 +41,6 @@ class VendorCompanionTests(WorkerCase):
                       ('sample/procpar', (FIXTURES / 'varian-procpar.txt').read_bytes())])
         facts = self.discover()
         self.assertFalse(facts['complete'])
-        issues = [issue for issue in facts['issues']
-                  if issue['source'] == {'upload_ref': 'upload:sample', 'member': 'sample/fid'}]
-        self.assertTrue(issues)
-        self.assertRegex(' '.join(issue['reason'] for issue in issues).lower(),
-                         r'truncat|incomplete|missing.*(data|point)|expect.*(data|point|byte)')
+        self.assert_issue_mentions(
+            facts, {'upload_ref': 'upload:sample', 'member': 'sample/fid'},
+            'incomplete', 'FID data')

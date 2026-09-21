@@ -13,11 +13,7 @@ class NmriumResourceTests(WorkerCase):
     def assert_unresolved_resource(self, facts, source):
         self.assertIn('complete', facts, 'Inspection must disclose unresolved resources')
         self.assertFalse(facts['complete'])
-        issues = [issue for issue in facts['issues'] if issue['source'] == source]
-        self.assertTrue(issues, 'The unresolved NMRium resource must be attributed to its state file')
-        reason = ' '.join(issue['reason'] for issue in issues).lower()
-        self.assertIn('proton.jdx', reason)
-        self.assertRegex(reason, r'missing|unavailable|unresolved|not (available|provided|fetched)|cannot.*(fetch|resolve)')
+        self.assert_issue_mentions(facts, source, 'unavailable', 'proton.jdx')
 
     def test_same_name_file_does_not_satisfy_a_url_resource(self):
         wrapper = (FIXTURES / 'resource-wrapper.nmrium').read_bytes()
