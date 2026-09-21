@@ -11,6 +11,27 @@ override FRONTEND_REFERENCE_IMAGE_TAG := secs-repro/frontend-reference
 
 .PHONY: fixtures/frontend-reference/base-image/pull
 .PHONY: fixtures/frontend-reference/image fixtures/frontend-reference/write
+.PHONY: fixtures/input/write
+
+fixtures/input/write:
+	@if test "$(HOST_UID)" -eq 0; then
+		printf '%s\n' 'Cannot write input fixtures as host UID 0.' >&2
+		exit 2
+	fi
+	output_directory=$$(realpath -e -- tests/fixtures/input)
+	stage=$$(mktemp -d --tmpdir="$(REPOSITORY_ROOT)/tests/fixtures" .input-reference.XXXXXXXX)
+	trap 'rm -rf "$$stage"' EXIT
+	image=$$($(MAKE) --no-print-directory fixtures/frontend-reference/image)
+	$(DOCKER) run --rm --init --pull never --network none --read-only \
+		--user "$(HOST_UID):$(HOST_GID)" \
+		--cap-drop ALL --security-opt no-new-privileges:true \
+		--pids-limit 64 --cpus 2 --memory 2g --memory-swap 2g \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/generate_input_fixtures.mjs,dst=/generator.mjs,readonly" \
+		--mount "type=bind,src=$$stage,dst=/output" \
+		--entrypoint node "$$image" /generator.mjs
+	# A failed reference read must not publish a partly generated corpus.
+	for artifact in "$$stage"/*; do mv -f -- "$$artifact" "$$output_directory/"; done
 
 fixtures/frontend-reference/base-image/pull:
 	$(DOCKER) pull "$(FRONTEND_REFERENCE_NODE_IMAGE)"

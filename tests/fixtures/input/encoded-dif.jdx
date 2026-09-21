@@ -1,0 +1,29 @@
+##TITLE=Synthetic DIF
+##JCAMP-DX=6.00
+##DATA TYPE= NMR SPECTRUM
+##DATA CLASS= XYDATA
+##ORIGIN=
+##OWNER=secs-repro contributors; AGPL-3.0-only
+##.SHIFT REFERENCE=INTERNAL, undefined, 1, -800
+##.OBSERVE FREQUENCY=400
+##.OBSERVE NUCLEUS=1H
+##$OFFSET=10
+##$BF1=400
+##XUNITS=HZ
+##YUNITS=Arbitrary
+##XFACTOR=18.75
+##YFACTOR=1
+##DELTAX=-18.75
+##FIRSTX=4800
+##FIRSTY=0
+##LASTX=0
+##MAXY=10000
+##MINY=0
+##NPOINTS=257
+##XYDATA=(X++(Y..Y))
+256@%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%KNJ8N3J38L06N79R26J232J315J033L93l93j033
+190D574j315j232r26n79l06j38n3j8nk%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+114@%%%%%%%%%%%%%%%%%%%JNL5J79O50J663K899L153J415j415l153k899j663o50j79l5nj%%%%%%%%%%%%%%%%%%%%%%%%
+53@%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+0@
+##END=
