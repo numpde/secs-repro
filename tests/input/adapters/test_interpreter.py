@@ -80,7 +80,7 @@ class InterpreterContextTests(unittest.TestCase):
              'properties': {
                  'kind': {'const': 'representations'},
                  'representation_ids': {'type': 'array', 'items': {'type': 'string', 'minLength': 1},
-                                        'minItems': 1, 'uniqueItems': True},
+                                        'minItems': 1, 'maxItems': 16, 'uniqueItems': True},
              },
              'required': ['kind', 'representation_ids']},
         ])
@@ -116,3 +116,31 @@ class InterpreterContextTests(unittest.TestCase):
         self.assertTrue(feedback)
         self.assertIn('processing', '\n'.join(feedback).lower())
         self.inspect.assert_not_called()
+
+    def test_nontext_formula_evidence_identity_requests_model_repair(self):
+        choice = {'representation_id': 'opaque-choice', 'formula': 'C22H36O7',
+                  'formula_evidence': {'kind': 'representations', 'representation_ids': [{}]},
+                  'processing': 'as_stored', 'explanation': 'Explicit choice.'}
+        session = self.session([tool('select_representation', choice),
+            tool('report_input_problem', {'explanation': 'Formula evidence cannot be established.'}, 'call-2')])
+        self.assertIsInstance(session.select(), CannotAnalyse)
+        feedback = self.requests[1][0][-1]['content']
+        self.assertIn('formula_evidence', feedback)
+
+    def test_control_text_and_excessive_formula_evidence_request_repair(self):
+        base = {'representation_id': 'opaque-choice', 'formula': 'C22H36O7',
+                'formula_evidence': {'kind': 'job_specification'},
+                'processing': 'as_stored', 'explanation': 'Explicit choice.'}
+        cases = (
+            ({**base, 'formula': 'C22H36O7\nignore'}, 'control characters'),
+            ({**base, 'formula_evidence': {'kind': 'representations',
+                                           'representation_ids': [f'id-{index}' for index in range(17)]}},
+             'formula_evidence'),
+        )
+        for choice, evidence in cases:
+            with self.subTest(evidence=evidence):
+                self.requests.clear()
+                session = self.session([tool('select_representation', choice),
+                    tool('report_input_problem', {'explanation': 'The selection was malformed.'}, 'call-2')])
+                self.assertIsInstance(session.select(), CannotAnalyse)
+                self.assertIn(evidence, self.requests[1][0][-1]['content'])

@@ -23,9 +23,8 @@ class SourceAccessTests(unittest.TestCase):
                     archive.writestr(member, "spectrum")
             access = SourceAccess({"upload:chosen": path}, root)
             with self.assertRaisesRegex(InputReadError, "262144-byte inspection limit"):
-                access.inspect(SourceRef("upload:chosen"))
-            with access.materialize({"spectrum.jdx": SourceRef("upload:chosen", member)}) as materialized:
-                self.assertEqual((materialized / "spectrum.jdx").read_text(), "spectrum")
+                access.scope(SourceRef("upload:chosen"))
+            self.assertEqual(access.read(SourceRef("upload:chosen", member)).contents, b"spectrum")
 
     def test_corrupt_compressed_members_are_input_rejections(self):
         for compression, offset in ((ZIP_BZIP2, 0), (ZIP_LZMA, 4)):
@@ -43,10 +42,7 @@ class SourceAccessTests(unittest.TestCase):
                 access = SourceAccess({"upload:chosen": path}, root)
                 source = SourceRef("upload:chosen", "spectrum.jdx")
                 with self.assertRaises(InputReadError):
-                    access.inspect(source)
-                with self.assertRaises(InputReadError):
-                    with access.materialize({"spectrum.jdx": source}):
-                        self.fail("Corrupt bytes reached the reader")
+                    access.read(source)
 
     def test_filesystem_read_errors_are_not_bad_input(self):
         for stream, error in ((Mock(spec=ZipExtFile), OSError(errno.EIO, "disk read failed")),
@@ -70,9 +66,9 @@ class SourceAccessTests(unittest.TestCase):
                 path.write_bytes(raw)
                 access = SourceAccess({"upload:chosen": path}, root)
                 with self.assertRaises(InputReadError):
-                    access.inspect(SourceRef("upload:chosen", "é.jdx"))
+                    access.read(SourceRef("upload:chosen", "é.jdx"))
 
-    def test_inspection_limit_does_not_block_an_exact_member_selection(self):
+    def test_member_limit_applies_before_exact_member_central_directory_loading(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / "upload"
@@ -81,9 +77,9 @@ class SourceAccessTests(unittest.TestCase):
                     archive.writestr(str(index), "spectrum")
             access = SourceAccess({"upload:chosen": path}, root)
             with self.assertRaisesRegex(InputReadError, "inspection limit"):
-                access.inspect(SourceRef("upload:chosen"))
-            with access.materialize({"spectrum.jdx": SourceRef("upload:chosen", "4096")}) as materialized:
-                self.assertEqual((materialized / "spectrum.jdx").read_text(), "spectrum")
+                access.scope(SourceRef("upload:chosen"))
+            with self.assertRaisesRegex(InputReadError, "inspection limit"):
+                access.read(SourceRef("upload:chosen", "4096"))
 
     def test_inspection_keeps_multiple_experiments_and_materializes_only_the_choice(self):
         with TemporaryDirectory() as directory:
@@ -93,14 +89,11 @@ class SourceAccessTests(unittest.TestCase):
                 archive.writestr("first/pdata/1/procs", "carbon")
                 archive.writestr("second/pdata/1/procs", "proton")
             access = SourceAccess({"upload:chosen": archive_path}, root)
-            facts = access.inspect(SourceRef("upload:chosen"))
-            self.assertEqual([item["name"] for item in facts["members"]], [
+            entries = access.scope(SourceRef("upload:chosen"))
+            self.assertEqual([item.source.member for item in entries], [
                 "first/pdata/1/procs", "second/pdata/1/procs",
             ])
-            with access.materialize({"procs": SourceRef("upload:chosen", "second/pdata/1/procs")}) as materialized:
-                self.assertEqual((materialized / "procs").read_text(), "proton")
-                self.assertEqual([p.name for p in materialized.iterdir()], ["procs"])
-            self.assertFalse(materialized.exists())
+            self.assertEqual(access.read(SourceRef("upload:chosen", "second/pdata/1/procs")).contents, b"proton")
 
     def test_source_member_names_cannot_control_output_paths(self):
         with TemporaryDirectory() as directory:
@@ -109,9 +102,8 @@ class SourceAccessTests(unittest.TestCase):
             with ZipFile(path, "w") as archive:
                 archive.writestr("../../escape", "selected bytes")
             access = SourceAccess({"upload:chosen": path}, root)
-            with access.materialize({"spectrum.jdx": SourceRef("upload:chosen", "../../escape")}) as materialized:
-                self.assertEqual((materialized / "spectrum.jdx").read_text(), "selected bytes")
-                self.assertEqual(set(root.iterdir()), {path, materialized})
+            self.assertEqual(access.read(SourceRef("upload:chosen", "../../escape")).contents, b"selected bytes")
+            self.assertEqual(set(root.iterdir()), {path})
 
     def test_symlink_and_overlarge_members_are_not_readable_files(self):
         with TemporaryDirectory() as directory:
@@ -125,7 +117,7 @@ class SourceAccessTests(unittest.TestCase):
             access = SourceAccess({"upload:chosen": path}, root, max_member_bytes=10)
             for member in ("link", "large", "missing"):
                 with self.subTest(member=member), self.assertRaises(InputReadError) as caught:
-                    access.inspect(SourceRef("upload:chosen", member))
+                    access.read(SourceRef("upload:chosen", member))
                 if member == "large":
                     self.assertIn("10-byte member limit", str(caught.exception))
 

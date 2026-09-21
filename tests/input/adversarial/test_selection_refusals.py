@@ -61,10 +61,33 @@ class SelectionRefusalTests(WorkerCase):
                 item = self.one(self.discover(), kind, nucleus)
                 self.rejected(self.selection(item['id']), *evidence)
 
+    def test_control_bearing_nucleus_cannot_forge_a_rejection_line(self):
+        contents = (FIXTURES / 'carbon.jdx').read_text().replace('^13C', '^13C\tforged')
+        self.upload('control-nucleus.jdx', contents=contents)
+        item = self.one(self.discover(), nucleus=None)
+        self.rejected(self.selection(item['id']), 'requires 1H spectrum')
+
     def test_raw_fid_cannot_run_as_stored(self):
         self.upload('fid.jdx')
         item = self.one(self.discover(), 'fid')
         self.rejected(self.selection(item['id']), 'selected FID', 'requires processing')
+
+    def test_malformed_fid_parameters_and_channels_make_discovery_partial(self):
+        original = (FIXTURES / 'fid.jdx').read_text()
+        variants = (
+            (original.replace('##$SW=12', '##$SW=not-a-number'), ('SW', 'numeric')),
+            (original.replace('##$BF1=400', '##$BF1=nan'), ('BF1', 'finite')),
+            (original.split('##DATA TABLE= (X++(I..I)), XYDATA', 1)[0] + '##END=\n',
+             ('complex', 'trace')),
+        )
+        for contents, evidence in variants:
+            with self.subTest(evidence=evidence):
+                self.upload('malformed-fid.jdx', contents=contents)
+                facts = self.discover()
+                self.assertFalse(facts['complete'])
+                self.assertFalse(any(item['kind'] == 'fid' for item in facts['representations']))
+                self.assert_issue_mentions(
+                    facts, {'upload_ref': 'upload:sample', 'member': None}, *evidence)
 
     def test_missing_formula_is_not_inferred_from_an_unselected_structure(self):
         self.upload('proton.jdx')

@@ -30,6 +30,15 @@ class VendorDatasetTests(WorkerCase):
         self.assertEqual({source['member'] for source in item['sources']},
                          {'sample/1/pdata/1/1r', 'sample/1/pdata/1/procs'})
 
+    def test_exact_bruker_members_resolve_only_their_declared_companions(self):
+        members = self.processed() + [('unrelated.txt', b'not part of the dataset')]
+        self.archive(members)
+        for selected in ('sample/1/pdata/1/1r', 'sample/1/pdata/1/procs'):
+            with self.subTest(selected=selected):
+                item = self.one(self.discover(member=selected))
+                self.assertEqual({source['member'] for source in item['sources']},
+                                 {'sample/1/pdata/1/1r', 'sample/1/pdata/1/procs'})
+
     def test_complete_processed_bruker_dataset_is_one_choice(self):
         members = self.processed() + [('sample/1/acqus', (FIXTURES / 'bruker-acqus.txt').read_bytes())]
         self.archive(members)
@@ -54,6 +63,11 @@ class VendorDatasetTests(WorkerCase):
                 self.assertEqual(item['metadata']['dimension'], 1)
                 self.assertEqual(float(item['metadata']['frequency_mhz']), 400)
                 self.assertEqual({source['member'] for source in item['sources']}, {name for name, _ in members})
+                for selected, _ in members:
+                    with self.subTest(vendor=vendor, selected=selected):
+                        exact = self.one(self.discover(member=selected), 'fid')
+                        self.assertEqual({source['member'] for source in exact['sources']},
+                                         {name for name, _ in members})
 
     def test_raw_and_processed_files_do_not_hide_each_other(self):
         members = self.processed() + [

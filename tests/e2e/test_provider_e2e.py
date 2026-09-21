@@ -133,8 +133,10 @@ class ProviderEndToEndTests(unittest.TestCase):
                 self.assertIn("proton", report["input_choices"][-1]["explanation"])
                 self.assertNotIn("explanation", report)
                 self.assertEqual(len(report["input_choices"]), 2)
-                self.assertIn("not 1H", report["input_choices"][0]["reading_error"])
-                self.assertEqual(report["input_choices"][-1]["source"]["member"], "experiment2/proton.jdx")
+                self.assertIn("selected 13C spectrum", report["input_choices"][0]["reading_error"])
+                self.assertEqual(report["analysis"]["preparation"]["sources"], [
+                    {"upload_ref": UPLOAD, "member": "experiment2/proton.jdx"},
+                ])
                 self.assertEqual(report["acquired_uploads"][UPLOAD]["content_hash"], "sha256:" + sha256(archive_bytes).hexdigest())
                 self.assertTrue(report["analysis"]["candidates"])
                 retrieval = report["analysis"]["retrieval"]
@@ -207,10 +209,19 @@ class WireScenario:
                 name, arguments = "inspect_source", {"source": {"upload_ref": UPLOAD, "member": None}}
             else:
                 if self.turns == 3:
-                    assert "not 1H" in prompt["messages"][-1]["content"]
+                    assert "13C" in prompt["messages"][-1]["content"]
+                    assert "requires 1H" in prompt["messages"][-1]["content"]
                 member = "experiment1/carbon.jdx" if self.turns == 2 else "experiment2/proton.jdx"
-                name, arguments = "read_jcamp", {"source": {"upload_ref": UPLOAD, "member": member}, "formula": "C7H8ClN",
-                                                "explanation": "The selected experiment provides the proton spectrum for the supplied formula."}
+                inspection = next(json.loads(message["content"])["representations"]
+                                  for message in prompt["messages"] if message["role"] == "tool"
+                                  and "representations" in message["content"])
+                identity = next(item["id"] for item in inspection
+                                if item["sources"] == [{"upload_ref": UPLOAD, "member": member}])
+                name, arguments = "select_representation", {
+                    "representation_id": identity, "formula": "C7H8ClN",
+                    "formula_evidence": {"kind": "job_specification"}, "processing": "as_stored",
+                    "explanation": "The selected experiment provides the proton spectrum for the supplied formula.",
+                }
             document = {"choices": [{"message": {"role": "assistant", "tool_calls": [{"id": f"call-{self.turns}", "type": "function",
                          "function": {"name": name, "arguments": json.dumps(arguments)}}]}}]}
         elif route == ("POST", "/provider/v1/hello"):

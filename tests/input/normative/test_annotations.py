@@ -43,6 +43,15 @@ class AnnotationTests(WorkerCase):
             self.assertEqual(annotation['assignment']['atoms'], [atom])
             self.assertIsNone(annotation.get('integral'), 'Declared atom counts are not measured integrals')
 
+    def test_exact_nmredata_member_resolves_its_declared_spectrum(self):
+        self.archive([(f'sample/{name}', (FIXTURES / name).read_bytes())
+                      for name in ('annotations.sdf', 'proton.jdx')])
+        facts = self.discover(member='sample/annotations.sdf')
+        self.assertTrue(facts['complete'])
+        spectrum = self.one(facts)
+        self.assertEqual({source['member'] for source in spectrum['sources']},
+                         {'sample/annotations.sdf', 'sample/proton.jdx'})
+
     def test_unavailable_annotation_resource_preserves_structure_and_reports_the_gap(self):
         self.upload('annotations.sdf')
         facts = self.discover()

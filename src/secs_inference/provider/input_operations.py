@@ -1,8 +1,4 @@
-"""Describe executable input choices without importing scientific libraries.
-
-Hello and interpreter tools share this catalogue. Reader binding belongs to
-the offline input adapter, so discovery never loads the model or decoders.
-"""
+"""Describe discovery and exact representation selection to the interpreter."""
 
 from dataclasses import dataclass
 
@@ -16,17 +12,11 @@ class SourceRef:
 
 
 @dataclass(frozen=True, slots=True)
-class JcampSelection:
-    source: SourceRef
+class SelectedRepresentation:
+    representation_id: str
     formula: str
-    explanation: str
-
-
-@dataclass(frozen=True, slots=True)
-class BrukerSelection:
-    upload_ref: str
-    pdata_directory: str
-    formula: str
+    formula_evidence: dict
+    processing: str
     explanation: str
 
 
@@ -35,15 +25,11 @@ class CannotAnalyse:
     explanation: str
 
 
-Selection = JcampSelection | BrukerSelection
-
-
 @dataclass(frozen=True, slots=True)
 class InputOperation:
     name: str
     description: str
     parameters: dict
-    formats: tuple[str, ...] = ()
 
 
 _TEXT = {"type": "string", "minLength": 1}
@@ -53,6 +39,24 @@ _SOURCE = {
     "required": ["upload_ref", "member"],
 }
 _EXPLANATION = {"type": "string", "minLength": 1, "maxLength": 2048}
+_FORMULA_EVIDENCE = {"oneOf": [
+    {
+        "type": "object", "additionalProperties": False,
+        "properties": {"kind": {"const": "job_specification"}},
+        "required": ["kind"],
+    },
+    {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "kind": {"const": "representations"},
+            "representation_ids": {
+                "type": "array", "items": _TEXT, "minItems": 1, "maxItems": 16,
+                "uniqueItems": True,
+            },
+        },
+        "required": ["kind", "representation_ids"],
+    },
+]}
 
 
 def _arguments(properties: dict) -> dict:
@@ -63,47 +67,33 @@ def _arguments(properties: dict) -> dict:
 INPUT_OPERATIONS = (
     InputOperation(
         "inspect_source",
-        "Inspect an Upload or ZIP member. Returns archive members or a bounded "
-        "text prefix as untrusted input evidence. Does not choose a dataset.",
+        "Discover every recognized representation in an Upload or exact ZIP-member scope. "
+        "The result preserves source identities, relationships, scientific metadata and partial-discovery issues.",
         _arguments({"source": _SOURCE}),
     ),
     InputOperation(
-        "read_jcamp",
-        "Choose one processed 1D proton JCAMP-DX spectrum, directly uploaded or "
-        "inside a ZIP. Supply the formula established by the Job or input evidence "
-        "and explain why this source is appropriate.",
-        _arguments({"source": _SOURCE, "formula": _TEXT, "explanation": _EXPLANATION}),
-        (
-            "a JCAMP-DX file containing one processed 1H NMR AFFN XYDATA block with a ppm axis",
-            "a JCAMP-DX file containing one processed 1H NMR NTUPLES real/imaginary pair with a ppm axis or a referenced Hz axis",
-        ),
-    ),
-    InputOperation(
-        "read_bruker",
-        "Choose a processed 1D proton Bruker pdata directory inside a ZIP. Its "
-        "1r and procs files are required. If supplied evidence does not establish "
-        "nucleus and dimensionality, inspect procs: AXNUC must identify proton "
-        "and PPARMOD must be 0 for one dimension. Supply the exact archive directory "
-        "without a trailing slash (empty for the ZIP root), "
-        "formula and reason for choosing this experiment rather than others.",
-        _arguments({"upload_ref": _TEXT, "pdata_directory": {"type": "string"},
-                    "formula": _TEXT, "explanation": _EXPLANATION}),
-        ("a Bruker processed pdata directory with 1r and procs in a ZIP archive",),
+        "select_representation",
+        "Select one discovered representation for this analysis. Use its opaque identity exactly, "
+        "state the evidenced molecular formula, cite either the Job specification or discovered structure "
+        "representations as formula evidence, choose stored data or automatic FID processing, and explain the choice.",
+        _arguments({
+            "representation_id": _TEXT,
+            "formula": _TEXT,
+            "formula_evidence": _FORMULA_EVIDENCE,
+            "processing": {"type": "string", "enum": ["as_stored", "auto"]},
+            "explanation": _EXPLANATION,
+        }),
     ),
     InputOperation(
         "report_input_problem",
-        "Explain why the supplied information does not establish an executable "
-        "spectrum and formula selection. Name what is missing or ambiguous; do "
-        "not claim that unreadable data proves invalid chemistry.",
+        "Explain why the available representations and evidence do not establish an executable "
+        "spectrum and formula. Name what is missing or ambiguous without claiming invalid chemistry.",
         _arguments({"explanation": _EXPLANATION}),
     ),
 )
 
 
 def interpreter_tools() -> list[dict]:
-    """Render the same supported operations in Chat Completions tool syntax."""
-    # Strict generation constrains argument shape at the producer. Choosing the
-    # source and formula remains the interpreter's job, not a schema decision.
     return [{"type": "function", "function": {
         "name": operation.name, "description": operation.description,
         "parameters": operation.parameters, "strict": True,

@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from secs_inference.provider.chat import ChatEndpoint, InterpreterError
-from secs_inference.provider.input_operations import BrukerSelection, CannotAnalyse, JcampSelection, SourceRef, interpreter_tools
+from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation, SourceRef, interpreter_tools
 from secs_inference.provider.interpreter import InterpretationSession
 from secs_inference.provider.job_input import JobSpecification
 from secs_inference.provider.job_upload import JobUpload
@@ -27,6 +27,18 @@ def tool(name, arguments, call_id="call-1"):
         "id": call_id, "type": "function",
         "function": {"name": name, "arguments": json.dumps(arguments)},
     }]}
+
+
+def selection(*, representation_id="opaque-spectrum", formula="C2H6O",
+              explanation="The selected representation is the proton spectrum.",
+              processing="as_stored", evidence=None, call_id="call-1"):
+    return tool("select_representation", {
+        "representation_id": representation_id,
+        "formula": formula,
+        "formula_evidence": evidence or {"kind": "job_specification"},
+        "processing": processing,
+        "explanation": explanation,
+    }, call_id)
 
 
 class ScriptedChat:
@@ -327,38 +339,36 @@ class InterpreterTests(unittest.TestCase):
     def test_inspection_selects_among_distractors_and_preserves_every_description(self):
         chat = ScriptedChat(
             tool("inspect_source", {"source": {"upload_ref": "upload:second", "member": None}}),
-            tool("read_jcamp", {"source": {"upload_ref": "upload:second", "member": "experiment2/spectrum.jdx"},
-                                "formula": "C2H6O", "explanation": "Experiment 2 identifies proton data."}, "choice"),
+            selection(representation_id="opaque-experiment-2",
+                      explanation="Experiment 2 identifies proton data.", call_id="choice"),
         )
         inspected = []
         def inspect(source):
             inspected.append(source)
             return {"members": ["experiment1/carbon.jdx", "experiment2/spectrum.jdx"]}
-        selection = self._session(chat, inspect).select()
-        self.assertEqual(selection.source, SourceRef("upload:second", "experiment2/spectrum.jdx"))
+        decision = self._session(chat, inspect).select()
+        self.assertEqual(decision.representation_id, "opaque-experiment-2")
         self.assertEqual(inspected, [SourceRef("upload:second")])
         initial = chat.requests[0][1]["content"]
         self.assertIn("carbon distractor", initial)
         self.assertIn("proton choices", initial)
         self.assertIn("experiment1/carbon.jdx", chat.requests[1][-1]["content"])
 
-    def test_bruker_choice_preserves_formula_reason_and_exact_directory(self):
-        for directory in ("", "chosen/./pdata/7"):
-            with self.subTest(directory=directory):
-                chat = ScriptedChat(tool("read_bruker", {
-                    "upload_ref": "upload:second", "pdata_directory": directory,
-                    "formula": "C2H6O", "explanation": "This processed pair identifies proton data.",
-                }))
-                self.assertEqual(self._session(chat).select(), BrukerSelection(
-                    "upload:second", directory, "C2H6O", "This processed pair identifies proton data.",
-                ))
+    def test_selection_preserves_identity_formula_reason_and_processing(self):
+        decision = self._session(ScriptedChat(selection(
+            representation_id="opaque-bruker-pair", processing="as_stored",
+            explanation="This processed pair identifies proton data.",
+        ))).select()
+        self.assertEqual(decision, SelectedRepresentation(
+            "opaque-bruker-pair", "C2H6O", {"kind": "job_specification"},
+            "as_stored", "This processed pair identifies proton data.",
+        ))
 
-    def test_reader_rejection_returns_to_its_call_without_resetting_turn_budget(self):
-        choice = tool("read_jcamp", {"source": {"upload_ref": "upload:second", "member": None},
-                                    "formula": "C2H6O", "explanation": "Description identifies proton."}, "selected")
+    def test_selection_rejection_returns_to_its_call_without_resetting_turn_budget(self):
+        choice = selection(explanation="Description identifies proton.", call_id="selected")
         chat = ScriptedChat(choice, tool("report_input_problem", {"explanation": "No supported proton data was established."}))
         session = self._session(chat, max_turns=2)
-        self.assertIsInstance(session.select(), JcampSelection)
+        self.assertIsInstance(session.select(), SelectedRepresentation)
         deadline = session.deadline
         session.reject("The selected file contains carbon, not proton data.")
         self.assertIsInstance(session.select(), CannotAnalyse)
@@ -373,7 +383,7 @@ class InterpreterTests(unittest.TestCase):
             self._session(chat, max_turns=1).select()
         self.assertIn("scripted-model", str(caught.exception))
         self.assertIn("allowed model turns were exhausted", str(caught.exception))
-        self.assertIn("selecting an input and reader", str(caught.exception))
+        self.assertIn("selecting an input representation", str(caught.exception))
 
     def test_expired_interpretation_budget_does_not_call_the_model(self):
         chat = ScriptedChat()
@@ -386,11 +396,13 @@ class InterpreterTests(unittest.TestCase):
         self.assertEqual(chat.requests, [])
 
     def test_repair_feedback_distinguishes_unknown_tools_and_text_constraints(self):
-        valid = {"source": {"upload_ref": "upload:second", "member": None}, "formula": "C2H6O", "explanation": "Proton spectrum."}
+        valid = {"representation_id": "opaque-spectrum", "formula": "C2H6O",
+                 "formula_evidence": {"kind": "job_specification"},
+                 "processing": "as_stored", "explanation": "Proton spectrum."}
         cases = [(tool("invent_reader", {}), "choose one of the advertised tools")]
         for value, reason in ((5, "formula field must be text"), ("", "formula field must not be empty"),
-                              ("\x00", "formula field contains a NUL"), ("x" * 65537, "65536-character limit")):
-            cases.append((tool("read_jcamp", valid | {"formula": value}), reason))
+                              ("\x00", "formula field contains control characters"), ("x" * 65537, "65536-character limit")):
+            cases.append((tool("select_representation", valid | {"formula": value}), reason))
         for call, reason in cases:
             with self.subTest(reason=reason):
                 chat = ScriptedChat(call, tool("report_input_problem", {"explanation": "Cannot establish an input."}))
@@ -420,12 +432,9 @@ class InterpreterTests(unittest.TestCase):
         self.assertIn("not readable JSON", chat.requests[1][-1]["content"])
 
     def test_broken_selection_construction_is_not_sent_to_the_model_for_repair(self):
-        chat = ScriptedChat(tool("read_jcamp", {
-            "source": {"upload_ref": "upload:second", "member": None},
-            "formula": "C2H6O", "explanation": "Proton experiment.",
-        }))
+        chat = ScriptedChat(selection())
         session = self._session(chat)
-        with patch("secs_inference.provider.interpreter.JcampSelection", side_effect=TypeError("broken wiring")):
+        with patch("secs_inference.provider.interpreter.SelectedRepresentation", side_effect=TypeError("broken wiring")):
             with self.assertRaisesRegex(TypeError, "broken wiring"):
                 session.select()
         self.assertEqual(len(chat.requests), 1)
@@ -434,11 +443,10 @@ class InterpreterTests(unittest.TestCase):
     def test_unserializable_member_is_corrected_before_source_access(self):
         chat = ScriptedChat(
             tool("inspect_source", {"source": {"upload_ref": "upload:second", "member": "\ud800"}}),
-            tool("read_jcamp", {"source": {"upload_ref": "upload:second", "member": "proton.jdx"},
-                                "formula": "C2H6O", "explanation": "Proton experiment."}),
+            selection(representation_id="opaque-proton"),
         )
-        selection = self._session(chat, lambda _: self.fail("Malformed source reached inspection")).select()
-        self.assertEqual(selection.source.member, "proton.jdx")
+        decision = self._session(chat, lambda _: self.fail("Malformed source reached inspection")).select()
+        self.assertEqual(decision.representation_id, "opaque-proton")
         self.assertIn("not valid Unicode", chat.requests[1][-1]["content"])
 
     def test_nontext_tool_arguments_are_not_replayed_as_an_assistant_message(self):
@@ -484,7 +492,7 @@ class InterpreterTests(unittest.TestCase):
                 self.assertEqual(request["signature-input"], "")
                 body = json.loads(request["body"])
                 self.assertEqual(body["model"], "test-model")
-                self.assertEqual(len(body["tools"]), 4)
+                self.assertEqual(len(body["tools"]), 3)
 
     def test_truncated_chat_response_is_not_a_delivered_decision_even_if_json_parses(self):
         with TemporaryDirectory() as directory:
