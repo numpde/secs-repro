@@ -62,6 +62,9 @@ function affn(axis, values, nucleus = '1H') {
 
 const spectrum = affn(x, y);
 await save('proton.jdx', spectrum, '257-point descending ppm spectrum; rounded Gaussian peaks at 2.03125 and 7 ppm');
+const alternate = x.map((v) => Math.round(10000 * Math.exp(-(((v - 4) / 0.18) ** 2))
+  + 3000 * Math.exp(-(((v - 8) / 0.12) ** 2))));
+await save('alternate.jdx', affn(x, alternate), 'Distinct proton signal: rounded samples of Gaussians centered at 4 and 8 ppm with amplitudes 10000 and 3000');
 await save('ascending.jdx', affn([...x].reverse(), [...y].reverse()), 'Same sampled spectrum, ascending axis');
 await save('carbon.jdx', affn(x, y, '13C'), 'Same synthetic ordinates, explicitly carbon; not proton evidence');
 const peakTable = `##TITLE=Synthetic companion peaks
