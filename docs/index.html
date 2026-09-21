@@ -44,8 +44,9 @@
     put its molecular formula in the job instructions. If SECS is not listed,
     ask the deployment operator whether it is available.</p>
   <p>For every job, a language-model interpreter receives the job instructions
-    and attachment descriptions to choose the spectrum, reader, and formula.
-    It can also inspect archive listings and excerpts from attached files.
+    and attachment descriptions to choose one discovered spectrum representation,
+    its processing, and the formula evidence. It can inspect recognized data and
+    relationships across every attachment linked to the job.
     These are sent to the deployment's configured language-model service;
     check with the operator before submitting confidential information.</p>
 
@@ -56,14 +57,29 @@
       together in the same directory; include <code>title</code> if available.
       That directory can be at the ZIP root or inside preserved experiment folders.
       <code>1r</code> alone is insufficient: <code>procs</code> supplies the
-      spectrum metadata and ppm axis.</li>
+      spectrum metadata and ppm axis. A raw one-dimensional <code>fid</code>
+      can instead be paired with its <code>acqus</code> parameters for automatic
+      processing when it has the qualified zero group-delay profile. Other raw
+      Bruker processing profiles are reported as unsupported.</li>
+    <li><strong>Varian:</strong> upload a ZIP containing a one-dimensional
+      <code>fid</code> and its <code>procpar</code> file for automatic processing.
+      The qualified profile has a stored reference centred at zero; other
+      reference profiles are reported rather than guessed.</li>
     <li><strong>JCAMP-DX:</strong> upload a file directly or inside a ZIP.
-      Supported representations are a processed <sup>1</sup>H AFFN XYDATA block
-      with a ppm axis, or an NTUPLES real/imaginary pair with a ppm axis or a
-      referenced Hz axis.</li>
+      Supported representations include processed XYDATA and NTUPLES spectra,
+      compressed numeric encodings, and complex one-dimensional FIDs with the
+      parameters needed for automatic processing.</li>
+    <li><strong>NMRium and JEOL:</strong> NMRium v21 saved states can contain
+      dense spectra or declared JCAMP-DX resources. Processed one-dimensional
+      JEOL JDF data are accepted for the reference-compatible profile with an
+      explicit ppm axis.</li>
+    <li><strong>Formula and annotations:</strong> MOL, SDF, and SMILES records
+      can provide formula evidence. The admitted NMReDATA subset can link a
+      structure, its JCAMP-DX resource, and proton assignments.</li>
   </ul>
-  <p>Raw time-domain data (FID), spectrum images, and peak lists are not inputs
-    to this analysis. Upload processed spectral data, not a screenshot.</p>
+  <p>Spectrum images and peak tables cannot replace dense one-dimensional data
+    for SECS. Peak tables may be reported during discovery so the interpreter can
+    explain the limitation. Upload the original data rather than a screenshot.</p>
 
   <h2>Example: a Bruker experiment</h2>
   <p>For the <a href="https://github.com/numpde/secs-repro/tree/main/tests/fixtures/bruker/F3697/1/pdata/1">strychnine example files</a>

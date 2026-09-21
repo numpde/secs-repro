@@ -65,9 +65,12 @@ class ScientificHandler:
     """Run explicit reads and inference; translate only owner-identified input errors."""
 
     def __init__(self, inference, candidates, config: ScientificWorkerConfig):
+        from secs_inference.provider.input_adapter import InputAdapter
+
         self.inference = inference
         self.candidates = candidates
         self.config = config
+        self.input_adapter = InputAdapter()
 
     def __call__(self, command: dict) -> dict:
         from secs_inference.elucidation import FormulaError
@@ -78,10 +81,15 @@ class ScientificHandler:
         try:
             access = SourceAccess({ref: Path(path) for ref, path in command["files"].items()}, Path(command["directory"]))
             if command["operation"] == "inspect":
-                return {"outcome": "inspected", "facts": access.inspect(SourceRef(**command["source"]))}
+                facts = self.input_adapter.discover(
+                    access,
+                    command["attempt_ref"],
+                    SourceRef(**command["source"]),
+                )
+                return {"outcome": "inspected", "facts": facts}
             if command["operation"] != "analyse":
                 raise AssertionError("No scientific operation is bound to the worker request")
-            analysis = self._analyse(access, command["selection"])
+            analysis = self._analyse(access, command["attempt_ref"], command["selection"])
             outcome = (AnalysisOutcome.NO_STARTING_CANDIDATES
                        if analysis["search"]["outcome"] == AnalysisOutcome.NO_STARTING_CANDIDATES
                        else AnalysisOutcome.ANALYSED)
@@ -89,28 +97,20 @@ class ScientificHandler:
         except (InputReadError, SpectrumReadError, FormulaError) as error:
             return {"outcome": "input_rejected", "reason": str(error)[:2048]}
 
-    def _analyse(self, access, document):
+    def _analyse(self, access, attempt_ref, selection):
         """Read the chosen input and report refinement or observed empty retrieval."""
         from secs.elucidation import GraphGAOptimizer
         from secs_inference.elucidation import SecsElucidator
-        from secs_inference.provider.input_operations import BrukerSelection, JcampSelection, SourceRef
-        from secs_inference.provider.spectrum_input import prepare_selected_spectrum
         from secs_inference.spectra.secs import SECS_PPM_FROM, SECS_PPM_TO, SECS_SPECTRUM_POINTS
 
-        if document["reader"] == "jcamp":
-            selection = JcampSelection(SourceRef(**document["source"]), document["formula"], document["explanation"])
-        elif document["reader"] == "bruker":
-            selection = BrukerSelection(document["upload_ref"], document["pdata_directory"], document["formula"], document["explanation"])
-        else:
-            raise AssertionError("No reader is bound to the selected scientific representation")
-        spectrum = prepare_selected_spectrum(access, selection)
+        prepared = self.input_adapter.prepare(access, attempt_ref, selection)
         optimizer = GraphGAOptimizer(
             population_size=self.config.population_size, offspring_size=self.config.offspring_size,
             max_generations=self.config.max_generations, seed=self.config.seed,
         )
         elucidator = SecsElucidator(self.inference, self.candidates, optimizer,
                                   initial_population_size=self.config.initial_population_size)
-        result = elucidator.elucidate(spectrum, selection.formula)
+        result = elucidator.elucidate(prepared.values, selection["formula"])
         # This provider's canonical JSON excludes floating-point numbers. Scientific
         # decimal values travel as text; counts and discrete settings stay integers.
         if result.optimization is None:
@@ -140,7 +140,10 @@ class ScientificHandler:
                        "population_size": self.config.population_size, "offspring_size": self.config.offspring_size,
                        "max_generations": self.config.max_generations, "seed": self.config.seed},
             "preparation": {"operation": "SECS resampling and min-max normalization",
-                            "ppm_from": str(SECS_PPM_FROM), "ppm_to": str(SECS_PPM_TO), "points": SECS_SPECTRUM_POINTS},
+                            "ppm_from": str(SECS_PPM_FROM), "ppm_to": str(SECS_PPM_TO), "points": SECS_SPECTRUM_POINTS,
+                            "representation_id": prepared.representation_id,
+                            "from_fid": prepared.from_fid, "magnitude": prepared.magnitude,
+                            "sources": [asdict(source) for source in prepared.sources]},
             "inference": {"device": self.config.device, "compute_dtype": self.config.compute_dtype,
                           "smiles_batch_size": self.config.smiles_batch_size, "retrieval_neighbours": self.config.neighbours},
         }

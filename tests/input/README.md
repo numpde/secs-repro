@@ -1,8 +1,10 @@
 # Omni-parser acceptance tests
 
-These are tests-first requirements for [design note 007](../../notes/007_omni_parser_tests_first_20260921.txt). Production still uses
-the legacy readers. Missing behavior must fail; do not add skips or translate
-the requests back to legacy readers in test helpers.
+These tests define the current input-adapter contract from
+[design note 007](../../notes/007_omni_parser_tests_first_20260921.txt).
+The scientific worker uses this adapter for discovery and execution. Missing
+behavior must fail; do not add skips or reintroduce format-specific request
+contracts in test helpers.
 
 `make test/input` runs the input suite in the offline CPU image. Normative
 discovery and adversarial checks can run separately with
@@ -21,7 +23,7 @@ Prepare missing prerequisites with
 `make packages/base-images/pull packages/cpu/wheelhouse molformer/cache`;
 this preparation may use network access. No checkpoint is required.
 
-## Proposed consumer contract
+## Consumer contract
 
 The existing worker `inspect` request identifies an Upload or exact ZIP member.
 Discovery must not start inference or candidate retrieval; invalid selections
@@ -45,7 +47,8 @@ produces an issue for that source and makes the inventory incomplete.
 Archive-root inspection covers all admitted regular members. Exact-member
 inspection begins with that member and includes only same-Upload resources that
 the format explicitly associates with it; unrelated siblings do not affect that
-inventory. Upload namespaces never supply one another's resources. A source
+inventory. Archive parsing limits, including the central-directory member cap,
+apply before exact member access. Upload namespaces never supply one another's resources. A source
 admission failure returns `input_rejected` before inventory facts exist, while
 operational storage failures remain operational errors. If an implementation
 introduces further inspection limits, their effect needs its own acceptance
@@ -58,8 +61,8 @@ missing companion. Tests assert those durable facts within one attributed issue;
 they do not prescribe parser tokens or a machine category without a consumer.
 
 An ID must identify the exact representation in the current acquired source
-set; its spelling is not prescribed. These are proposed internal discovery
-requirements, not the reference frontend's response schema. The execution
+set; its spelling is not prescribed. These are internal discovery requirements,
+not the reference frontend's response schema. The execution
 request uses
 `selection={representation_id, formula, formula_evidence, processing, explanation}`.
 Formula evidence names either the admitted Job specification or one or more
@@ -136,7 +139,9 @@ that one was produced by processing the other.
 The corpus includes reference vectors for selection and preparation tests. This
 suite checks discovery, fixture integrity and exact prepared spectra at the
 worker's inference port.
-Reference comparisons use the existing lanes' one-Float32-ULP allowance.
+Reference comparisons allow two Float32 ULPs. The only observed second-ULP
+difference is one point in the magnitude-FID vector produced by the pinned
+JavaScript reference and NumPy normalization paths.
 One representative selection continues through the model adapter and checks an
 independently known peak position; the complete parsing and preparation matrix
 remains at the inference port.
@@ -150,9 +155,9 @@ transport replaces that adapter contract rather than redefining scientific
 selection. Scripted interpreter replies prove transport/orchestration, not judgment.
 Real-LLM and deployed GUI/API qualification remain separate roadmap obligations.
 
-## Coverage map and implementation handoff
+## Coverage map and qualification status
 
-This map names acceptance requirements, not working parser capabilities.
+This map names the behavior exercised by the current suite.
 
 | Input or boundary | Requirements in this suite |
 | --- | --- |
@@ -167,15 +172,11 @@ This map names acceptance requirements, not working parser capabilities.
 
 Passing fixture checks verify recorded attribution and byte integrity;
 explicit generation separately verifies reference admission. Neither establishes
-parser parity. The vendor acceptance cases currently cover discovery; automatic
-Bruker/Varian FID preparation still needs numerical qualification through
-selection. The user's original JDX
-is a separate local regression and has not been admitted to this shared corpus.
-Additional instrument variants, live interpreter judgment and complete API/GUI
-flows remain qualification work rather than implied coverage.
-
-Implement against these requirements in small slices. Replace legacy reader
-dispatch and its obsolete restrictions as the corresponding cases pass; retain
-the source, scientific and outcome protections they still own. Design note 007
-defines the deletion gates. Do not make the red suite pass by translating its
-new selection contract back to the old reader-specific test inputs.
+parser parity. Automatic JCAMP, Bruker and Varian FID preparation is checked
+numerically at the worker inference port. Raw Bruker is limited to the qualified
+zero group-delay profile; raw Varian is limited to the qualified
+centered-reference profile. The JEOL specimen is reference-compatible synthetic
+data, not instrument qualification. The user's original JDX is a separate local
+regression and has not been admitted to this shared corpus. Additional
+instrument variants, live interpreter judgment and deployed GUI/API flows
+remain separate qualification work.

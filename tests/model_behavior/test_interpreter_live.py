@@ -13,7 +13,8 @@ import unittest
 from zipfile import ZipFile
 
 from secs_inference.provider.config import CONFIG_PATH, decode_provider_config
-from secs_inference.provider.input_operations import BrukerSelection, CannotAnalyse, JcampSelection, SourceRef
+from secs_inference.provider.input_adapter import InputAdapter
+from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation, SourceRef
 from secs_inference.provider.interpreter import InterpretationSession
 from secs_inference.provider.job_input import JobSpecification
 from secs_inference.provider.job_upload import JobUpload
@@ -41,7 +42,9 @@ class LiveInterpreterTests(unittest.TestCase):
             output.writestr("experiment1/spectrum.jdx", Path(__file__).with_name("fixtures").joinpath("carbon.jdx").read_bytes())
             output.writestr("experiment2/spectrum.jdx", spectrum)
         self.access = SourceAccess({"upload:fixture": archive}, root)
+        self.adapter = InputAdapter(token_key=b"model-behavior" * 2)
         self.inspected = []
+        self.representations = {}
         self.uploads = (JobUpload("upload:fixture", "Archive of two NMR experiments; inspect their nuclei.", archive.stat().st_size, None),)
 
     def session(self, text, uploads):
@@ -52,8 +55,9 @@ class LiveInterpreterTests(unittest.TestCase):
 
     def inspect(self, source):
         """Observe successful production inspection without substituting its output."""
-        result = self.access.inspect(source)
+        result = self.adapter.discover(self.access, "execution_attempt:model-behavior", source)
         self.inspected.append(source)
+        self.representations.update({item["id"]: item for item in result["representations"]})
         return result
 
     def test_missing_input_is_explained_not_invented(self):
@@ -78,9 +82,9 @@ class LiveInterpreterTests(unittest.TestCase):
         uploads = (JobUpload("upload:bruker", "Archive of an NMR experiment; inspect the processed data.", archive.stat().st_size, None),)
         session = self.session("Find the structure with molecular formula C21H22N2O2.", uploads)
         outcome = session.select()
-        self.assertIsInstance(outcome, BrukerSelection, session.rejections)
-        self.assertEqual(outcome.upload_ref, "upload:bruker")
-        self.assertEqual(outcome.pdata_directory, "NMR-test-1/pdata/1")
+        self.assertIsInstance(outcome, SelectedRepresentation, session.rejections)
+        sources = {source["member"] for source in self.representations[outcome.representation_id]["sources"]}
+        self.assertEqual(sources, {"NMR-test-1/pdata/1/1r", "NMR-test-1/pdata/1/procs"})
         self.assertEqual(outcome.formula, "C21H22N2O2")
         self.assertTrue(outcome.explanation.strip())
         self.assertIn(SourceRef("upload:bruker", "NMR-test-1/pdata/1/procs"), self.inspected)
@@ -103,8 +107,10 @@ class LiveInterpreterTests(unittest.TestCase):
 
     def assert_proton_selection(self, outcome):
         """The expected source and formula are evaluator facts, not tool instructions."""
-        self.assertIsInstance(outcome, JcampSelection)
-        self.assertEqual(outcome.source, SourceRef("upload:fixture", "experiment2/spectrum.jdx"))
+        self.assertIsInstance(outcome, SelectedRepresentation)
+        self.assertEqual(self.representations[outcome.representation_id]["sources"], [
+            {"upload_ref": "upload:fixture", "member": "experiment2/spectrum.jdx"},
+        ])
         self.assertEqual(outcome.formula, "C7H8ClN")
         self.assertTrue(outcome.explanation.strip())
 

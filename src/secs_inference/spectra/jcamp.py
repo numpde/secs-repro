@@ -16,8 +16,12 @@ from secs_inference.spectra.errors import SpectrumReadError
 _AFFN_NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?")
 
 
-def read_jcamp_spectrum(spectrum_file: str | Path) -> SourceSpectrum:
-    """Read one processed real 1D proton spectrum from XYDATA or NTUPLES."""
+def read_jcamp_spectrum(
+    spectrum_file: str | Path,
+    *,
+    required_nucleus: str | None = "1H",
+) -> SourceSpectrum:
+    """Read one processed real 1D spectrum from XYDATA or NTUPLES."""
     spectrum_path = Path(spectrum_file)
     try:
         with warnings.catch_warnings(record=True) as parser_warnings:
@@ -32,18 +36,22 @@ def read_jcamp_spectrum(spectrum_file: str | Path) -> SourceSpectrum:
     data_type = _single_parameter(parameters, "DATATYPE")
     if data_type.replace(" ", "").upper() != "NMRSPECTRUM":
         _reject("DATA TYPE does not identify an NMR spectrum")
-    nucleus = _single_parameter(parameters, ".OBSERVENUCLEUS")
-    if nucleus.replace("^", "").strip().upper() != "1H":
-        _reject("the observed nucleus is not 1H")
+    if required_nucleus is not None:
+        nucleus = _single_parameter(parameters, ".OBSERVENUCLEUS")
+        if nucleus.replace("^", "").strip().upper() != required_nucleus.upper():
+            _reject(f"the observed nucleus is not {required_nucleus}")
 
     if any(
         name.startswith("_datatype_") and blocks
         for name, blocks in parameters.items()
     ):
         _reject("the file contains more than one data block")
-    if parser_warnings:
+    material_warnings = [item for item in parser_warnings if not re.fullmatch(
+        r"JCAMP-DX key without value: (?:ORIGIN|OWNER|\$SYMBOL)", str(item.message)
+    )]
+    if material_warnings:
         _reject(
-            f"the parser reported {len(parser_warnings)} warning(s), so "
+            f"the parser reported {len(material_warnings)} warning(s), so "
             "decoding may be incomplete",
         )
 
@@ -61,10 +69,12 @@ def _read_xydata(
     decoded: object,
 ) -> SourceSpectrum:
     """Interpret the admitted dense XYDATA profile after nmrglue decoding."""
-    if _single_parameter(parameters, "XUNITS").strip().upper() != "PPM":
-        _reject("the XYDATA X axis is not expressed in ppm")
-    if _finite_parameter(parameters, "XFACTOR") != 1.0:
-        _reject("XYDATA XFACTOR is not 1")
+    x_units = _single_parameter(parameters, "XUNITS").strip().upper()
+    if x_units not in {"PPM", "HZ"}:
+        _reject("the XYDATA X axis is neither Hz nor ppm")
+    x_factor = _finite_parameter(parameters, "XFACTOR")
+    if x_factor == 0:
+        _reject("XYDATA XFACTOR is zero")
 
     declared_points = _integer_parameter(parameters, "NPOINTS")
     intensities = _validated_intensities(decoded, declared_points)
@@ -77,15 +87,17 @@ def _read_xydata(
     if not np.isclose(declared_step, endpoint_step, rtol=1e-9, atol=0):
         _reject("DELTAX disagrees with FIRSTX, LASTX, and NPOINTS")
 
-    _validate_affn_xydata(
+    _validate_xydata(
         spectrum_path,
         first_x=first_ppm,
         delta_x=declared_step,
+        x_factor=x_factor,
     )
 
     # FIRSTX and LASTX define the dense axis after the encoded row checkpoints
     # agree; nmrglue's universal dictionary cannot recover its absolute position.
-    ppm = np.linspace(first_ppm, last_ppm, declared_points, dtype=np.float64)
+    x_axis = np.linspace(first_ppm, last_ppm, declared_points, dtype=np.float64)
+    ppm = _referenced_ppm_axis(parameters, x_axis) if x_units == "HZ" else x_axis
     return SourceSpectrum(
         ppm=ppm,
         intensities=intensities,
@@ -105,8 +117,8 @@ def _read_ntuples(
     symbols = _comma_parameter(parameters, "SYMBOL")
     if len(symbols) != len(set(symbols)) or "" in symbols:
         _reject("NTUPLES SYMBOL entries must be nonempty and unique")
-    if set(symbols) != {"X", "R", "I", "N"}:
-        _reject("NTUPLES must contain X, real R, imaginary I, and page N variables")
+    if set(symbols) not in ({"X", "R", "I"}, {"X", "R", "I", "N"}):
+        _reject("NTUPLES must contain X, real R, and imaginary I variables")
 
     dimensions = _ntuple_integer_metadata(parameters, "VARDIM", symbols)
     points = dimensions["X"]
@@ -183,6 +195,7 @@ def _validate_ntuple_checkpoints(
     overlap = False
     previous_y = 0.0
     y_roundoff = 0.0
+    checkpoint_mode = None
     # nmrglue selects one numeric family for the entire table. Keep that
     # context: a compressed checkpoint such as 5E4 is not the number 50000.
     pseudo = ng.jcampdx._detect_format(rows[0]) == 1
@@ -192,12 +205,28 @@ def _validate_ntuple_checkpoints(
         start = point - int(overlap)
         # Allow half the last written X unit. FACTOR converts both the encoded
         # coordinate and its rounding precision into the declared axis units.
-        checkpoint *= x_factor
         tolerance = abs(x_factor) * precision
-        if not np.isfinite(checkpoint) or not np.isfinite(tolerance):
+        direct_checkpoint = checkpoint * x_factor
+        indexed_checkpoint = (checkpoint - 1) * x_factor
+        if not all(np.isfinite(value) for value in (direct_checkpoint, indexed_checkpoint, tolerance)):
             _reject("an NTUPLES X checkpoint or its precision overflows after FACTOR scaling")
-        if start >= x_axis.size or not np.isclose(
-            checkpoint, x_axis[start],
+        if start >= x_axis.size:
+            _reject(f"NTUPLES {channel} row {row_number} has an X checkpoint "
+                    "that disagrees with FIRST, LAST, and VAR_DIM")
+        if checkpoint_mode is None:
+            # Standard files encode physical X/FACTOR checkpoints. NMRium's
+            # admitted v21 export encodes one-based point coordinates instead.
+            direct_matches = np.isclose(direct_checkpoint, x_axis[start],
+                                        rtol=8 * np.finfo(float).eps, atol=tolerance)
+            indexed_matches = np.isclose(indexed_checkpoint, x_axis[start],
+                                         rtol=8 * np.finfo(float).eps, atol=tolerance)
+            if direct_matches == indexed_matches:
+                _reject(f"NTUPLES {channel} row {row_number} has an X checkpoint "
+                        "that disagrees with FIRST, LAST, and VAR_DIM")
+            checkpoint_mode = "direct" if direct_matches else "indexed"
+        scaled_checkpoint = direct_checkpoint if checkpoint_mode == "direct" else indexed_checkpoint
+        if not np.isclose(
+            scaled_checkpoint, x_axis[start],
             rtol=8 * np.finfo(float).eps, atol=tolerance,
         ):
             _reject(f"NTUPLES {channel} row {row_number} has an X checkpoint "
@@ -277,6 +306,13 @@ def _x_checkpoint(token: str) -> tuple[float, float]:
 
 
 def _referenced_ppm_axis(parameters: dict, x_axis: np.ndarray) -> np.ndarray:
+    if "$OFFSET" in parameters:
+        offset = _finite_parameter(parameters, "$OFFSET")
+        frequency = _finite_parameter(parameters, ".OBSERVEFREQUENCY")
+        if frequency <= 0:
+            _reject("the observed frequency is not positive")
+        return offset + (x_axis - x_axis[0]) / frequency
+
     if ".SHIFTREFERENCE" in parameters:
         fields = _comma_parameter(parameters, ".SHIFTREFERENCE")
         if len(fields) != 4:
@@ -303,16 +339,7 @@ def _referenced_ppm_axis(parameters: dict, x_axis: np.ndarray) -> np.ndarray:
         ) / (x_axis.size - 1)
         return reference_ppm + (x_axis - reference_x) / frequency
 
-    if "$OFFSET" not in parameters:
-        _reject("its Hz axis has no chemical-shift reference")
-    offset = _finite_parameter(parameters, "$OFFSET")
-    frequency = _finite_parameter(parameters, ".OBSERVEFREQUENCY")
-    if frequency <= 0:
-        _reject("the observed frequency is not positive")
-
-    # JCAMP-DX 5.0 predates the standard shift-reference label. Bruker files
-    # preserve the axis origin as $OFFSET; the standard frequency converts Hz to ppm.
-    return offset + (x_axis - x_axis[0]) / frequency
+    _reject("its Hz axis has no chemical-shift reference")
 
 
 def _validated_intensities(
@@ -413,17 +440,19 @@ def _integer_parameter(parameters: dict, name: str) -> int:
         ) from cause
 
 
-def _validate_affn_xydata(
+def _validate_xydata(
     spectrum_path: Path,
     *,
     first_x: float,
     delta_x: float,
+    x_factor: float,
 ) -> None:
-    """Verify the X checkpoints that nmrglue deliberately omits from its result."""
+    """Verify compressed or AFFN row checkpoints omitted by nmrglue."""
     lines = _read_utf8_lines(spectrum_path)
 
     in_xydata = False
     decoded_points = 0
+    overlap = False
     for raw_line in lines:
         line = raw_line.split("$$", 1)[0].strip()
         if not line:
@@ -442,13 +471,15 @@ def _validate_affn_xydata(
         if not in_xydata:
             continue
 
-        fields = line.split()
-        if len(fields) < 2:
-            _reject("an XYDATA row does not contain an X checkpoint and Y values")
-        if any(_AFFN_NUMBER.fullmatch(field) is None for field in fields):
-            _reject("XYDATA is not plain numeric AFFN data")
-        checkpoint, checkpoint_tolerance = _x_checkpoint(fields[0])
-        expected_checkpoint = first_x + decoded_points * delta_x
+        pseudo = ng.jcampdx._detect_format(line) == 1
+        token, values, ends_in_difference = _decode_ntuple_row(line, pseudo=pseudo)
+        if values.size == 0:
+            _reject("an XYDATA row does not contain intensity values")
+        checkpoint, checkpoint_tolerance = _x_checkpoint(token)
+        checkpoint *= x_factor
+        checkpoint_tolerance *= abs(x_factor)
+        start = decoded_points - int(overlap)
+        expected_checkpoint = first_x + start * delta_x
         # A checkpoint is authoritative only to the precision written in the file.
         if not np.isclose(
             checkpoint,
@@ -457,10 +488,13 @@ def _validate_affn_xydata(
             atol=checkpoint_tolerance,
         ):
             _reject("an XYDATA X checkpoint disagrees with FIRSTX and DELTAX")
-        decoded_points += len(fields) - 1
+        decoded_points = start + values.size
+        overlap = ends_in_difference
 
     if not in_xydata:
         _reject("the file does not contain an XYDATA table")
+    if overlap:
+        _reject("XYDATA is missing its final DIF checkpoint row")
 
 
 def _read_utf8_lines(spectrum_path: Path) -> list[str]:

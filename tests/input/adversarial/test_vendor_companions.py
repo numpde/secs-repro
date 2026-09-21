@@ -12,6 +12,38 @@ class VendorCompanionTests(WorkerCase):
             facts, {'upload_ref': 'upload:sample', 'member': None},
             'incomplete', 'spectrum data')
 
+    def test_jeol_dimension_and_axis_unit_are_read_from_the_file(self):
+        for offset, value, evidence in ((12, 2, '2D'), (33, 13, 'not in ppm')):
+            with self.subTest(offset=offset):
+                contents = bytearray((FIXTURES / 'synthetic.jdf').read_bytes())
+                contents[offset] = value
+                self.upload('unsupported.jdf', contents=bytes(contents))
+                facts = self.discover()
+                self.assertFalse(facts['complete'])
+                self.assertEqual(facts['representations'], [])
+                self.assert_issue_mentions(
+                    facts, {'upload_ref': 'upload:sample', 'member': None}, evidence)
+
+    def test_unqualified_vendor_fid_processing_profiles_are_reported(self):
+        cases = (
+            ('acqus', (FIXTURES / 'bruker-acqus.txt').read_text().replace('##$GRPDLY= 0', '##$GRPDLY= 44.75'),
+             'digital-filter profile'),
+            ('procpar', (FIXTURES / 'varian-procpar.txt').read_text().replace('\n1 2000\n', '\n1 2200\n', 1),
+             'chemical-shift reference profile'),
+        )
+        for parameter, text, evidence in cases:
+            with self.subTest(parameter=parameter):
+                vendor = 'bruker' if parameter == 'acqus' else 'varian'
+                self.archive([
+                    ('experiment/fid', (FIXTURES / f'{vendor}-fid.bin').read_bytes()),
+                    (f'experiment/{parameter}', text.encode()),
+                ])
+                facts = self.discover()
+                self.assertFalse(facts['complete'])
+                self.assertEqual(facts['representations'], [])
+                self.assertTrue(any(evidence in issue['reason'] for issue in facts['issues']))
+                self.files.clear()
+
     def missing_procs(self, facts, source):
         self.assertFalse(facts['complete'])
         self.assert_issue_mentions(facts, source, 'unavailable', 'procs')
@@ -44,3 +76,19 @@ class VendorCompanionTests(WorkerCase):
         self.assert_issue_mentions(
             facts, {'upload_ref': 'upload:sample', 'member': 'sample/fid'},
             'incomplete', 'FID data')
+
+    def test_truncated_bruker_and_malformed_vendor_parameters_are_partial(self):
+        cases = (
+            ('bruker', 'acqus', (FIXTURES / 'bruker-fid.bin').read_bytes()[:16],
+             (FIXTURES / 'bruker-acqus.txt').read_bytes(), 'incomplete FID data'),
+            ('bruker', 'acqus', (FIXTURES / 'bruker-fid.bin').read_bytes(), b'bad acqus', 'acqus'),
+            ('varian', 'procpar', (FIXTURES / 'varian-fid.bin').read_bytes(), b'bad procpar', 'procpar'),
+        )
+        for vendor, parameter, fid, parameters, evidence in cases:
+            with self.subTest(vendor=vendor, evidence=evidence):
+                self.archive([('sample/fid', fid), (f'sample/{parameter}', parameters)])
+                facts = self.discover()
+                self.assertFalse(facts['complete'])
+                self.assertTrue(any(evidence.lower() in issue['reason'].lower()
+                                    for issue in facts['issues']))
+                self.files.clear()

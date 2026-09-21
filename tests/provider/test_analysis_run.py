@@ -23,7 +23,7 @@ from secs_inference.provider.job_upload import JobUpload, UploadReadCapability
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.worker import WorkerError, WorkerStopUnconfirmed
 from secs_inference.provider.upload_download import UploadUnavailable
-from test_interpreter import ScriptedChat, tool
+from test_interpreter import ScriptedChat, selection, tool
 from test_execution import FakeApi, ACTIVE, START, REPORT
 
 
@@ -38,17 +38,22 @@ class AcquisitionTests(unittest.TestCase):
         api.specification = Mock(return_value=JobSpecification("job:test", "C2H6O"))
         api.uploads = Mock(return_value=(UPLOAD,))
         api.capability = Mock(return_value=GRANT)
-        chat = ScriptedChat(tool("read_jcamp", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None},
-                                               "formula": "C2H6O", "explanation": "Proton experiment."}))
+        chat = ScriptedChat(
+            tool("inspect_source", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None}}),
+            selection(explanation="Proton experiment."),
+        )
         analysis = {"candidates": [], "search": {"outcome": "no_starting_candidates", "generations": 0, "evaluated": 0}}
         worker = Mock()
-        worker.request.return_value = {"outcome": "no_starting_candidates", "analysis": analysis}
+        worker.request.side_effect = [
+            {"outcome": "inspected", "facts": {"representations": [{"id": "opaque-spectrum"}]}},
+            {"outcome": "no_starting_candidates", "analysis": analysis},
+        ]
         with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as journal, patch(
                 "secs_inference.provider.analysis_run.download_upload", return_value=Path(directory) / "verified"):
             def analyse(active):
                 return run_analysis(api=api, active=active, chat=chat, worker=worker, store=None,
                     directory=Path(directory) / "current", work_deadline=monotonic() + 10,
-                    interpretation_seconds=5, max_turns=1, max_total_bytes=100)
+                    interpretation_seconds=5, max_turns=2, max_total_bytes=100)
             ExecutionLoop(api, journal, analyse, journal.diagnose).step()
             self.assertIsNone(journal.load())
             report = json.loads((journal.directory / ("b" * 64 + ".report.json")).read_bytes())
@@ -60,15 +65,14 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual(report["analysis"], analysis)
         self.assertTrue(report["input_choices"][0]["used"])
         self.assertEqual(report["acquired_uploads"][UPLOAD.upload_ref]["content_hash"], GRANT.content_hash)
-        worker.request.assert_called_once()
+        self.assertEqual(worker.request.call_count, 2)
 
     def test_transient_metadata_outages_do_not_restart_admission_or_interpretation(self):
         api = FakeApi()
         api.specification = Mock(side_effect=[ApiUnavailable("specification offline"), JobSpecification("job:test", "C2H6O")])
         api.uploads = Mock(side_effect=[ApiUnavailable("uploads offline"), (UPLOAD,)])
         api.capability = Mock(return_value=GRANT)
-        chat = ScriptedChat(tool("read_jcamp", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None},
-                                               "formula": "C2H6O", "explanation": "Proton experiment."}))
+        chat = ScriptedChat(selection(explanation="Proton experiment."))
         worker = Mock()
         worker.request.return_value = {"outcome": "analysed", "analysis": REPORT["analysis"]}
         clock = [10.0]
@@ -225,8 +229,7 @@ class AcquisitionTests(unittest.TestCase):
         api.specification.return_value = JobSpecification("job:test", "C2H6O")
         api.uploads.return_value = (UPLOAD,)
         api.capability.return_value = GRANT
-        chat = ScriptedChat(tool("read_jcamp", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None},
-            "formula": "C2H6O", "explanation": "Proton experiment."}))
+        chat = ScriptedChat(selection(explanation="Proton experiment."))
         worker = Mock()
         worker.request.return_value = {"outcome": "analysed", "analysis": REPORT["analysis"]}
         with TemporaryDirectory() as directory, patch("secs_inference.provider.analysis_run.download_upload",
@@ -252,22 +255,27 @@ class AcquisitionTests(unittest.TestCase):
                 api.specification = Mock(return_value=JobSpecification("job:test", "C2H6O"))
                 api.uploads = Mock(return_value=(UPLOAD,))
                 api.capability = Mock(return_value=GRANT)
-                chat = ScriptedChat(tool("read_jcamp", {}), tool("read_jcamp", {
-                    "source": {"upload_ref": UPLOAD.upload_ref, "member": "chosen.jdx"},
-                    "formula": "C2H6O", "explanation": "Proton experiment."}))
+                chat = ScriptedChat(
+                    tool("inspect_source", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None}}),
+                    tool("select_representation", {}),
+                    selection(representation_id="opaque-chosen", explanation="Proton experiment."),
+                )
                 worker = Mock()
-                worker.request.side_effect = [failure]
+                worker.request.side_effect = [
+                    {"outcome": "inspected", "facts": {"representations": [{"id": "opaque-chosen"}]}},
+                    failure,
+                ]
                 with AttemptStore(root / "journal") as journal, patch(
                         "secs_inference.provider.analysis_run.download_upload", return_value=root / "verified"):
                     def analyse(active):
                         return run_analysis(api=api, active=active, chat=chat, worker=worker, store=None,
                             directory=root / "current", work_deadline=monotonic() + 10,
-                            interpretation_seconds=5, max_turns=3, max_total_bytes=100)
+                            interpretation_seconds=5, max_turns=4, max_total_bytes=100)
                     ExecutionLoop(api, journal, analyse, journal.diagnose).step()
                     self.assertEqual(json.loads(api.calls[-1])["failure_code"], code)
                     diagnostic = json.loads((journal.directory / ("b" * 64 + ".diagnostic.json")).read_bytes())
                 evidence = diagnostic["analysis"]
-                self.assertEqual(evidence["input_choices"][0]["source"]["member"], "chosen.jdx")
+                self.assertEqual(evidence["input_choices"][0]["representation_id"], "opaque-chosen")
                 self.assertEqual(evidence["input_choices"][0]["formula"], "C2H6O")
                 self.assertEqual(evidence["interpretation_rejections"][0]["stage"], "tool_call")
                 self.assertEqual(evidence["acquired_uploads"][UPLOAD.upload_ref]["content_hash"], GRANT.content_hash)
@@ -279,30 +287,36 @@ class AcquisitionTests(unittest.TestCase):
         api.specification.return_value = JobSpecification("job:test", "C21H22N2O2")
         api.uploads.return_value = (UPLOAD,)
         api.capability.return_value = GRANT
-        chat = ScriptedChat(tool("read_bruker", {"upload_ref": UPLOAD.upload_ref,
-            "pdata_directory": "pdata/1", "formula": "C21H22N2O2", "explanation": "Proton."}))
+        chat = ScriptedChat(
+            tool("inspect_source", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None}}),
+            selection(representation_id="opaque-bruker", formula="C21H22N2O2", explanation="Proton."),
+        )
         worker = Mock()
-        worker.request.return_value = {"outcome": "input_rejected", "reason": "Cannot decode the processed spectrum."}
+        worker.request.side_effect = [
+            {"outcome": "inspected", "facts": {"representations": [{"id": "opaque-bruker"}]}},
+            {"outcome": "input_rejected", "reason": "Cannot decode the processed spectrum."},
+        ]
         with TemporaryDirectory() as directory, patch("secs_inference.provider.analysis_run.download_upload",
                 return_value=Path(directory) / "verified"):
             with self.assertRaises(InterpreterError) as caught:
                 run_analysis(api=api, active=ACTIVE, chat=chat, worker=worker, store=None,
                     directory=Path(directory) / "current", work_deadline=monotonic() + 10,
-                    interpretation_seconds=5, max_turns=1, max_total_bytes=100)
+                    interpretation_seconds=5, max_turns=2, max_total_bytes=100)
         evidence = caught.exception.analysis_context
-        self.assertEqual(evidence.input_choices[0]["reading_error"], worker.request.return_value["reason"])
+        self.assertEqual(evidence.input_choices[0]["reading_error"], "Cannot decode the processed spectrum.")
         self.assertEqual(evidence.interpretation_rejections, [])
         self.assertEqual(evidence.acquired_uploads[UPLOAD.upload_ref]["content_hash"], GRANT.content_hash)
 
-    def test_invalid_bruker_call_is_evidence_not_a_reader_failure(self):
+    def test_invalid_selection_call_is_evidence_not_a_reader_failure(self):
         for explains in (True, False):
             with self.subTest(explains=explains), TemporaryDirectory() as directory:
                 api = Mock()
                 api.specification.return_value = JobSpecification("job:test", "C21H22N2O2")
                 api.uploads.return_value = (UPLOAD,)
-                malformed = tool("read_bruker", {"source": {"upload_ref": UPLOAD.upload_ref, "member": "pdata/1"},
-                    "formula": "C21H22N2O2", "explanation": "Proton."})
-                chat = ScriptedChat(malformed, tool("report_input_problem", {"explanation": "The reader rejected the directory."}))
+                malformed = tool("select_representation", {
+                    "representation_id": "opaque-bruker", "formula": "C21H22N2O2",
+                    "processing": "as_stored", "explanation": "Proton."})
+                chat = ScriptedChat(malformed, tool("report_input_problem", {"explanation": "Formula evidence is missing."}))
                 worker = Mock()
                 def run():
                     return run_analysis(api=api, active=ACTIVE, chat=chat, worker=worker, store=None,
@@ -317,7 +331,7 @@ class AcquisitionTests(unittest.TestCase):
                         run()
                     evidence = caught.exception.analysis_context.interpretation_rejections
                 self.assertEqual(evidence[0]["stage"], "tool_call")
-                self.assertIn("upload_ref, pdata_directory, formula, explanation", evidence[0]["reason"])
+                self.assertIn("representation_id, formula, formula_evidence, processing, explanation", evidence[0]["reason"])
                 worker.request.assert_not_called()
                 api.capability.assert_not_called()
 
@@ -329,8 +343,7 @@ class AcquisitionTests(unittest.TestCase):
         api.capability.return_value = GRANT
         chat = ScriptedChat(
             tool("inspect_source", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None}}),
-            tool("read_jcamp", {"source": {"upload_ref": second.upload_ref, "member": "proton.jdx"},
-                               "formula": "C2H6O", "explanation": "The second experiment is proton."}),
+            tool("inspect_source", {"source": {"upload_ref": second.upload_ref, "member": None}}, "call-2"),
             tool("report_input_problem", {"explanation": "The remaining input cannot be obtained within the provider's allowance."}),
         )
         worker = Mock()
@@ -343,7 +356,7 @@ class AcquisitionTests(unittest.TestCase):
         feedback = chat.requests[-1][-1]["content"]
         for fact in ("4-byte Upload was not downloaded", "2 bytes remain", "inspection downloads", "6-byte allowance", "cannot be discarded", "whole Upload"):
             self.assertIn(fact, feedback)
-        self.assertEqual(report["input_choices"][0]["reading_error"], feedback)
+        self.assertEqual(report["input_choices"], [])
         api.capability.assert_called_once()
         download.assert_called_once()
 
@@ -392,8 +405,7 @@ class AcquisitionTests(unittest.TestCase):
                 api.capability.return_value = GRANT
                 chat = ScriptedChat(
                     tool("inspect_source", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None}}),
-                    tool("read_jcamp", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None},
-                                       "formula": "C2H6O", "explanation": "Proton experiment."}),
+                    selection(explanation="Proton experiment."),
                 )
                 worker = Mock()
                 worker.request.side_effect = ([inspection_failure] if inspection_failure else
@@ -466,6 +478,78 @@ class AcquisitionTests(unittest.TestCase):
                 with self.assertRaisesRegex(InputReadError, "not in that list"):
                     sources.acquire(UPLOAD.upload_ref)
                 api.capability.assert_called_once()
+
+    def test_removed_inspected_upload_cannot_reach_scientific_execution(self):
+        api = Mock()
+        api.specification.return_value = JobSpecification("job:test", "C2H6O")
+        api.uploads.side_effect = [(UPLOAD,), ()]
+        api.capability.return_value = GRANT
+        chat = ScriptedChat(
+            tool("inspect_source", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None}}),
+            selection(),
+            tool("report_input_problem", {"explanation": "The previously inspected Upload was removed."}),
+        )
+        worker = Mock()
+        worker.request.return_value = {
+            "outcome": "inspected", "facts": {"representations": [{"id": "opaque-spectrum"}]},
+        }
+        with TemporaryDirectory() as directory, patch(
+                "secs_inference.provider.analysis_run.download_upload",
+                return_value=Path(directory) / "verified"):
+            report = run_analysis(
+                api=api, active=ACTIVE, chat=chat, worker=worker, store=None,
+                directory=Path(directory) / "current", work_deadline=monotonic() + 10,
+                interpretation_seconds=5, max_turns=3, max_total_bytes=100,
+            )
+        self.assertEqual(report["outcome"], "cannot_analyse")
+        self.assertIn("available Uploads changed", report["input_choices"][0]["reading_error"])
+        worker.request.assert_called_once()
+
+    def test_same_reference_replacement_is_reinspected_before_execution(self):
+        replacement = JobUpload(UPLOAD.upload_ref, "Replacement experiment", 5, "sha256:" + "c" * 64)
+        replacement_grant = UploadReadCapability(
+            replacement.upload_ref, 5, "sha256:" + "d" * 64,
+            datetime(2099, 1, 1, tzinfo=timezone.utc),
+            "https://store.test/replacement", "replacement-secret",
+        )
+        api = Mock()
+        api.specification.return_value = JobSpecification("job:test", "C2H6O")
+        api.uploads.side_effect = [(UPLOAD,), (replacement,), (replacement,)]
+        api.capability.side_effect = [GRANT, replacement_grant]
+        chat = ScriptedChat(
+            tool("inspect_source", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None}}),
+            selection(),
+            tool("inspect_source", {"source": {"upload_ref": UPLOAD.upload_ref, "member": None}}, "call-2"),
+            selection(call_id="call-3"),
+        )
+        worker = Mock()
+        worker.request.side_effect = [
+            {"outcome": "inspected", "facts": {"representations": [{"id": "old-choice"}]}},
+            {"outcome": "inspected", "facts": {"representations": [{"id": "new-choice"}]}},
+            {"outcome": "analysed", "analysis": REPORT["analysis"]},
+        ]
+        with TemporaryDirectory() as directory:
+            old_path = Path(directory) / "old"
+            new_path = Path(directory) / "new"
+            old_path.write_bytes(b"old!")
+            new_path.write_bytes(b"new!!")
+            with patch("secs_inference.provider.analysis_run.download_upload",
+                       side_effect=[old_path, new_path]) as download:
+                report = run_analysis(
+                    api=api, active=ACTIVE, chat=chat, worker=worker, store=None,
+                    directory=Path(directory) / "current", work_deadline=monotonic() + 10,
+                    interpretation_seconds=5, max_turns=4, max_total_bytes=9,
+                )
+        self.assertEqual(report["outcome"], "analysed")
+        self.assertEqual(download.call_count, 2)
+        self.assertEqual(api.capability.call_count, 2)
+        requests = [call.args[0] for call in worker.request.call_args_list]
+        self.assertEqual(requests[0]["files"][UPLOAD.upload_ref], str(old_path))
+        self.assertEqual(requests[1]["files"][UPLOAD.upload_ref], str(new_path))
+        self.assertEqual(requests[2]["files"][UPLOAD.upload_ref], str(new_path))
+        self.assertIn("available Uploads changed", report["input_choices"][0]["reading_error"])
+        self.assertEqual(report["acquired_uploads"][UPLOAD.upload_ref]["content_hash"],
+                         replacement_grant.content_hash)
 
     def test_missed_lifecycle_poll_does_not_cancel_work_but_observed_cancel_does(self):
         api = Mock()

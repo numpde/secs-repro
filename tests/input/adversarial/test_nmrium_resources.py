@@ -39,6 +39,16 @@ class NmriumResourceTests(WorkerCase):
                 self.assertTrue(any(item['kind'] == 'spectrum' and item['sources'] == [proton_source]
                                     for item in proton_facts['representations']))
 
+    def test_exact_native_state_resolves_only_its_declared_resource(self):
+        self.upload('resource-embedded.nmrium.zip')
+        facts = self.discover(member='state.json')
+        self.assertTrue(facts['complete'])
+        choices = [item for item in facts['representations'] if len(item['sources']) == 2]
+        self.assertEqual(len(choices), 1)
+        item = choices[0]
+        self.assertEqual({source['member'] for source in item['sources']},
+                         {'state.json', 'data/authored-proton/proton.jdx'})
+
     def test_inspection_does_not_fetch_a_reachable_url_resource(self):
         connections = []
         proton = (FIXTURES / 'proton.jdx').read_bytes()
@@ -86,3 +96,78 @@ class NmriumResourceTests(WorkerCase):
         self.assert_unresolved_resource(response['facts'], {'upload_ref': 'upload:sample', 'member': None})
         self.assertEqual(self.inference.mock_calls, [])
         self.assertEqual(self.candidates.mock_calls, [])
+
+    def test_malformed_dense_state_is_partial_and_does_not_invent_dimension(self):
+        base = json.loads((FIXTURES / 'mixed.nmrium').read_text())
+        spectrum = base['data']['spectra'][0]
+        for mutation, evidence in (
+            (lambda: spectrum['info'].pop('dimension'), None),
+            (lambda: spectrum['data']['re'].pop(str(len(spectrum['data']['re']) - 1)), 'different lengths'),
+        ):
+            with self.subTest(evidence=evidence):
+                document = json.loads(json.dumps(base))
+                spectrum = document['data']['spectra'][0]
+                mutation()
+                self.upload('malformed.nmrium', contents=json.dumps(document))
+                facts = self.discover()
+                if evidence is None:
+                    item = next(item for item in facts['representations']
+                                if item['metadata'].get('nucleus') == '1H')
+                    self.assertIsNone(item['metadata']['dimension'])
+                else:
+                    self.assertFalse(facts['complete'])
+                    self.assert_issue_mentions(facts, {'upload_ref': 'upload:sample', 'member': None}, evidence)
+
+    def test_only_the_qualified_nmrium_schema_version_is_recognized(self):
+        for version in (20, 22):
+            with self.subTest(version=version):
+                document = json.loads((FIXTURES / 'mixed.nmrium').read_text())
+                document['version'] = version
+                self.upload('unsupported.nmrium', contents=json.dumps(document))
+                facts = self.discover()
+                self.assertFalse(facts['complete'])
+                self.assertEqual(facts['representations'], [])
+                self.assert_issue_mentions(
+                    facts, {'upload_ref': 'upload:sample', 'member': None},
+                    'schema version', str(version), 'version 21')
+
+    def test_huge_json_numbers_are_localized_input_issues(self):
+        document = json.loads((FIXTURES / 'mixed.nmrium').read_text())
+        document['data']['spectra'][0]['data']['re']['0'] = 10 ** 400
+        self.upload('huge-number.nmrium', contents=json.dumps(document))
+        facts = self.discover()
+        self.assertFalse(facts['complete'])
+        self.assert_issue_mentions(
+            facts, {'upload_ref': 'upload:sample', 'member': None}, 'different lengths')
+
+        document = json.loads((FIXTURES / 'stored-shift.nmrium').read_text())
+        document['data']['spectra'][0]['processings'][0]['settings'] = 10 ** 400
+        self.upload('huge-shift.nmrium', contents=json.dumps(document))
+        facts = self.discover()
+        item = self.one(facts)
+        self.rejected_shift(item)
+
+    def rejected_shift(self, item):
+        response = self.request('analyse', selection={
+            'representation_id': item['id'], 'formula': 'C22H36O7',
+            'formula_evidence': {'kind': 'job_specification'},
+            'processing': 'as_stored', 'explanation': 'Use stored data.',
+        })
+        self.assertEqual(response['outcome'], 'input_rejected')
+        self.assert_safe_reason(response['reason'])
+        self.assertIn('stored shift is malformed', response['reason'])
+
+    def test_malformed_source_inventory_and_control_bearing_resource_are_safe_issues(self):
+        document = json.loads((FIXTURES / 'resource-wrapper.nmrium').read_text())
+        document['data']['sources'] = 7
+        self.upload('malformed.nmrium', contents=json.dumps(document))
+        facts = self.discover()
+        self.assertFalse(facts['complete'])
+        self.assert_issue_mentions(facts, {'upload_ref': 'upload:sample', 'member': None}, 'source inventory', 'malformed')
+
+        document = json.loads((FIXTURES / 'resource-wrapper.nmrium').read_text())
+        document['data']['spectra'][0]['selector']['files'] = ['missing\nforged.jdx']
+        self.upload('malformed.nmrium', contents=json.dumps(document))
+        facts = self.discover()
+        self.assertFalse(facts['complete'])
+        self.assertTrue(all(issue['reason'].isprintable() for issue in facts['issues']))

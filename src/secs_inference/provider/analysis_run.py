@@ -8,7 +8,7 @@ from pathlib import Path
 import shutil
 from time import monotonic, sleep
 
-from secs_inference.provider.input_operations import BrukerSelection, CannotAnalyse, JcampSelection
+from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
 from secs_inference.provider.interpreter import InterpretationSession
 from secs_inference.provider.outcomes import AnalysisOutcome, WorkDeadlineExceeded
 from secs_inference.provider.execution import AnalysisCancelled, AttemptNoLongerActive, ProviderStopping
@@ -49,6 +49,7 @@ class AttemptSources:
         self.deadline = deadline
         self.max_total_bytes = max_total_bytes
         self.acquired: dict[str, AcquiredUpload] = {}
+        self.spent_bytes = 0
 
     def __enter__(self):
         try:
@@ -80,7 +81,7 @@ class AttemptSources:
             raise InputReadError("Choose an Upload listed for this Job; the selected identity is not in that list.")
         if ref in self.acquired:
             return self.acquired[ref].path
-        remaining_bytes = self.max_total_bytes - sum(item.byte_length for item in self.acquired.values())
+        remaining_bytes = self.max_total_bytes - self.spent_bytes
         if upload.byte_length > remaining_bytes:
             raise InputReadError(
                 f"The selected {upload.byte_length}-byte Upload was not downloaded: only "
@@ -113,6 +114,7 @@ class AttemptSources:
                 sleep(wait_seconds)
             else:
                 self.acquired[ref] = AcquiredUpload(path, grant.byte_length, grant.content_hash)
+                self.spent_bytes += grant.byte_length
                 return path
         raise AssertionError("Acquisition retries ended without a transfer outcome")
 
@@ -127,6 +129,20 @@ class AttemptSources:
                     self.uploads = {item.upload_ref: item for item in current}
                     raise UploadSetChanged(current) from None
             raise
+
+    def reconcile(self, uploads) -> UploadSetChanged | None:
+        """Adopt a freshly observed Job membership set before execution."""
+        current = {upload.upload_ref: upload for upload in uploads}
+        if current == self.uploads:
+            return None
+        changed_refs = {
+            ref for ref, upload in self.uploads.items()
+            if ref in current and current[ref] != upload
+        }
+        for ref in changed_refs:
+            self.acquired.pop(ref, None)
+        self.uploads = current
+        return UploadSetChanged(tuple(uploads))
 
 
 def run_analysis(
@@ -168,24 +184,20 @@ def run_analysis(
                             "explanation": decision.explanation, "input_choices": choices,
                             "interpretation_rejections": session.rejections,
                             "acquired_uploads": _upload_evidence(sources)}
-                if isinstance(decision, JcampSelection):
-                    reader, ref = "jcamp", decision.source.upload_ref
-                elif isinstance(decision, BrukerSelection):
-                    reader, ref = "bruker", decision.upload_ref
-                else:
-                    raise AssertionError("No scientific reader is bound to the interpreted selection")
-                choice = {"reader": reader, **asdict(decision)}
+                if not isinstance(decision, SelectedRepresentation):
+                    raise AssertionError("No representation selection is bound to the interpreted decision")
+                choice = asdict(decision)
                 choices.append(choice)
-                try:
-                    sources.acquire(ref)
-                except UploadSetChanged as change:
-                    choice["reading_error"] = str(change)
-                    session.reject(str(change) + "\n" + json.dumps({"current_uploads": [asdict(item) for item in change.uploads]}, ensure_ascii=False))
-                    continue
-                except InputReadError as error:
-                    choice["reading_error"] = str(error)
-                    session.reject(str(error))
-                    continue
+                if sources.acquired:
+                    current = _read_job_metadata(api.uploads, active, work_deadline, check_running)
+                    change = sources.reconcile(current)
+                    if change is not None:
+                        reason = str(change)
+                        choice["reading_error"] = reason
+                        session.reject(reason + " Current Uploads: " + json.dumps(
+                            [asdict(item) for item in current], ensure_ascii=False
+                        ))
+                        continue
                 execution_entered()
                 response = _worker_request(worker, sources, {"operation": "analyse", "selection": choice}, work_deadline, check_running)
                 if response["outcome"] == "input_rejected":
@@ -252,8 +264,13 @@ def _worker_request(worker, sources, request, deadline, check_running=lambda: No
             # its failure report. Merely closing the Job does not stop this Attempt.
             raise AnalysisCancelled("Scientific work stopped because the Job was cancelled")
     try:
-        response = worker.request(request | {"files": {ref: str(item.path) for ref, item in sources.acquired.items()},
-                                            "directory": str(sources.directory)}, deadline=deadline,
+        response = worker.request(request | {"files": {
+                                                ref: str(item.path)
+                                                for ref, item in sources.acquired.items()
+                                                if ref in sources.uploads
+                                            },
+                                            "directory": str(sources.directory),
+                                            "attempt_ref": sources.active.execution_attempt_ref}, deadline=deadline,
                                   check_active=check_active)
     except TimeoutError as error:
         # WorkerClient confirms child exit before propagating a timeout.

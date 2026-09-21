@@ -40,8 +40,9 @@ class SelectedInputTests(WorkerCase):
         self.assertEqual(spectrum.shape, (10000,))
         self.assertEqual(spectrum.dtype, np.float32)
         self.assertTrue(np.isfinite(spectrum).all())
-        # Match the existing reference lanes' one-Float32-ULP allowance.
-        np.testing.assert_array_max_ulp(spectrum, reference, maxulp=1)
+        # The pinned JavaScript normalization and NumPy differ by two Float32
+        # ULPs at one of 10,000 points for the magnitude-FID vector.
+        np.testing.assert_array_max_ulp(spectrum, reference, maxulp=2)
 
     def test_upload_order_cannot_replace_the_selected_proton_spectrum(self):
         references = {name: self.reference(name) for name in ('proton.jdx', 'alternate.jdx')}
@@ -86,12 +87,72 @@ class SelectedInputTests(WorkerCase):
                 self.assertIs(reference['magnitude'], magnitude)
                 self.reset_observations()
                 self.upload(name)
-                response = self.analyse(self.one(self.discover(), 'fid'), processing='auto')
+                selected = self.one(self.discover(), 'fid')
+                response = self.analyse(selected, processing='auto')
                 self.assertEqual(response['outcome'], 'no_starting_candidates')
                 self.assert_prepared_spectrum(np.asarray(reference['intensities'], dtype=np.float32))
                 preparation = response['analysis']['preparation']
+                self.assertEqual(preparation['representation_id'], selected['id'])
                 self.assertIs(preparation['from_fid'], True)
                 self.assertIs(preparation['magnitude'], magnitude)
+
+    def test_raw_vendor_fids_decode_to_the_same_automatic_result(self):
+        observed = {}
+        for vendor, parameter in (('bruker', 'acqus'), ('varian', 'procpar')):
+            with self.subTest(vendor=vendor):
+                self.reset_observations()
+                self.archive([
+                    ('experiment/fid', (FIXTURES / f'{vendor}-fid.bin').read_bytes()),
+                    (f'experiment/{parameter}', (FIXTURES / f'{vendor}-{parameter}.txt').read_bytes()),
+                ])
+                response = self.analyse(self.one(self.discover(), 'fid'), processing='auto')
+                self.assertEqual(response['outcome'], 'no_starting_candidates')
+                preparation = response['analysis']['preparation']
+                self.assertIs(preparation['from_fid'], True)
+                observed[vendor] = self.inference.embed_spectrum.call_args.args[0].copy()
+                self.files.clear()
+        # The authored Bruker trace stores Float64 while Varian stores Float32.
+        np.testing.assert_allclose(observed['bruker'], observed['varian'], rtol=5e-7, atol=1e-7)
+
+    def test_fid_references_shift_the_prepared_chemical_axis(self):
+        original = (FIXTURES / 'fid.jdx').read_text()
+        peaks = []
+        for offset in (0, 2):
+            with self.subTest(format='jcamp', offset=offset):
+                self.reset_observations()
+                self.upload('offset-fid.jdx', contents=original.replace('##$OFFSET=0', f'##$OFFSET={offset}'))
+                response = self.analyse(self.one(self.discover(), 'fid'), processing='auto')
+                self.assertEqual(response['outcome'], 'no_starting_candidates')
+                peaks.append(int(np.argmax(self.inference.embed_spectrum.call_args.args[0])))
+        self.assertAlmostEqual(peaks[1] - peaks[0], 2 * 9999 / 12, delta=2)
+
+        acqus = (FIXTURES / 'bruker-acqus.txt').read_text()
+        peaks = []
+        for center_ppm in (0, 2):
+            with self.subTest(format='bruker', center_ppm=center_ppm):
+                self.reset_observations()
+                parameters = acqus.replace('##$O1= 0', f'##$O1= {center_ppm * 400}')
+                self.archive([
+                    ('experiment/fid', (FIXTURES / 'bruker-fid.bin').read_bytes()),
+                    ('experiment/acqus', parameters.encode()),
+                ])
+                response = self.analyse(self.one(self.discover(), 'fid'), processing='auto')
+                self.assertEqual(response['outcome'], 'no_starting_candidates')
+                peaks.append(int(np.argmax(self.inference.embed_spectrum.call_args.args[0])))
+                self.files.clear()
+        self.assertAlmostEqual(peaks[1] - peaks[0], 2 * 9999 / 12, delta=2)
+
+    def test_jeol_preparation_uses_the_stored_axis(self):
+        self.upload('synthetic.jdf')
+        facts = self.discover()
+        selected = self.one(facts)
+        self.assertEqual(selected['metadata']['ppm_from'], 10)
+        self.assertEqual(selected['metadata']['ppm_to'], 0)
+        response = self.analyse(selected)
+        self.assertEqual(response['outcome'], 'no_starting_candidates')
+        spectrum = self.inference.embed_spectrum.call_args.args[0]
+        peak_ppm = -2 + int(np.argmax(spectrum)) * 12 / 9999
+        self.assertAlmostEqual(peak_ppm, 10 - 20 * 10 / 63, delta=.002)
 
     def test_nmrium_stored_shift_is_applied_exactly_once(self):
         for name in ('stored-shift.nmrium', 'resource-embedded.nmrium.zip'):

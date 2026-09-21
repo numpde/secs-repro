@@ -10,6 +10,7 @@ dependencies = [
   "nmrglue==0.11",
   "numpy",
   "omegaconf",
+  "rdkit==2025.9.6",
   "safetensors",
   "secs",
   "torch",

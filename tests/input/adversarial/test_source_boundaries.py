@@ -63,6 +63,15 @@ class SourceBoundaryTests(WorkerCase):
 
     def test_archive_limit_does_not_claim_no_matching_spectrum_exists(self):
         self.archive([(f'note-{i}.txt', b'') for i in range(4097)])
-        response = self.request('inspect', source={'upload_ref': 'upload:sample', 'member': None})
+        with patch('secs_inference.provider.source_access.ZipFile',
+                   side_effect=AssertionError('central directory was loaded')):
+            response = self.request('inspect', source={'upload_ref': 'upload:sample', 'member': None})
         self.rejected(response, '4096', 'limit')
         self.assertNotIn('no matching', response['reason'].lower())
+
+    def test_many_valid_representations_fail_with_a_bounded_inventory_message(self):
+        peak_table = (b'##TITLE=peak table\n##JCAMPDX=5.00\n##DATATYPE=NMR PEAK TABLE\n'
+                      b'##.OBSERVE NUCLEUS=^1H\n##NPOINTS=1\n##PEAK TABLE=(XY..XY)\n1,1\n##END=\n')
+        self.upload('many.jdx', contents=peak_table * 2048)
+        response = self.request('inspect', source={'upload_ref': 'upload:sample', 'member': None})
+        self.rejected(response, 'representation inventory', 'result limit', 'exact member')
