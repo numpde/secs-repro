@@ -37,6 +37,10 @@ There is no format-specific reader discriminator. The opaque identity must
 survive separate inspect/analyse calls for unchanged acquired sources; removed
 or changed sources invalidate it. Processing is explicit: `as_stored` for
 processed data, `auto` for supported FID processing of that exact selection.
+For FIDs, `auto` includes the reference's magnitude choice when phased real
+data retain substantial negative intensity. Analysis preparation must report
+the actual `from_fid` and `magnitude` outcomes; magnitude output must not be
+presented as an absorptive spectrum. This is not an exception fallback.
 No test yet prescribes `auto` behavior for already-processed data.
 
 All alternatives from each inspected Upload remain visible. A localized parse

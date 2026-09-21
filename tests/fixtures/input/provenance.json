@@ -15,7 +15,7 @@
     "normalization": "normalizeSpectrum",
     "float32_cast": false
   },
-  "generator_sha256": "5d14008f2946bd7187fc18df8790bbada086843d87f116f8e0c00cb89f4a0278",
+  "generator_sha256": "4088960bed464b7f5dbab1ee4e8e92c4be091dcf12a5a711b3224071756be9f4",
   "exporter": "convert-to-jcamp@7.0.1 (MIT)",
   "files": [
     {
@@ -182,6 +182,18 @@
       "path": "fid.jdx",
       "sha256": "6cb7f4ad267371d37fc91bd4672f3d0d4b96a81475ed134cc3672059c3a433ff",
       "description": "512 complex samples exp(-30t) exp(i 2pi 800t), dwell 1/4800 second; synthetic FID",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "fid-magnitude.jdx",
+      "sha256": "9a116376dade0ac20f7ce0a095d78404d946b1b349f05aa6e45b3b8ed6c9f4ad",
+      "description": "512 complex samples at 4800 Hz; twelve tones from -1800 to 1800 Hz, decay 30/s and component-dependent phases recorded in generator; reference chooses magnitude, not an identified molecule",
       "origin": {
         "generator": "tools/generate_input_fixtures.mjs",
         "author": "secs-repro contributors",
@@ -480,6 +492,19 @@
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
         "basis": "Derived by pinned reference normalization of fid.jdx"
+      }
+    },
+    {
+      "path": "fid-magnitude.jdx.reference.json",
+      "sha256": "8f3402ed587938b402a657628b5eadc7bc6a76dda791d66420a3995bfbb469f5",
+      "description": "Pinned reference normalization of fid-magnitude.jdx",
+      "parent": "fid-magnitude.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "Derived by pinned reference normalization of fid-magnitude.jdx"
       }
     }
   ]

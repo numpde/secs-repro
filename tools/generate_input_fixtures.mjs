@@ -122,6 +122,20 @@ const fid = from1DNMRVariables({ x: { data: t, label: 'X', units: 'SECONDS' },
     title: 'Synthetic decaying complex tone', dataType: 'NMR FID' },
 });
 await save('fid.jdx', fid, '512 complex samples exp(-30t) exp(i 2pi 800t), dwell 1/4800 second; synthetic FID');
+const componentPhases = [0, 2.6, -1.8, .8, -2.7, 1.6, -.5, 2.9, -1.2, .2, 2, -2.3];
+const distortedReal = t.map((time) => componentPhases.reduce((sum, phase, index) =>
+  sum + Math.exp(-30 * time) * Math.cos(2 * Math.PI * (-1800 + index * 3600 / 11) * time + phase), 0));
+const distortedImaginary = t.map((time) => componentPhases.reduce((sum, phase, index) =>
+  sum + Math.exp(-30 * time) * Math.sin(2 * Math.PI * (-1800 + index * 3600 / 11) * time + phase), 0));
+const magnitudeFid = from1DNMRVariables({ x: { data: t, label: 'X', units: 'SECONDS' },
+  r: { data: distortedReal, label: 'R' }, i: { data: distortedImaginary, label: 'I' } }, {
+  xyEncoding: 'DIFDUP', nmrInfo: { isFid: true, nucleus: '1H', originFrequency: 400,
+    baseFrequency: 400, spectralWidth: 12, frequencyOffset: 1600,
+    title: 'Authored twelve damped complex tones', dataType: 'NMR FID',
+    owner: 'secs-repro contributors; AGPL-3.0-only' },
+});
+await save('fid-magnitude.jdx', magnitudeFid,
+  '512 complex samples at 4800 Hz; twelve tones from -1800 to 1800 Hz, decay 30/s and component-dependent phases recorded in generator; reference chooses magnitude, not an identified molecule');
 
 const mol = `Ethanol
   secs-repro
@@ -292,6 +306,9 @@ for (const record of [...files].filter((item) => item.path.endsWith('.jdx')
   if (!loaded) throw Error(`Cannot generate a reference for ${record.path}: the loader returned no spectrum`);
   if (loaded.isFid) throw Error(`Cannot generate a reference for ${record.path}: processing left the data in the time domain`);
   if (loaded.meta.nucleus !== '1H') throw Error(`Cannot generate a proton reference for ${record.path}: the loader reported nucleus ${JSON.stringify(loaded.meta.nucleus)}`);
+  if (record.path === 'fid-magnitude.jdx' && (!loaded.fromFid || !loaded.magnitude)) {
+    throw Error(`Cannot admit the magnitude FID fixture: expected conversion from FID with magnitude output; observed fromFid=${loaded.fromFid}, magnitude=${loaded.magnitude}`);
+  }
   const normalized = normalizeSpectrum(loaded.data);
   const reference = { frontend_revision: revision, input_sha256: record.sha256,
     nucleus: loaded.meta.nucleus, dimension: loaded.dimension, points: loaded.data.y.length,
