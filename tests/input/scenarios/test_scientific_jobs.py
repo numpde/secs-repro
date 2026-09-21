@@ -24,7 +24,8 @@ class ScientificJobScenarios(WorkerCase):
         structure = self.one(self.discover('upload:structure'), 'structure', nucleus=None)
         self.assertEqual(structure['metadata']['formula'], 'C2H6O')
         response = self.request('analyse', selection={'representation_id': proton['id'],
-            'formula': 'C22H36O7', 'processing': 'as_stored',
+            'formula': 'C22H36O7', 'formula_evidence': {'kind': 'job_specification'},
+            'processing': 'as_stored',
             'explanation': 'Use the explicitly selected proton data and supplied Job formula; the structure is another sample.'})
         self.assertEqual(response['outcome'], 'no_starting_candidates')
         self.inference.embed_spectrum.assert_called_once()
@@ -44,6 +45,7 @@ class ScientificJobScenarios(WorkerCase):
                   if item['sources'] == [{'upload_ref': 'upload:sample', 'member': 'valid.jdx'}]]
         self.assertEqual(len(usable), 1)
         choice = {'representation_id': usable[0]['id'], 'formula': 'C22H36O7',
+                  'formula_evidence': {'kind': 'job_specification'},
                   'explanation': 'Use the complete proton spectrum despite the separately reported corrupt member.'}
         rejected = self.request('analyse', selection=choice)
         self.assertEqual(rejected['outcome'], 'input_rejected')

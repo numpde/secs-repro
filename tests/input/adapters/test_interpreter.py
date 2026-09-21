@@ -67,12 +67,27 @@ class InterpreterContextTests(unittest.TestCase):
         self.assertNotIn('read_jcamp', functions)
         self.assertNotIn('read_bruker', functions)
         schema = functions['select_representation']['parameters']
-        self.assertEqual(set(schema['required']), {'representation_id', 'formula', 'processing', 'explanation'})
+        self.assertEqual(set(schema['required']),
+                         {'representation_id', 'formula', 'formula_evidence', 'processing', 'explanation'})
         self.assertTrue(set(schema['required']) <= set(schema['properties']))
         self.assertTrue({'as_stored', 'auto'} <= set(schema['properties']['processing']['enum']))
+        evidence = schema['properties']['formula_evidence']
+        self.assertEqual(evidence['oneOf'], [
+            {'type': 'object', 'additionalProperties': False,
+             'properties': {'kind': {'const': 'job_specification'}},
+             'required': ['kind']},
+            {'type': 'object', 'additionalProperties': False,
+             'properties': {
+                 'kind': {'const': 'representations'},
+                 'representation_ids': {'type': 'array', 'items': {'type': 'string', 'minLength': 1},
+                                        'minItems': 1, 'uniqueItems': True},
+             },
+             'required': ['kind', 'representation_ids']},
+        ])
 
     def test_selection_tool_preserves_the_decision_for_worker_execution(self):
         choice = {'representation_id': 'opaque-choice', 'formula': 'C22H36O7',
+                  'formula_evidence': {'kind': 'job_specification'},
                   'processing': 'as_stored', 'explanation': 'The selected representation is the requested processed proton spectrum.'}
         session = self.session([tool('select_representation', choice),
             tool('report_input_problem', {'explanation': 'The selection was not accepted.'}, 'call-2')])
@@ -80,8 +95,19 @@ class InterpreterContextTests(unittest.TestCase):
         self.assertEqual(asdict(decision), choice)
         self.inspect.assert_not_called()
 
+    def test_representation_formula_evidence_survives_the_selection_boundary(self):
+        choice = {'representation_id': 'opaque-spectrum', 'formula': 'C2H6O',
+                  'formula_evidence': {'kind': 'representations',
+                                       'representation_ids': ['opaque-structure']},
+                  'processing': 'as_stored',
+                  'explanation': 'The selected structure representation supplies the formula.'}
+        session = self.session([tool('select_representation', choice)])
+        self.assertEqual(asdict(session.select()), choice)
+        self.inspect.assert_not_called()
+
     def test_missing_processing_requests_repair_without_selecting(self):
-        choice = {'representation_id': 'opaque-choice', 'formula': 'C22H36O7', 'explanation': 'Explicit choice.'}
+        choice = {'representation_id': 'opaque-choice', 'formula': 'C22H36O7',
+                  'formula_evidence': {'kind': 'job_specification'}, 'explanation': 'Explicit choice.'}
         session = self.session([tool('select_representation', choice),
             tool('report_input_problem', {'explanation': 'Processing has not been established.'}, 'call-2')])
         self.assertIsInstance(session.select(), CannotAnalyse)

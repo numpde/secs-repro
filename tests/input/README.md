@@ -60,10 +60,15 @@ they do not prescribe parser tokens or a machine category without a consumer.
 An ID must identify the exact representation in the current acquired source
 set; its spelling is not prescribed. These are proposed internal discovery
 requirements, not the reference frontend's response schema. The execution
-request uses `selection={representation_id, formula, processing, explanation}`.
+request uses
+`selection={representation_id, formula, formula_evidence, processing, explanation}`.
+Formula evidence names either the admitted Job specification or one or more
+discovered structure representations. It makes the interpreter's source
+auditable; explanation prose cannot substitute for it.
 There is no format-specific reader discriminator. The opaque identity must
 survive separate inspect/analyse calls for unchanged acquired sources; removed
-or changed sources invalidate it. Processing is explicit: `as_stored` for
+or changed sources invalidate it, and it is valid only in the Attempt that
+issued it. Processing is explicit: `as_stored` for
 processed data, `auto` for supported FID processing of that exact selection.
 For FIDs, `auto` includes the reference's magnitude choice when phased real
 data retain substantial negative intensity. Analysis preparation must report
