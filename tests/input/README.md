@@ -42,6 +42,12 @@ data retain substantial negative intensity. Analysis preparation must report
 the actual `from_fid` and `magnitude` outcomes; magnitude output must not be
 presented as an absorptive spectrum. This is not an exception fallback.
 No test yet prescribes `auto` behavior for already-processed data.
+For NMRium, `as_stored` preserves saved processing: replay its enabled shift
+exactly once, including when the original data live in a native resource archive.
+A URL-only state does not authorize a fetch or establish a relationship to an
+unrelated file with the same name. A loopback canary checks actual connections
+during inspection, including from another process; it does not test detached
+process supervision.
 
 All alternatives from each inspected Upload remain visible. A localized parse
 failure may coexist with useful choices; it cannot be reported as an exhaustive
@@ -68,6 +74,10 @@ private staging without runtime network, and publishes only after generation
 succeeds. Building that image may need dependency access; ordinary tests and
 generation runtime are offline. Review regenerated differences explicitly.
 Ordinary tests never update goldens and check recorded artifact integrity.
+Native NMRium archives also record every member's provenance and hash. Their
+UUIDs and ZIP timestamps are canonicalized; stored processing and embedded
+resource bytes are preserved. Reference settings are recorded per vector,
+because direct core state loading and automatic FID preparation differ.
 
 The Bruker and Varian companion files are stored flat in the corpus; tests
 restore native experiment paths in archive wrappers. Generation verifies raw

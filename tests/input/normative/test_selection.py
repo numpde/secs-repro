@@ -1,6 +1,7 @@
 """An exact choice reaches the encoder without first-file or first-block substitution."""
 
 import json
+from zipfile import ZipFile
 
 import numpy as np
 import torch
@@ -96,6 +97,34 @@ class SelectedInputTests(WorkerCase):
                 preparation = response['analysis']['preparation']
                 self.assertIs(preparation['from_fid'], True)
                 self.assertIs(preparation['magnitude'], magnitude)
+
+    def test_nmrium_stored_shift_is_applied_exactly_once(self):
+        for name in ('stored-shift.nmrium', 'resource-embedded.nmrium.zip'):
+            with self.subTest(fixture=name):
+                self.reset_observations()
+                self.upload(name)
+                facts = self.discover()
+                self.assertTrue(facts['complete'])
+                if name.endswith('.zip'):
+                    required = {'state.json', 'data/authored-proton/proton.jdx'}
+                    choices = [item for item in facts['representations']
+                               if required <= {source['member'] for source in item['sources']}]
+                    self.assertEqual(len(choices), 1, 'The saved spectrum and its resource must remain one choice')
+                    selected = choices[0]
+                    with ZipFile(FIXTURES / name) as archive:
+                        members = set(archive.namelist())
+                    for source in selected['sources']:
+                        self.assertEqual(source['upload_ref'], 'upload:sample')
+                        self.assertIn(source['member'], members)
+                else:
+                    selected = self.one(facts)
+                    self.assertEqual(selected['sources'], [{'upload_ref': 'upload:sample', 'member': None}])
+                response = self.analyse(selected)
+                self.assertEqual(response['outcome'], 'no_starting_candidates')
+                self.assert_encoder_input(self.reference(name))
+                tensor = self.model.encode_modality.call_args.args[0].numpy().reshape(-1)
+                peak_ppm = 10 - int(np.argmax(tensor)) * 12 / 9999
+                self.assertAlmostEqual(peak_ppm, 3.03125, delta=.002)
 
     def test_encoder_adapter_uses_training_order_without_discovery(self):
         reference = self.reference('alternate.jdx')
