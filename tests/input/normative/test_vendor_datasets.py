@@ -4,6 +4,16 @@ from input.helpers import FIXTURES, WorkerCase
 
 
 class VendorDatasetTests(WorkerCase):
+    def test_processed_jeol_is_discovered_directly(self):
+        self.upload('synthetic.jdf')
+        facts = self.discover()
+        self.assertEqual(len(facts['representations']), 1)
+        item = self.one(facts)
+        self.assertEqual(item['metadata']['points'], 64)
+        self.assertEqual(item['metadata']['dimension'], 1)
+        self.assertEqual(float(item['metadata']['frequency_mhz']), 400)
+        self.assertEqual(item['sources'], [{'upload_ref': 'upload:sample', 'member': None}])
+
     def processed(self, prefix='sample/1/pdata/1'):
         return [(f'{prefix}/1r', (FIXTURES / 'bruker-1r.bin').read_bytes()),
                 (f'{prefix}/procs', (FIXTURES / 'bruker-procs.txt').read_bytes())]

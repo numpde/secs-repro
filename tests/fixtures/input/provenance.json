@@ -14,7 +14,7 @@
     "normalization": "normalizeSpectrum",
     "float32_cast": false
   },
-  "generator_sha256": "0621a73bbbd71fd1e1f9b84049d0f04b5f7fc53fcfb30b31390e223867c1983a",
+  "generator_sha256": "119db2906671f83bf8b48f8ffd65be31b182bb55b43a4739ffcebf3699722a0e",
   "exporter": "convert-to-jcamp@7.0.1 (MIT)",
   "files": [
     {
@@ -273,6 +273,18 @@
       "path": "varian-fid.bin",
       "sha256": "4b78b4939f9a000a341206a3bf4c47ff75ae4173f4555f15deb06f22dd3fe934",
       "description": "One-block big-endian Float32 FID; exp(-i/16) exp(2pi sqrt(-1) i/8)",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "synthetic.jdf",
+      "sha256": "c6efc1ff2f45ade085011db7b8fd0f162e8608366d93a686129f678ac01e3e75",
+      "description": "Authored minimal reference-compatible JEOL processed spectrum: 64 Float64 Gaussian samples plus zero imaginary channel; not instrument qualification",
       "origin": {
         "generator": "tools/generate_input_fixtures.mjs",
         "author": "secs-repro contributors",

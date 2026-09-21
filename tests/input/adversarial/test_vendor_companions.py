@@ -4,6 +4,16 @@ from input.helpers import FIXTURES, WorkerCase
 
 
 class VendorCompanionTests(WorkerCase):
+    def test_truncated_jeol_does_not_turn_into_a_complete_inventory(self):
+        self.upload('truncated.jdf', contents=(FIXTURES / 'synthetic.jdf').read_bytes()[:4096])
+        facts = self.discover()
+        self.assertFalse(facts['complete'])
+        issues = [issue for issue in facts['issues']
+                  if issue['source'] == {'upload_ref': 'upload:sample', 'member': None}]
+        self.assertTrue(issues)
+        self.assertRegex(' '.join(issue['reason'] for issue in issues).lower(),
+                         r'truncat|incomplete|missing.*(data|point)|expect.*(data|point|byte)')
+
     def missing_procs(self, facts, source):
         self.assertFalse(facts['complete'])
         issues = [issue for issue in facts['issues'] if issue['source'] == source]
