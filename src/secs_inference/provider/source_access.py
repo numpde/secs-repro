@@ -35,6 +35,32 @@ class ReadSource:
     digest: str
 
 
+class ScopeLimitError(InputReadError):
+    """One attributed source would exceed the aggregate inspection budget."""
+
+    def __init__(self, source: SourceRef, limit: int):
+        super().__init__(f"Cannot inspect this source: its expanded members exceed the {limit}-byte inspection limit")
+        self.source = source
+
+
+class ScopeReader:
+    """Materialize one discovery scope under a shared expanded-byte limit."""
+
+    def __init__(self, access: "SourceAccess"):
+        self._access = access
+        self._remaining = access.max_scope_bytes
+
+    def read(self, source: SourceRef) -> ReadSource:
+        entry = self._access.scope(source)[0]
+        if entry.byte_length > self._remaining:
+            raise ScopeLimitError(source, self._access.max_scope_bytes)
+        read = self._access.read(source)
+        if len(read.contents) > self._remaining:
+            raise ScopeLimitError(source, self._access.max_scope_bytes)
+        self._remaining -= len(read.contents)
+        return read
+
+
 class SourceAccess:
     """Attempt-owned acquired files; all materialized paths remain private.
 
@@ -49,6 +75,10 @@ class SourceAccess:
         self.directory = directory
         self.max_member_bytes = max_member_bytes
         self.max_scope_bytes = max_scope_bytes
+
+    def scope_reader(self) -> ScopeReader:
+        """Create one aggregate budget for an inspection and its companions."""
+        return ScopeReader(self)
 
     def scope(self, source: SourceRef) -> tuple[SourceEntry, ...]:
         """Enumerate a root scope or admit one exact member without format policy."""

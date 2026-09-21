@@ -30,8 +30,9 @@ def read_bruker_pdata(processed_directory: str | Path) -> SourceSpectrum:
     # not a scientific verdict. Establish the facts used by this reader below.
     if (not isinstance(intensities, np.ndarray)
             or intensities.ndim != 1 or intensities.size < 2
-            or intensities.size != procs.get("SI")):
-        raise SpectrumReadError("Cannot read the selected Bruker spectrum: 1r must decode to one dimension with at least two points, and its point count must match SI in procs")
+            or intensities.size != procs.get("SI")
+            or not np.all(np.isfinite(intensities))):
+        raise SpectrumReadError("Cannot read the selected Bruker spectrum: 1r must contain finite one-dimensional data with at least two points, and its point count must match SI in procs")
     try:
         offset = float(procs["OFFSET"])
         frequency = float(procs["SF"])

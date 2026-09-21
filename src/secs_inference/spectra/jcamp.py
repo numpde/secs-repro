@@ -141,6 +141,9 @@ def _read_ntuples(
     if not isinstance(decoded, list) or len(decoded) != 2:
         _reject("the NTUPLES real and imaginary pages were not both decoded")
     intensities = _validated_intensities(decoded[0], points)
+    _validated_intensities(decoded[1], points, allow_constant=True)
+    if any(not rows for _, rows in tables):
+        _reject("an NTUPLES DATA TABLE contains no point rows")
 
     first_x = first["X"]
     last_x = last["X"]
@@ -345,6 +348,8 @@ def _referenced_ppm_axis(parameters: dict, x_axis: np.ndarray) -> np.ndarray:
 def _validated_intensities(
     decoded: object,
     expected_points: int,
+    *,
+    allow_constant: bool = False,
 ) -> np.ndarray:
     if not isinstance(decoded, np.ndarray) or decoded.ndim != 1:
         _reject("the decoded intensity data is not one-dimensional")
@@ -352,7 +357,7 @@ def _validated_intensities(
         _reject("the declared point count does not match the decoded intensities")
     if decoded.size < 2 or not np.all(np.isfinite(decoded)):
         _reject("it does not contain at least two finite intensity points")
-    if float(np.min(decoded)) == float(np.max(decoded)):
+    if not allow_constant and float(np.min(decoded)) == float(np.max(decoded)):
         _reject("its intensity range is constant")
     return decoded.astype(np.float64, copy=False)
 

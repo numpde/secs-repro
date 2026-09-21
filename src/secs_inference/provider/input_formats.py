@@ -10,7 +10,9 @@ from tempfile import TemporaryDirectory
 import numpy as np
 
 from secs_inference.provider.input_operations import SourceRef, source_document
-from secs_inference.provider.source_access import InputReadError, ReadSource, SourceAccess
+from secs_inference.provider.source_access import (
+    InputReadError, ReadSource, ScopeLimitError, ScopeReader, SourceAccess,
+)
 from secs_inference.spectra.bruker import read_bruker_pdata
 from secs_inference.spectra.errors import SpectrumReadError
 from secs_inference.spectra.jcamp import read_jcamp_spectrum
@@ -33,7 +35,7 @@ class DiscoveredRepresentation:
     metadata: dict
     related_keys: tuple[str, ...] = ()
 
-def read_declared_companions(access: SourceAccess, selected: ReadSource) -> list[ReadSource]:
+def read_declared_companions(reader: ScopeReader, selected: ReadSource) -> list[ReadSource]:
     """Read only same-dataset names established by the selected format."""
     member = selected.source.member
     if member is None:
@@ -75,7 +77,9 @@ def read_declared_companions(access: SourceAccess, selected: ReadSource) -> list
     for name in dict.fromkeys(names):
         source = SourceRef(selected.source.upload_ref, name)
         try:
-            companions.append(access.read(source))
+            companions.append(reader.read(source))
+        except ScopeLimitError:
+            raise
         except InputReadError:
             # The format-specific discovery path reports the missing role
             # against the selected source with a useful scientific name.
@@ -90,10 +94,12 @@ def discover_representations(access: SourceAccess, reads: list[ReadSource]):
         items, item_issues = _discover_standalone(access, read)
         discovered.extend(items)
         issues.extend(item_issues)
-    for operation in (_discover_bruker, _discover_vendor_fids):
-        items, item_issues = operation(reads)
-        discovered.extend(items)
-        issues.extend(item_issues)
+    items, item_issues = _discover_vendor_fids(reads)
+    discovered.extend(items)
+    issues.extend(item_issues)
+    items, item_issues = _discover_bruker(access, reads)
+    discovered.extend(items)
+    issues.extend(item_issues)
     items, item_issues = _discover_nmrium(access, reads)
     discovered.extend(items)
     issues.extend(item_issues)
@@ -254,7 +260,7 @@ def _discover_nmrium(access: SourceAccess, reads: list[ReadSource]):
             discovered.append(DiscoveredRepresentation(key, locator, "spectrum", tuple(components), metadata))
     return discovered, issues
 
-def _discover_bruker(reads: list[ReadSource]):
+def _discover_bruker(access: SourceAccess, reads: list[ReadSource]):
     by_member = {read.source.member: read for read in reads if read.source.member is not None}
     discovered = []
     issues = []
@@ -275,6 +281,18 @@ def _discover_bruker(reads: list[ReadSource]):
             issues.append({
                 "source": source_document(parameters.source),
                 "reason": "Cannot inspect this processed Bruker data: procs is malformed or incomplete",
+            })
+            continue
+        try:
+            with TemporaryDirectory(dir=access.directory, prefix="inspect-bruker-") as temporary:
+                root = Path(temporary)
+                (root / "1r").write_bytes(data.contents)
+                (root / "procs").write_bytes(parameters.contents)
+                read_bruker_pdata(root)
+        except SpectrumReadError:
+            issues.append({
+                "source": source_document(data.source),
+                "reason": "Cannot inspect this processed Bruker data: 1r is malformed or incomplete",
             })
             continue
         components = (

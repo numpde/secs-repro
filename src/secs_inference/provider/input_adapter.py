@@ -22,7 +22,7 @@ from secs_inference.provider.input_operations import (
     SourceRef,
     source_document,
 )
-from secs_inference.provider.source_access import InputReadError, ReadSource, SourceAccess
+from secs_inference.provider.source_access import InputReadError, ReadSource, ScopeLimitError, SourceAccess
 
 _TOKEN_PREFIX = "secs-input-v1."
 _MAX_INVENTORY_BYTES = 256 * 1024
@@ -53,18 +53,23 @@ class InputAdapter:
             self._attempt_ref = attempt_ref
             self._claims.clear()
         entries = access.scope(scope)
+        reader = access.scope_reader()
         read_sources: list[ReadSource] = []
         issues = []
         complete = True
         for entry in entries:
             try:
-                read_sources.append(access.read(entry.source))
+                read_sources.append(reader.read(entry.source))
             except InputReadError as error:
                 complete = False
                 issues.append({"source": source_document(entry.source), "reason": str(error)})
 
         if scope.member is not None and read_sources:
-            read_sources.extend(read_declared_companions(access, read_sources[0]))
+            try:
+                read_sources.extend(read_declared_companions(reader, read_sources[0]))
+            except ScopeLimitError as error:
+                complete = False
+                issues.append({"source": source_document(error.source), "reason": str(error)})
 
         discovered, format_issues = discover_representations(access, read_sources)
         if format_issues:

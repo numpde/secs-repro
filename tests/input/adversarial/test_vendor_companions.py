@@ -1,5 +1,7 @@
 """Companion names do not grant permission to merge experiments or Uploads."""
 
+import struct
+
 from input.helpers import FIXTURES, WorkerCase
 
 
@@ -61,6 +63,25 @@ class VendorCompanionTests(WorkerCase):
                 self.assertEqual(facts['representations'], [])
                 self.assertTrue(any('malformed or incomplete' in issue['reason']
                                     for issue in facts['issues']))
+                self.files.clear()
+
+    def test_malformed_processed_bruker_data_is_partial_at_discovery(self):
+        parameters = (FIXTURES / 'bruker-procs.txt').read_text()
+        cases = (
+            ('empty', b'', parameters),
+            ('truncated', (FIXTURES / 'bruker-1r.bin').read_bytes()[:-1], parameters),
+            ('nonfinite', struct.pack('<2d', float('nan'), 1.0),
+             parameters.replace('##$SI= 64', '##$SI= 2').replace('##$DTYPP= 0', '##$DTYPP= 2')),
+        )
+        for name, data, procs in cases:
+            with self.subTest(name=name):
+                self.archive([('experiment/1r', data), ('experiment/procs', procs.encode())])
+                facts = self.discover()
+                self.assertFalse(facts['complete'])
+                self.assertEqual(facts['representations'], [])
+                self.assert_issue_mentions(
+                    facts, {'upload_ref': 'upload:sample', 'member': 'experiment/1r'},
+                    '1r', 'malformed or incomplete')
                 self.files.clear()
 
     def missing_procs(self, facts, source):
