@@ -7,7 +7,8 @@ the requests back to legacy readers in test helpers.
 `make test/input` runs the input suite in the offline CPU image. Normative
 discovery and adversarial checks can run separately with
 `make test/input/normative` and `make test/input/adversarial`.
-Selected-input tests follow in separately reviewed slices. There is no checkpoint or index;
+Selection tests observe the tensor passed to a recording encoder through the
+real inference adapter. There is no checkpoint or index;
 the current scientific package's eager imports require the existing verified
 MolFormer configuration/tokenizer cache. No model weights are loaded. This is
 a temporary import dependency, not a reason to mock scientific input handling.
@@ -28,7 +29,12 @@ evidence must remain unknown, not become a default scientific fact.
 An ID must identify the exact representation in the current acquired source
 set; its spelling is not prescribed. These are proposed internal discovery
 requirements, not the reference frontend's response schema. The execution
-contract will be tested with its first selected-input consumer.
+request uses `selection={representation_id, formula, processing, explanation}`.
+There is no format-specific reader discriminator. The opaque identity must
+survive separate inspect/analyse calls for unchanged acquired sources; removed
+or changed sources invalidate it. Processing is explicit: `as_stored` for
+processed data, `auto` for supported FID processing of that exact selection.
+No test yet prescribes `auto` behavior for already-processed data.
 
 All alternatives from each inspected Upload remain visible. A localized parse
 failure may coexist with useful choices; it cannot be reported as an exhaustive
@@ -50,9 +56,11 @@ succeeds. Building that image may need dependency access; ordinary tests and
 generation runtime are offline. Review regenerated differences explicitly.
 Ordinary tests never update goldens and check recorded artifact integrity.
 
-The corpus includes reference vectors for later preparation tests. This
-initial slice checks discovery and fixture integrity; it does not yet establish
-numerical agreement or independent peak-position correctness.
+The corpus includes reference vectors for selection and preparation tests. This
+suite checks discovery, fixture integrity and exact selected model inputs.
+Reference comparisons use the existing lanes' one-Float32-ULP allowance.
+An adapter-only test checks the independently known alternate peak position
+without discovery; complete parsing/preparation checks still depend on discovery.
 Adversarial tests check worker source rejection, operational-error propagation,
 partial discovery and misleading metadata. Instruction-like titles test parser
 facts; they do not establish resistance to prompt injection in a live interpreter.
