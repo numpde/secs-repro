@@ -13,9 +13,8 @@ class DiscoveryFailureTests(WorkerCase):
             self.assertTrue(all(source['upload_ref'] == 'upload:sample' for source in item['sources']))
         structure = self.one(facts, 'structure', nucleus=None)
         self.assertEqual(structure['sources'], [{'upload_ref': 'upload:sample', 'member': 'sample/annotations.sdf'}])
-        issues = [issue for issue in facts['issues'] if issue['source'] == structure['sources'][0]]
-        self.assertTrue(issues)
-        self.assertIn('proton.jdx', ' '.join(issue['reason'] for issue in issues).lower())
+        self.assert_issue_mentions(
+            facts, structure['sources'][0], 'unavailable', 'proton.jdx')
         spectrum = self.one(self.discover('upload:proton'))
         self.assertEqual(spectrum['sources'], [{'upload_ref': 'upload:proton', 'member': 'sample/proton.jdx'}])
         self.assertNotIn(structure['id'], spectrum.get('related_ids', []))
@@ -52,11 +51,9 @@ class DiscoveryFailureTests(WorkerCase):
         self.upload('truncated.jdx', contents=(FIXTURES / 'proton.jdx').read_bytes()[:700])
         facts = self.discover()
         self.assertFalse(facts['complete'])
-        issues = [issue for issue in facts['issues']
-                  if issue['source'] == {'upload_ref': 'upload:sample', 'member': None}]
-        self.assertTrue(issues, 'Truncation must be attributed to the inspected Upload')
-        self.assertRegex(' '.join(issue['reason'] for issue in issues).lower(),
-                         r'truncat|incomplete|missing.*point|point.*(count|expected)')
+        self.assert_issue_mentions(
+            facts, {'upload_ref': 'upload:sample', 'member': None},
+            'incomplete', 'spectrum data')
 
     def test_corrupt_sibling_does_not_erase_the_usable_spectrum(self):
         contents = (FIXTURES / 'proton.jdx').read_text()
@@ -80,11 +77,9 @@ class DiscoveryFailureTests(WorkerCase):
         self.assertEqual(valid[0]['metadata']['nucleus'], '1H')
         self.one(facts, nucleus='13C')
         self.assertFalse(facts['complete'])
-        issues = facts['issues']
-        broken = [issue for issue in issues
-                  if issue['source'] == {'upload_ref': 'upload:sample', 'member': 'broken.dat'}]
-        self.assertTrue(broken, 'The malformed member must have its own issue')
-        self.assertIn('xydata', ' '.join(issue['reason'] for issue in broken).lower())
+        self.assert_issue_mentions(
+            facts, {'upload_ref': 'upload:sample', 'member': 'broken.dat'},
+            'malformed', 'spectrum')
 
     def test_late_block_beyond_old_text_prefix_is_not_hidden(self):
         contents = (FIXTURES / 'linked.jdx').read_text()

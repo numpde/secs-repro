@@ -51,6 +51,12 @@ operational storage failures remain operational errors. If an implementation
 introduces further inspection limits, their effect needs its own acceptance
 contract rather than an implicit interpretation of `complete`.
 
+Every issue identifies the affected Upload/member and carries a nonblank,
+printable reason without private workspace paths. The reason names the evidence
+that blocks inspection or execution, such as an incomplete dataset or the exact
+missing companion. Tests assert those durable facts within one attributed issue;
+they do not prescribe parser tokens or a machine category without a consumer.
+
 An ID must identify the exact representation in the current acquired source
 set; its spelling is not prescribed. These are proposed internal discovery
 requirements, not the reference frontend's response schema. The execution
