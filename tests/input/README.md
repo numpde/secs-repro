@@ -7,6 +7,9 @@ the requests back to legacy readers in test helpers.
 `make test/input` runs the input suite in the offline CPU image. Normative
 discovery and adversarial checks can run separately with
 `make test/input/normative` and `make test/input/adversarial`.
+`make test/input/scenarios` checks multi-input interactions at the scientific
+worker: an explicit formula alongside an unrelated structure, and correction
+followed by execution from a partial inventory. These are not API/GUI flows.
 Selection tests observe the tensor passed to a recording encoder through the
 real inference adapter. There is no checkpoint or index;
 the current scientific package's eager imports require the existing verified
