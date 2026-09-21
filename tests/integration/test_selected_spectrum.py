@@ -161,7 +161,7 @@ class SelectedSpectrumTests(unittest.TestCase):
             root = Path(directory)
             access = SourceAccess({"upload:chosen": JCAMP}, root)
             choice = adapter.discover(access, ATTEMPT, SourceRef("upload:chosen"))["representations"][0]
-            with patch("secs_inference.provider.input_adapter.prepare_secs_spectrum",
+            with patch("secs_inference.provider.input_formats.prepare_secs_spectrum",
                        side_effect=ValueError("program fault")):
                 with self.assertRaisesRegex(ValueError, "program fault"):
                     adapter.prepare(access, ATTEMPT, {
