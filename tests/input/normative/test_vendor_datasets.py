@@ -20,7 +20,10 @@ class VendorDatasetTests(WorkerCase):
 
     def test_processed_bruker_pair_remains_supported_without_acqus(self):
         self.archive(self.processed())
-        item = self.one(self.discover())
+        facts = self.discover()
+        self.assertTrue(facts['complete'])
+        self.assertEqual(facts['issues'], [])
+        item = self.one(facts)
         self.assertEqual(item['metadata']['points'], 64)
         self.assertEqual(item['metadata']['dimension'], 1)
         self.assertEqual(float(item['metadata']['frequency_mhz']), 400)

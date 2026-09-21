@@ -47,7 +47,17 @@ class UploadCombinationTests(WorkerCase):
 
     def test_unrelated_text_does_not_erase_a_valid_experiment(self):
         self.archive([('notes.txt', b'Laboratory notes'), ('proton.jdx', (FIXTURES / 'proton.jdx').read_bytes())])
-        self.one(self.discover())
+        facts = self.discover()
+        self.one(facts)
+        self.assertTrue(facts['complete'])
+        self.assertEqual(facts['issues'], [])
+
+    def test_unrecognized_content_can_form_a_complete_empty_inventory(self):
+        self.archive([('misleading.jdx', b'Laboratory notes')])
+        facts = self.discover()
+        self.assertEqual(facts['representations'], [])
+        self.assertTrue(facts['complete'])
+        self.assertEqual(facts['issues'], [])
 
     def test_archive_order_does_not_choose_an_experiment(self):
         members = [('a.jdx', (FIXTURES / 'proton.jdx').read_bytes()),

@@ -31,6 +31,24 @@ Metadata assertions concern observed nucleus, dimensionality, point count,
 frequency, peak-table columns or structure formula as appropriate. Missing
 evidence must remain unknown, not become a default scientific fact.
 
+`complete` describes the inventory within the inspected source scope. It is
+true when discovery has exhaustively classified every content-recognized
+representation and required resource in that scope, including when no supported
+representation exists. It does not mean the Job is analysable, every metadata
+field is known, or every representation is suitable for SECS. Unknown unrelated
+content is ignored; a filename or extension alone does not establish a malformed
+supported input. Recognized malformed input or an unresolved required resource
+produces an issue for that source and makes the inventory incomplete.
+
+Archive-root inspection covers all admitted regular members. Exact-member
+inspection begins with that member and includes only same-Upload resources that
+the format explicitly associates with it; unrelated siblings do not affect that
+inventory. Upload namespaces never supply one another's resources. A source
+admission failure returns `input_rejected` before inventory facts exist, while
+operational storage failures remain operational errors. If an implementation
+introduces further inspection limits, their effect needs its own acceptance
+contract rather than an implicit interpretation of `complete`.
+
 An ID must identify the exact representation in the current acquired source
 set; its spelling is not prescribed. These are proposed internal discovery
 requirements, not the reference frontend's response schema. The execution
@@ -61,9 +79,9 @@ display integration.
 They do not establish measured integrals. Missing relative resources remain
 unresolved across Upload namespaces; annotation rows are not dense spectra.
 
-All alternatives from each inspected Upload remain visible. A localized parse
+All alternatives in the inspected source scope remain visible. A localized parse
 failure may coexist with useful choices; it cannot be reported as an exhaustive
-empty inventory. Insufficient inspection budgets must be explicit. A supplied
+empty inventory. A supplied
 file's title, extension or description cannot override contradictory scientific
 metadata. Explicit formula instructions do not establish molecular identity.
 Direct acquired Uploads do not retain an authoritative filename. Standalone
