@@ -2,11 +2,12 @@
 .PHONY: test/integration/challenges/bruker
 .PHONY: test/integration/bruker-reference test/provider test/provider/diagnostics
 .PHONY: test/integration/jcamp-reference test/qualification-tools
-.PHONY: test/input test/input/normative
+.PHONY: test/input test/input/normative test/input/adversarial
 
 test/input: private INPUT_TEST_START := /tests/input
 test/input/normative: private INPUT_TEST_START := /tests/input/normative
-test/input test/input/normative:
+test/input/adversarial: private INPUT_TEST_START := /tests/input/adversarial
+test/input test/input/normative test/input/adversarial:
 	cpu_packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
 	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
