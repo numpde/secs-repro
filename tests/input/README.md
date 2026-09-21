@@ -44,8 +44,11 @@ metadata. Explicit formula instructions do not establish molecular identity.
 
 ## Evidence and scope
 
-Fixtures in `/fixtures/input` are newly authored mathematical signals and
-structure tables, licensed AGPL-3.0-only under the repository LICENSE. Their
+Locally authored fixtures in `/fixtures/input` are mathematical signals and
+structure tables, licensed AGPL-3.0-only under the repository LICENSE. The
+unchanged upstream 4-chlorobenzylamine fixture retains its embedded public-domain
+declaration; its individual creator is not stated and is recorded as unknown.
+Reference vectors retain their parents' recorded rights declarations. Their
 per-file provenance, hashes, derivations and reference settings are recorded in
 `tests/fixtures/input/provenance.json`. Runtime archive wrappers and mutations
 retain their parent fixture's licence; the test describes the transformation.

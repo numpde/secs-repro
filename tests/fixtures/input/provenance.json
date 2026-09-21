@@ -1,6 +1,7 @@
 {
   "frontend_revision": "5ab78f61e9fb679f3f0b9823be5217ae250e213f",
   "reference_sources": {
+    "src/spectrum/__tests__/data/4-chlorobenzylamine.jdx": "9852cd6b851f83ab0c7e372ec9d800b72b0cd5aa54bec32e4e91fc92efcd11ff",
     "package-lock.json": "33f75513877322a49681aaacfc3609ffee3e616e4e085d1c3c9d31ecb915409b",
     "src/spectrum/readSpectrum.ts": "be754221bd152bd92cdf1f5762eda4cce566b0ac622817f5b57a3cc865aa3623",
     "src/spectrum/normalize.ts": "9a127bfd29bfea840ec93ae6132222ddbdf1f8e1c300f1f72f000a64c82676aa",
@@ -14,9 +15,25 @@
     "normalization": "normalizeSpectrum",
     "float32_cast": false
   },
-  "generator_sha256": "119db2906671f83bf8b48f8ffd65be31b182bb55b43a4739ffcebf3699722a0e",
+  "generator_sha256": "2dbed195df6871287bf8d0136ef6e4c0a2028b43769e1e153c1acff9ef92fb22",
   "exporter": "convert-to-jcamp@7.0.1 (MIT)",
   "files": [
+    {
+      "path": "upstream-4-chlorobenzylamine.jdx",
+      "sha256": "9852cd6b851f83ab0c7e372ec9d800b72b0cd5aa54bec32e4e91fc92efcd11ff",
+      "description": "Unchanged upstream synthetic 1H fixture; retains its embedded public-domain declaration",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": null,
+        "source_repository": "numpde/fork-of-elucidation.cheminfo.org",
+        "source_revision": "5ab78f61e9fb679f3f0b9823be5217ae250e213f",
+        "source_path": "src/spectrum/__tests__/data/4-chlorobenzylamine.jdx",
+        "origin_declaration": "elucidation.cheminfo.org test fixture",
+        "licence": "Public domain, as declared in the fixture",
+        "licence_text": "upstream-4-chlorobenzylamine.jdx: ##OWNER=public domain",
+        "basis": "Copied byte-for-byte; individual creator is not stated in the fixture"
+      }
+    },
     {
       "path": "proton.jdx",
       "sha256": "5ca3cf4be2aef92c1dbe0b4b259a740fc36bf29930581cd23439628b8cbb4e7d",
@@ -294,6 +311,23 @@
       }
     },
     {
+      "path": "upstream-4-chlorobenzylamine.jdx.reference.json",
+      "sha256": "b83058e890539340ac9a4a7e525348efb9538f9d2c702f9ef1e8c721967bfa59",
+      "description": "Pinned reference normalization of upstream-4-chlorobenzylamine.jdx",
+      "parent": "upstream-4-chlorobenzylamine.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": null,
+        "source_repository": "numpde/fork-of-elucidation.cheminfo.org",
+        "source_revision": "5ab78f61e9fb679f3f0b9823be5217ae250e213f",
+        "source_path": "src/spectrum/__tests__/data/4-chlorobenzylamine.jdx",
+        "origin_declaration": "elucidation.cheminfo.org test fixture",
+        "licence": "Public domain, as declared in the fixture",
+        "licence_text": "upstream-4-chlorobenzylamine.jdx: ##OWNER=public domain",
+        "basis": "Derived by pinned reference normalization of upstream-4-chlorobenzylamine.jdx"
+      }
+    },
+    {
       "path": "proton.jdx.reference.json",
       "sha256": "f2ce0f7209e8a958fa5ab85aac93d92b3ea8c4de1750869c1470e0f23ed5a4aa",
       "description": "Pinned reference normalization of proton.jdx",
@@ -303,7 +337,7 @@
         "author": "secs-repro contributors",
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
-        "basis": "New synthetic test data; no experimental measurements copied"
+        "basis": "Derived by pinned reference normalization of proton.jdx"
       }
     },
     {
@@ -316,7 +350,7 @@
         "author": "secs-repro contributors",
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
-        "basis": "New synthetic test data; no experimental measurements copied"
+        "basis": "Derived by pinned reference normalization of alternate.jdx"
       }
     },
     {
@@ -329,7 +363,7 @@
         "author": "secs-repro contributors",
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
-        "basis": "New synthetic test data; no experimental measurements copied"
+        "basis": "Derived by pinned reference normalization of ascending.jdx"
       }
     },
     {
@@ -342,7 +376,7 @@
         "author": "secs-repro contributors",
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
-        "basis": "New synthetic test data; no experimental measurements copied"
+        "basis": "Derived by pinned reference normalization of linked.jdx"
       }
     },
     {
@@ -355,7 +389,7 @@
         "author": "secs-repro contributors",
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
-        "basis": "New synthetic test data; no experimental measurements copied"
+        "basis": "Derived by pinned reference normalization of encoded-fix.jdx"
       }
     },
     {
@@ -368,7 +402,7 @@
         "author": "secs-repro contributors",
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
-        "basis": "New synthetic test data; no experimental measurements copied"
+        "basis": "Derived by pinned reference normalization of encoded-sqz.jdx"
       }
     },
     {
@@ -381,7 +415,7 @@
         "author": "secs-repro contributors",
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
-        "basis": "New synthetic test data; no experimental measurements copied"
+        "basis": "Derived by pinned reference normalization of encoded-dif.jdx"
       }
     },
     {
@@ -394,7 +428,7 @@
         "author": "secs-repro contributors",
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
-        "basis": "New synthetic test data; no experimental measurements copied"
+        "basis": "Derived by pinned reference normalization of encoded-difdup.jdx"
       }
     },
     {
@@ -407,7 +441,7 @@
         "author": "secs-repro contributors",
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
-        "basis": "New synthetic test data; no experimental measurements copied"
+        "basis": "Derived by pinned reference normalization of encoded-pac.jdx"
       }
     },
     {
@@ -420,7 +454,7 @@
         "author": "secs-repro contributors",
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
-        "basis": "New synthetic test data; no experimental measurements copied"
+        "basis": "Derived by pinned reference normalization of complex.jdx"
       }
     },
     {
@@ -433,7 +467,7 @@
         "author": "secs-repro contributors",
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
-        "basis": "New synthetic test data; no experimental measurements copied"
+        "basis": "Derived by pinned reference normalization of fid.jdx"
       }
     }
   ]

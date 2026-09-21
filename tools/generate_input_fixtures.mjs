@@ -12,6 +12,7 @@ import { FileCollection } from '/opt/frontend/node_modules/file-collection/lib/i
 const revision = '5ab78f61e9fb679f3f0b9823be5217ae250e213f';
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const referenceSources = {
+  'src/spectrum/__tests__/data/4-chlorobenzylamine.jdx': '9852cd6b851f83ab0c7e372ec9d800b72b0cd5aa54bec32e4e91fc92efcd11ff',
   'package-lock.json': '33f75513877322a49681aaacfc3609ffee3e616e4e085d1c3c9d31ecb915409b',
   'src/spectrum/readSpectrum.ts': 'be754221bd152bd92cdf1f5762eda4cce566b0ac622817f5b57a3cc865aa3623',
   'src/spectrum/normalize.ts': '9a127bfd29bfea840ec93ae6132222ddbdf1f8e1c300f1f72f000a64c82676aa',
@@ -37,6 +38,18 @@ async function save(name, bytes, description, source = null, parent = null) {
       author: 'secs-repro contributors', licence: 'AGPL-3.0-only',
       licence_text: 'LICENSE', basis: 'New synthetic test data; no experimental measurements copied' } });
 }
+
+await save('upstream-4-chlorobenzylamine.jdx',
+  await readFile('/opt/frontend/src/spectrum/__tests__/data/4-chlorobenzylamine.jdx'),
+  'Unchanged upstream synthetic 1H fixture; retains its embedded public-domain declaration', {
+    generator: 'tools/generate_input_fixtures.mjs', author: null,
+    source_repository: 'numpde/fork-of-elucidation.cheminfo.org', source_revision: revision,
+    source_path: 'src/spectrum/__tests__/data/4-chlorobenzylamine.jdx',
+    origin_declaration: 'elucidation.cheminfo.org test fixture',
+    licence: 'Public domain, as declared in the fixture',
+    licence_text: 'upstream-4-chlorobenzylamine.jdx: ##OWNER=public domain',
+    basis: 'Copied byte-for-byte; individual creator is not stated in the fixture',
+  });
 
 function affn(axis, values, nucleus = '1H') {
   const header = `##TITLE=Synthetic two-peak spectrum
@@ -252,7 +265,8 @@ for (const record of [...files].filter((item) => item.path.endsWith('.jdx') && i
     first_ppm: loaded.data.x[0], last_ppm: loaded.data.x.at(-1),
     intensities: Array.from(normalized.spectrum.y) };
   await save(`${record.path}.reference.json`, JSON.stringify(reference) + '\n',
-    `Pinned reference normalization of ${record.path}`, null, record.path);
+    `Pinned reference normalization of ${record.path}`,
+    { ...record.origin, basis: `Derived by pinned reference normalization of ${record.path}` }, record.path);
 }
 await writeFile('/output/provenance.json', JSON.stringify({ frontend_revision: revision,
   reference_sources: referenceSources, processing: { autoProcessing: true, normalization: 'normalizeSpectrum', float32_cast: false },

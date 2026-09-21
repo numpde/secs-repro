@@ -72,7 +72,7 @@ class SelectedInputTests(WorkerCase):
         self.assert_encoder_input(self.reference('linked.jdx'))
 
     def test_reference_encodings_reach_the_encoder(self):
-        names = ['ascending.jdx', 'complex.jdx', 'mixed.nmrium']
+        names = ['ascending.jdx', 'complex.jdx', 'mixed.nmrium', 'upstream-4-chlorobenzylamine.jdx']
         names += [f'encoded-{encoding}.jdx' for encoding in ('fix', 'sqz', 'dif', 'difdup', 'pac')]
         for name in names:
             with self.subTest(fixture=name):
