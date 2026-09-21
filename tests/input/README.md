@@ -10,8 +10,10 @@ discovery and adversarial checks can run separately with
 `make test/input/scenarios` checks multi-input interactions at the scientific
 worker: an explicit formula alongside an unrelated structure, and correction
 followed by execution from a partial inventory. These are not API/GUI flows.
-Selection tests observe the tensor passed to a recording encoder through the
-real inference adapter. There is no checkpoint or index;
+Selection tests observe the prepared Float32 spectrum at the worker's inference
+port. One representative case continues through the real inference adapter to
+the model call, while a focused integration test owns normalization, training
+order and Torch conversion. There is no checkpoint or index;
 the current scientific package's eager imports require the existing verified
 MolFormer configuration/tokenizer cache. No model weights are loaded. This is
 a temporary import dependency, not a reason to mock scientific input handling.
@@ -121,16 +123,20 @@ The raw and processed synthetic signals are independent examples, not a claim
 that one was produced by processing the other.
 
 The corpus includes reference vectors for selection and preparation tests. This
-suite checks discovery, fixture integrity and exact selected model inputs.
+suite checks discovery, fixture integrity and exact prepared spectra at the
+worker's inference port.
 Reference comparisons use the existing lanes' one-Float32-ULP allowance.
-An adapter-only test checks the independently known alternate peak position
-without discovery; complete parsing/preparation checks still depend on discovery.
+One representative selection continues through the model adapter and checks an
+independently known peak position; the complete parsing and preparation matrix
+remains at the inference port.
 Adversarial tests check worker source rejection, operational-error propagation,
 partial discovery and misleading metadata. Instruction-like titles test parser
 facts; they do not establish resistance to prompt injection in a live interpreter.
 Reference generation does not prove all vendor variants work, and repeated
 failure at missing discovery does not exercise assertions later in a test.
-Scripted interpreter replies prove transport/orchestration, not judgment.
+The concrete Chat Completions contract lives under `input/adapters`; a future
+transport replaces that adapter contract rather than redefining scientific
+selection. Scripted interpreter replies prove transport/orchestration, not judgment.
 Real-LLM and deployed GUI/API qualification remain separate roadmap obligations.
 
 ## Coverage map and implementation handoff
@@ -144,7 +150,7 @@ This map names acceptance requirements, not working parser capabilities.
 | NMRium | Multiple nuclei, stored shift replay, native embedded resources, unresolved URL resources and observed no-fetch behavior |
 | MOL, SDF, SMILES, NMReDATA | Structure formula evidence, separate records, explicit annotation relationships, supplied counts/assignments, missing resources |
 | Multiple Uploads and archives | Order independence, exact member choices, duplicate bytes/names, separate namespaces, partial inventories |
-| Selection and preparation | Opaque selection identity, stale/removed sources, explicit formula/processing, unsuitable-data refusal, selected encoder tensors, FID magnitude reporting |
+| Selection and preparation | Opaque selection identity, stale/removed sources, explicit formula/processing, unsuitable-data refusal, selected prepared spectra, FID magnitude reporting |
 | Interpreter and scenarios | Analysis-kind authority, all admitted Upload metadata, selection-tool transport, explicit formula with unrelated evidence, correction before execution |
 | Source failures | Membership, missing/duplicate/nonregular members, archive limits, storage faults, localized malformed data and misleading metadata |
 

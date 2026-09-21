@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import Mock
 
 import numpy as np
 import torch
@@ -11,6 +12,31 @@ from secs.elucidation import GraphGAOptimizer, StaticCandidateSource
 from secs.elucidation.optimizers.base import OptimizerResult
 from secs_inference import SecsInference
 from secs_inference.elucidation import SecsElucidator
+
+
+class SecsInferenceAdapterTest(unittest.TestCase):
+    def test_spectrum_adapter_normalizes_and_reverses_into_model_order(self):
+        model = Mock(encode_modality=Mock(
+            return_value=torch.tensor([[3., 4.]], dtype=torch.bfloat16)))
+        inference = SecsInference(
+            model, None, torch.device('cpu'), torch.float32, 10_000, 1, 1)
+        spectrum = np.zeros(10_000, dtype=np.float32)
+        spectrum[1_000], spectrum[2_000] = 2, 4
+
+        embedding = inference.embed_spectrum(spectrum)
+
+        model.encode_modality.assert_called_once()
+        call = model.encode_modality.call_args
+        self.assertEqual(call.kwargs, {'modality': 'h_nmr'})
+        tensor = call.args[0]
+        self.assertEqual(tuple(tensor.shape), (1, 1, 10_000))
+        self.assertEqual(tensor.dtype, torch.float32)
+        self.assertTrue(torch.isfinite(tensor).all())
+        np.testing.assert_array_equal(
+            tensor.numpy().reshape(-1), (spectrum / 4)[::-1])
+        self.assertEqual(embedding.shape, (2,))
+        self.assertEqual(embedding.dtype, np.float32)
+        np.testing.assert_array_equal(embedding, np.array([3, 4], dtype=np.float32))
 
 
 class SecsInferenceLoadTest(unittest.TestCase):

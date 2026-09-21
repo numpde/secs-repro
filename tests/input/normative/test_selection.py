@@ -1,4 +1,4 @@
-"""An exact choice reaches the encoder without first-file or first-block substitution."""
+"""An exact choice reaches scientific inference without source substitution."""
 
 import json
 from zipfile import ZipFile
@@ -16,11 +16,8 @@ from input.helpers import FIXTURES, WorkerCase
 class SelectedInputTests(WorkerCase):
     def setUp(self):
         super().setUp()
-        self.model = Mock(encode_modality=Mock(return_value=torch.tensor([[1., 0.]])))
-        adapter = SecsInference(self.model, None, torch.device('cpu'), torch.float32, 10000, 1, 1)
-        self.inference = Mock(wraps=adapter)
+        self.inference.embed_spectrum.return_value = np.array([1., 0.], dtype=np.float32)
         self.candidates = Mock(wraps=StaticCandidateSource([]))
-        self.worker.inference = self.inference
         self.worker.candidates = self.candidates
 
     def analyse(self, representation, processing='as_stored'):
@@ -33,20 +30,17 @@ class SelectedInputTests(WorkerCase):
         return np.asarray(document['intensities'], dtype=np.float32)
 
     def reset_observations(self):
-        self.model.reset_mock()
         self.inference.reset_mock()
         self.candidates.reset_mock()
 
-    def assert_encoder_input(self, reference):
-        self.model.encode_modality.assert_called_once()
-        call = self.model.encode_modality.call_args
-        self.assertEqual(call.kwargs, {'modality': 'h_nmr'})
-        tensor = call.args[0]
-        self.assertEqual(tuple(tensor.shape), (1, 1, 10000))
-        self.assertEqual(tensor.dtype, torch.float32)
-        self.assertTrue(torch.isfinite(tensor).all())
+    def assert_prepared_spectrum(self, reference):
+        self.inference.embed_spectrum.assert_called_once()
+        spectrum = self.inference.embed_spectrum.call_args.args[0]
+        self.assertEqual(spectrum.shape, (10000,))
+        self.assertEqual(spectrum.dtype, np.float32)
+        self.assertTrue(np.isfinite(spectrum).all())
         # Match the existing reference lanes' one-Float32-ULP allowance.
-        np.testing.assert_array_max_ulp(tensor.cpu().numpy().reshape(-1), reference[::-1], maxulp=1)
+        np.testing.assert_array_max_ulp(spectrum, reference, maxulp=1)
 
     def test_upload_order_cannot_replace_the_selected_proton_spectrum(self):
         references = {name: self.reference(name) for name in ('proton.jdx', 'alternate.jdx')}
@@ -61,18 +55,18 @@ class SelectedInputTests(WorkerCase):
                     self.reset_observations()
                     response = self.analyse(choices[name])
                     self.assertEqual(response['outcome'], 'no_starting_candidates')
-                    self.assert_encoder_input(references[name])
+                    self.assert_prepared_spectrum(references[name])
             self.files.clear()
 
-    def test_selected_link_block_reaches_encoder(self):
+    def test_selected_link_block_reaches_inference(self):
         self.upload('linked.jdx')
         facts = self.discover()
         self.assertEqual(len(facts['representations']), 2)
         response = self.analyse(self.one(facts))
         self.assertEqual(response['outcome'], 'no_starting_candidates')
-        self.assert_encoder_input(self.reference('linked.jdx'))
+        self.assert_prepared_spectrum(self.reference('linked.jdx'))
 
-    def test_reference_encodings_reach_the_encoder(self):
+    def test_reference_encodings_reach_inference(self):
         names = ['ascending.jdx', 'complex.jdx', 'mixed.nmrium', 'upstream-4-chlorobenzylamine.jdx']
         names += [f'encoded-{encoding}.jdx' for encoding in ('fix', 'sqz', 'dif', 'difdup', 'pac')]
         for name in names:
@@ -81,7 +75,7 @@ class SelectedInputTests(WorkerCase):
                 self.upload(name)
                 response = self.analyse(self.one(self.discover()))
                 self.assertEqual(response['outcome'], 'no_starting_candidates')
-                self.assert_encoder_input(self.reference('proton.jdx' if name == 'mixed.nmrium' else name))
+                self.assert_prepared_spectrum(self.reference('proton.jdx' if name == 'mixed.nmrium' else name))
 
     def test_explicit_fid_processing_matches_reference(self):
         for name, magnitude in (('fid.jdx', False), ('fid-magnitude.jdx', True)):
@@ -93,7 +87,7 @@ class SelectedInputTests(WorkerCase):
                 self.upload(name)
                 response = self.analyse(self.one(self.discover(), 'fid'), processing='auto')
                 self.assertEqual(response['outcome'], 'no_starting_candidates')
-                self.assert_encoder_input(np.asarray(reference['intensities'], dtype=np.float32))
+                self.assert_prepared_spectrum(np.asarray(reference['intensities'], dtype=np.float32))
                 preparation = response['analysis']['preparation']
                 self.assertIs(preparation['from_fid'], True)
                 self.assertIs(preparation['magnitude'], magnitude)
@@ -121,22 +115,29 @@ class SelectedInputTests(WorkerCase):
                     self.assertEqual(selected['sources'], [{'upload_ref': 'upload:sample', 'member': None}])
                 response = self.analyse(selected)
                 self.assertEqual(response['outcome'], 'no_starting_candidates')
-                self.assert_encoder_input(self.reference(name))
-                tensor = self.model.encode_modality.call_args.args[0].numpy().reshape(-1)
-                peak_ppm = 10 - int(np.argmax(tensor)) * 12 / 9999
+                self.assert_prepared_spectrum(self.reference(name))
+                spectrum = self.inference.embed_spectrum.call_args.args[0]
+                peak_ppm = -2 + int(np.argmax(spectrum)) * 12 / 9999
                 self.assertAlmostEqual(peak_ppm, 3.03125, delta=.002)
 
-    def test_annotations_do_not_change_the_selected_spectrums_encoder_input(self):
+    def test_annotations_do_not_change_the_selected_prepared_spectrum(self):
         self.archive([(f'sample/{name}', (FIXTURES / name).read_bytes())
                       for name in ('annotations.sdf', 'proton.jdx')])
         response = self.analyse(self.one(self.discover()))
         self.assertEqual(response['outcome'], 'no_starting_candidates')
-        self.assert_encoder_input(self.reference('proton.jdx'))
+        self.assert_prepared_spectrum(self.reference('proton.jdx'))
 
-    def test_encoder_adapter_uses_training_order_without_discovery(self):
+    def test_one_selected_spectrum_reaches_the_model_adapter(self):
+        model = Mock(encode_modality=Mock(return_value=torch.tensor([[1., 0.]])))
+        self.inference = Mock(wraps=SecsInference(
+            model, None, torch.device('cpu'), torch.float32, 10000, 1, 1))
+        self.worker.inference = self.inference
         reference = self.reference('alternate.jdx')
-        self.inference.embed_spectrum(reference)
-        self.assert_encoder_input(reference)
-        tensor = self.model.encode_modality.call_args.args[0].numpy().reshape(-1)
-        peak_ppm = 10 - int(np.argmax(tensor)) * 12 / 9999
+        self.upload('alternate.jdx')
+        response = self.analyse(self.one(self.discover()))
+        self.assertEqual(response['outcome'], 'no_starting_candidates')
+        self.assert_prepared_spectrum(reference)
+        model.encode_modality.assert_called_once()
+        spectrum = self.inference.embed_spectrum.call_args.args[0]
+        peak_ppm = -2 + int(np.argmax(spectrum)) * 12 / 9999
         self.assertAlmostEqual(peak_ppm, 4, delta=.002)

@@ -1,4 +1,4 @@
-"""The interpreter receives the admitted offering and every Upload as evidence."""
+"""The Chat Completions adapter carries the omni-parser selection contract."""
 
 from copy import deepcopy
 from dataclasses import asdict
