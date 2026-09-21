@@ -55,6 +55,19 @@ class DiscoveryFailureTests(WorkerCase):
             facts, {'upload_ref': 'upload:sample', 'member': None},
             'incomplete', 'spectrum data')
 
+    def test_empty_imaginary_ntuples_page_is_a_localized_input_issue(self):
+        contents = (FIXTURES / 'complex.jdx').read_text()
+        marker = '##DATA TABLE= (X++(I..I)), XYDATA\n'
+        start = contents.index(marker) + len(marker)
+        end = contents.index('##END NTUPLES=', start)
+        self.upload('empty-imaginary.jdx', contents=contents[:start] + contents[end:])
+        facts = self.discover()
+        self.assertFalse(facts['complete'])
+        self.assertEqual(facts['representations'], [])
+        self.assert_issue_mentions(
+            facts, {'upload_ref': 'upload:sample', 'member': None},
+            'malformed', 'spectrum data')
+
     def test_corrupt_sibling_does_not_erase_the_usable_spectrum(self):
         contents = (FIXTURES / 'proton.jdx').read_text()
         self.assertEqual(contents.count('##XYDATA=(X++(Y..Y))'), 1)

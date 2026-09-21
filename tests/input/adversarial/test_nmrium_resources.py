@@ -2,12 +2,17 @@
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+from pathlib import Path
 import subprocess
 import sys
 from threading import Thread
+from unittest.mock import patch
 from zipfile import ZipFile
 
-from input.helpers import FIXTURES, WorkerCase
+from input.helpers import ATTEMPT_REF, FIXTURES, WorkerCase
+from secs_inference.provider.input_adapter import InputAdapter
+from secs_inference.provider.input_operations import SourceRef
+from secs_inference.provider.source_access import SourceAccess
 
 
 class NmriumResourceTests(WorkerCase):
@@ -65,6 +70,27 @@ class NmriumResourceTests(WorkerCase):
             'experiment/state.json',
             'experiment/data/authored-proton/proton.jdx',
         })
+
+    def test_exact_native_state_and_resources_share_one_expanded_byte_budget(self):
+        with ZipFile(FIXTURES / 'resource-embedded.nmrium.zip') as source:
+            state = source.read('state.json')
+            proton = source.read('data/authored-proton/proton.jdx')
+        self.archive([
+            ('state.json', state),
+            ('data/authored-proton/proton.jdx', proton),
+        ])
+        access = SourceAccess({'upload:sample': Path(self.files['upload:sample'])}, self.root,
+                              max_scope_bytes=len(state) + len(proton) - 1)
+        with patch.object(access, 'read', wraps=access.read) as read:
+            facts = InputAdapter(token_key=b'test' * 8).discover(
+                access, ATTEMPT_REF, SourceRef('upload:sample', 'state.json'))
+        self.assertFalse(facts['complete'])
+        resource = {'upload_ref': 'upload:sample', 'member': 'data/authored-proton/proton.jdx'}
+        self.assert_issue_mentions(facts, resource, 'expanded members', 'inspection limit')
+        self.assertFalse(any(resource in item['sources'] for item in facts['representations']))
+        self.assertEqual([call.args[0] for call in read.call_args_list],
+                         [SourceRef('upload:sample', 'state.json')],
+                         'The over-budget companion must be rejected before decompression')
 
     def test_inspection_does_not_fetch_a_reachable_url_resource(self):
         connections = []
