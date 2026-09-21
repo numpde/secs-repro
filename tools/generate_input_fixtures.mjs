@@ -174,10 +174,53 @@ for (let i = 0; i < 64; i++) {
 await save('varian-procpar.txt', procpar, 'Authored Varian procpar for a 64-complex-point 1H FID');
 await save('varian-fid.bin', varianFid, 'One-block big-endian Float32 FID; exp(-i/16) exp(2pi sqrt(-1) i/8)');
 
+const jeol = Buffer.alloc(5120);
+jeol.write('JEOL.NMR', 0, 'ascii');
+// One-dimensional, big-endian, complex Float64 data; axis unit 26 is ppm.
+[0, 1, 0, 0, 1, 1, 1, 20].forEach((value, i) => { jeol[8 + i] = value; });
+jeol[24] = 3;
+jeol[33] = 26;
+jeol.write('Synthetic processed proton spectrum', 48, 'ascii');
+jeol.writeUInt32BE(64, 176);
+jeol.writeUInt32BE(63, 240);
+jeol.writeDoubleBE(10, 272);
+jeol.write('secs-repro synthetic fixture; AGPL-3.0-only', 552, 'ascii');
+jeol.write('1H', 808, 'ascii');
+jeol.writeDoubleBE(400, 1064);
+jeol[1192] = 1;
+jeol.writeUInt32BE(2048, 1212);
+jeol.writeUInt32BE(4096, 1284);
+jeol.writeUInt32BE(1024, 1292);
+const jeolParameters = [
+  ['x_domain', '1H', 0], ['field_strength', 9.394637, 31], ['x_freq', 400000000, 13],
+  ['x_sweep', 4000, 13], ['x_sweep_clipped', 4000, 13], ['x_offset', 0, 26],
+  ['x_acq_time', .016, 28], ['x_points', 64, 25], ['solvent', 'DMSO', 0],
+  ['actual_start_time', 1704067200, 28], ['x90', .00001, 28],
+  ['relaxation_delay', 1, 28], ['temp_get', 298, 14],
+];
+// Parameter table: 16-byte header followed by 64-byte records.
+const jeolParameterBytes = 16 + 64 * jeolParameters.length;
+jeol.writeUInt32BE(jeolParameterBytes, 1216);
+[64, 0, jeolParameters.length - 1, jeolParameterBytes].forEach((value, i) => jeol.writeUInt32BE(value, 2048 + i * 4));
+jeolParameters.forEach(([name, value, unit], i) => {
+  const offset = 2064 + i * 64;
+  jeol[offset + 7] = unit;
+  if (typeof value === 'string') {
+    jeol.write(value.padEnd(16), offset + 16, 'ascii');
+  } else {
+    jeol.writeDoubleBE(value, offset + 16);
+    jeol.writeUInt32BE(2, offset + 32);
+  }
+  jeol.write(name.padEnd(28), offset + 36, 'ascii');
+});
+for (let i = 0; i < 64; i++) jeol.writeDoubleBE(Math.exp(-(((i - 20) / 3) ** 2)), 4096 + i * 8);
+await save('synthetic.jdf', jeol, 'Authored minimal reference-compatible JEOL processed spectrum: 64 Float64 Gaussian samples plus zero imaginary channel; not instrument qualification');
+
 for (const [format, members, isFid] of [
   ['Bruker processed', [['sample/1/acqus', acqus], ['sample/1/pdata/1/procs', procs], ['sample/1/pdata/1/1r', brukerReal]], false],
   ['Bruker FID', [['sample/1/acqus', acqus], ['sample/1/fid', brukerFid]], true],
   ['Varian FID', [['sample/procpar', procpar], ['sample/fid', varianFid]], true],
+  ['JEOL processed', [['sample/synthetic.jdf', jeol]], false],
 ]) {
   const collection = new FileCollection();
   const files = members.map(([path, bytes]) => {
