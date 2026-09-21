@@ -4,12 +4,20 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import unittest
+from zipfile import ZipFile
 
 
 ROOT = Path('/fixtures/input')
 
 
 class FixtureProvenanceTests(unittest.TestCase):
+    def assert_origin(self, origin):
+        self.assertIn('author', origin)
+        author = origin['author']
+        self.assertTrue(author is None or isinstance(author, str) and author.strip())
+        for field in ('generator', 'licence', 'licence_text', 'basis'):
+            self.assertTrue(origin[field].strip(), field)
+
     def setUp(self):
         self.document = json.loads((ROOT / 'provenance.json').read_text())
         self.records = self.document['files']
@@ -26,15 +34,28 @@ class FixtureProvenanceTests(unittest.TestCase):
             with self.subTest(fixture=item['path']):
                 self.assertEqual(sha256((ROOT / item['path']).read_bytes()).hexdigest(), item['sha256'])
                 self.assertTrue(item['description'].strip())
-                self.assertIn('author', item['origin'])
-                author = item['origin']['author']
-                self.assertTrue(author is None or isinstance(author, str) and author.strip())
-                for field in ('generator', 'licence', 'licence_text', 'basis'):
-                    self.assertTrue(item['origin'][field].strip(), field)
+                self.assert_origin(item['origin'])
 
     def test_generator_is_the_one_that_produced_the_corpus(self):
-        self.assertEqual(sha256(Path('/generator.mjs').read_bytes()).hexdigest(),
-                         self.document['generator_sha256'], 'Explicitly regenerate after changing the fixture producer')
+        sources = self.document['generator_sources']
+        self.assertEqual(set(sources), {'tools/generate_input_fixtures.mjs', 'tools/generate_nmrium_fixtures.mjs'})
+        for path, digest in sources.items():
+            self.assertEqual(sha256((Path('/') / path).read_bytes()).hexdigest(), digest,
+                             'Explicitly regenerate after changing a fixture producer')
+
+    def test_native_archive_members_have_complete_provenance(self):
+        records = {item['path']: item for item in self.records}
+        archives = [item for item in self.records if item['path'].endswith('.zip')]
+        self.assertTrue(archives, 'The native NMRium resource archive must remain in the corpus')
+        for item in archives:
+            with self.subTest(archive=item['path']), ZipFile(ROOT / item['path']) as archive:
+                members = item['members']
+                self.assertCountEqual(archive.namelist(), [member['path'] for member in members])
+                self.assertEqual(len(members), len({member['path'] for member in members}))
+                for member in members:
+                    self.assertEqual(sha256(archive.read(member['path'])).hexdigest(), member['sha256'])
+                    self.assertIn(member['parent'], records)
+                    self.assert_origin(member['origin'])
 
     def test_imported_specimens_retain_the_pinned_source_bytes(self):
         imported = [item for item in self.records if 'source_path' in item['origin'] and 'parent' not in item]

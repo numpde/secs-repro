@@ -24,7 +24,8 @@ test/input test/input/normative test/input/adversarial test/input/scenarios:
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/input",dst=/tests/input,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/fixtures/input",dst=/fixtures/input,readonly \
-		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/generate_input_fixtures.mjs",dst=/generator.mjs,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/generate_input_fixtures.mjs",dst=/tools/generate_input_fixtures.mjs,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/generate_nmrium_fixtures.mjs",dst=/tools/generate_nmrium_fixtures.mjs,readonly \
 		--entrypoint /bin/sh "$$cpu_packages_image" \
 		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && python -m unittest discover -v -t /tests -s "$(INPUT_TEST_START)" -p "test_*.py"'
 

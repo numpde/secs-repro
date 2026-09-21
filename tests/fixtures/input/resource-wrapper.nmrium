@@ -1,0 +1,94 @@
+{
+  "version": 21,
+  "plugins": {
+    "@zakodium/nmrium-core-plugins#NMReDATALoaderPlugin": {
+      "id": "@zakodium/nmrium-core-plugins#NMReDATALoaderPlugin",
+      "version": 1
+    },
+    "@zakodium/nmrium-core-plugins#VarianLoaderPlugin": {
+      "id": "@zakodium/nmrium-core-plugins#VarianLoaderPlugin",
+      "version": 1
+    },
+    "@zakodium/nmrium-core-plugins#BrukerLoaderPlugin": {
+      "id": "@zakodium/nmrium-core-plugins#BrukerLoaderPlugin",
+      "version": 1
+    },
+    "@zakodium/nmrium-core-plugins#JCAMPDXLoaderPlugin": {
+      "id": "@zakodium/nmrium-core-plugins#JCAMPDXLoaderPlugin",
+      "version": 1
+    },
+    "@zakodium/nmrium-core-plugins#MolfileLoaderPlugin": {
+      "id": "@zakodium/nmrium-core-plugins#MolfileLoaderPlugin",
+      "version": 1
+    },
+    "@zakodium/nmrium-core-plugins#SDFLoaderPlugin": {
+      "id": "@zakodium/nmrium-core-plugins#SDFLoaderPlugin",
+      "version": 1
+    },
+    "@zakodium/nmrium-core-plugins#SMILESLoaderPlugin": {
+      "id": "@zakodium/nmrium-core-plugins#SMILESLoaderPlugin",
+      "version": 1
+    },
+    "@zakodium/nmrium-core-plugins#JEOLLoaderPlugin": {
+      "id": "@zakodium/nmrium-core-plugins#JEOLLoaderPlugin",
+      "version": 1
+    },
+    "@zakodium/nmrium-core-plugins#Spectrum1DProcessingsPlugin": {
+      "id": "@zakodium/nmrium-core-plugins#Spectrum1DProcessingsPlugin",
+      "version": 1
+    }
+  },
+  "data": {
+    "spectra": [
+      {
+        "id": "authored-spectrum",
+        "filters": [],
+        "display": {
+          "isVisible": true,
+          "isPeaksMarkersVisible": true,
+          "isRealSpectrumVisible": true,
+          "isVisibleInDomain": true
+        },
+        "peaks": {
+          "values": [],
+          "options": {}
+        },
+        "ranges": {
+          "values": [],
+          "options": {
+            "sum": null,
+            "isSumConstant": true,
+            "sumAuto": true
+          }
+        },
+        "integrals": {
+          "values": [],
+          "options": {}
+        },
+        "selector": {
+          "files": [
+            "proton.jdx"
+          ],
+          "jcamp": {
+            "index": 0,
+            "dataSelection": "both"
+          },
+          "root": "authored-proton"
+        },
+        "processings": []
+      }
+    ],
+    "molecules": [],
+    "sources": [
+      {
+        "baseURL": "https://fixture.invalid/",
+        "entries": [
+          {
+            "relativePath": "proton.jdx"
+          }
+        ],
+        "id": "authored-proton"
+      }
+    ]
+  }
+}
