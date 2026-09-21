@@ -2,6 +2,29 @@
 .PHONY: test/integration/challenges/bruker
 .PHONY: test/integration/bruker-reference test/provider test/provider/diagnostics
 .PHONY: test/integration/jcamp-reference test/qualification-tools
+.PHONY: test/input test/input/normative
+
+test/input: private INPUT_TEST_START := /tests/input
+test/input/normative: private INPUT_TEST_START := /tests/input/normative
+test/input test/input/normative:
+	cpu_packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
+	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")
+	$(DOCKER) run --rm --init --pull never --network none --read-only \
+		--cap-drop ALL --security-opt no-new-privileges:true \
+		--pids-limit 64 --cpus 2 --memory 2g --memory-swap 2g \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=128m,mode=1777 \
+		--tmpfs /modules:rw,nosuid,nodev,noexec,size=16m,mode=1777 \
+		--env PYTHONDONTWRITEBYTECODE=1 \
+		--env HF_HUB_CACHE=/cache/hub --env HF_HUB_OFFLINE=1 \
+		--env TRANSFORMERS_OFFLINE=1 --env HF_MODULES_CACHE=/modules \
+		--mount type=bind,src="$$cache_dir",dst=/cache,readonly \
+		--mount type=bind,src="$(MOLFORMER_LOCK)",dst=/input/molformer.lock.toml,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/input",dst=/tests/input,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/fixtures/input",dst=/fixtures/input,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/generate_input_fixtures.mjs",dst=/generator.mjs,readonly \
+		--entrypoint /bin/sh "$$cpu_packages_image" \
+		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && python -m unittest discover -v -t /tests -s "$(INPUT_TEST_START)" -p "test_*.py"'
 
 test/integration:
 	@if test "$(HOST_UID)" -eq 0; then

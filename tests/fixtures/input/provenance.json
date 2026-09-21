@@ -1,0 +1,331 @@
+{
+  "frontend_revision": "5ab78f61e9fb679f3f0b9823be5217ae250e213f",
+  "reference_sources": {
+    "package-lock.json": "33f75513877322a49681aaacfc3609ffee3e616e4e085d1c3c9d31ecb915409b",
+    "src/spectrum/readSpectrum.ts": "be754221bd152bd92cdf1f5762eda4cce566b0ac622817f5b57a3cc865aa3623",
+    "src/spectrum/normalize.ts": "9a127bfd29bfea840ec93ae6132222ddbdf1f8e1c300f1f72f000a64c82676aa",
+    "src/spectrum/phaseSpectrum.ts": "4d485bc4aee0759ae9c41fbbe407b3d85b24f29483b36b68cff9a5851edd2427",
+    "src/spectrum/grid.ts": "f157c4855a8c2e56332c3105d3b3c098ec02d80a17cca7093078299a78407c98",
+    "src/spectrum/phaseSearch.ts": "f661b4b89800eec5083b6e2a789a297b8f3b29f615fdfe0fa0c2affe541ea792",
+    "src/spectrum/integral.ts": "14f998d63e16417a3daad245251c9e30b4858169cb95257fd2c60704d4e9c042"
+  },
+  "processing": {
+    "autoProcessing": true,
+    "normalization": "normalizeSpectrum",
+    "float32_cast": false
+  },
+  "generator_sha256": "a3901ef0f08cc3420d4ccd8ef1b59171dcbcde825e8521b75bb3532f7e4e1697",
+  "exporter": "convert-to-jcamp@7.0.1 (MIT)",
+  "files": [
+    {
+      "path": "proton.jdx",
+      "sha256": "5ca3cf4be2aef92c1dbe0b4b259a740fc36bf29930581cd23439628b8cbb4e7d",
+      "description": "257-point descending ppm spectrum; rounded Gaussian peaks at 2.03125 and 7 ppm",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "ascending.jdx",
+      "sha256": "4b40fdd62bb6ee13c2b528ac18d9354659bc95c7c31c7bdc34e50f009ad252c8",
+      "description": "Same sampled spectrum, ascending axis",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "carbon.jdx",
+      "sha256": "43f20115ff2f9a7718c339ce49078973c8487932d41abbae27b9bfa36a9113dc",
+      "description": "Same synthetic ordinates, explicitly carbon; not proton evidence",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "peaks.jdx",
+      "sha256": "f3ba8b26f10836b9a53f19338a08aa498a8bb83e7f98b8ff9fe02af27bce39b3",
+      "description": "Two authored peak positions, heights and width values; no integrated areas or assignments",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "linked.jdx",
+      "sha256": "3d3d280d8721bb32d9781f56bee828169fd68d884cae43a548d049cdecf5ae02",
+      "description": "LINK container of proton.jdx (block 1) and peaks.jdx (block 2)",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "encoded-fix.jdx",
+      "sha256": "d6152afc8df5710f1c6a1c01b8bc42e824c2f33522ef156d0b6c2cf123b1fefe",
+      "description": "Same analytic signal exported by convert-to-jcamp 7.0.1 as FIX, Hz axis",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "encoded-sqz.jdx",
+      "sha256": "61b9553a59595d1b0cb22f8600efd8475f1bf5454cc9394a478ccd86fc4587cd",
+      "description": "Same analytic signal exported by convert-to-jcamp 7.0.1 as SQZ, Hz axis",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "encoded-dif.jdx",
+      "sha256": "ee6961847f13f999b8474cdc676c94b70daa6851f17364ebd76784ab0f982a92",
+      "description": "Same analytic signal exported by convert-to-jcamp 7.0.1 as DIF, Hz axis",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "encoded-difdup.jdx",
+      "sha256": "d1a47ae896e443235151415401fa8e81802dd50399d338812c6f75d3c550d059",
+      "description": "Same analytic signal exported by convert-to-jcamp 7.0.1 as DIFDUP, Hz axis",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "encoded-pac.jdx",
+      "sha256": "c0a59507d9046ac2377cfd840430d6681aad20fced13644597b026a8d6ac73ec",
+      "description": "Same analytic signal exported by convert-to-jcamp 7.0.1 as PAC, Hz axis",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "complex.jdx",
+      "sha256": "6762f492495546eca3c735f45f937d904e56d7a09392cdc9df5fa7d00e6ed0db",
+      "description": "NTUPLES real/imaginary spectrum; imaginary channel zero, not a second experiment",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "fid.jdx",
+      "sha256": "6cb7f4ad267371d37fc91bd4672f3d0d4b96a81475ed134cc3672059c3a433ff",
+      "description": "512 complex samples exp(-30t) exp(i 2pi 800t), dwell 1/4800 second; synthetic FID",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "ethanol.mol",
+      "sha256": "8cda2db06b542750f1a616c6f23374ab9725b26ed40aec5637a05797308c1a50",
+      "description": "Authored ethanol connection table; formula C2H6O is structural evidence, not spectrum identity",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "ethanol.sdf",
+      "sha256": "04aece165659045ee39f427af47b03a7273f3b69ee0ab961963911a24422e7a7",
+      "description": "Single-record SDF wrapper of ethanol.mol",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "mixed.nmrium",
+      "sha256": "01304ee308bc98bee7c45d70a8b7e04240f22def480bba3ce772f55a7ebc7fef",
+      "description": "NMRium serialization of authored proton/carbon spectra; data and processing preserved by reference core",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "proton.jdx.reference.json",
+      "sha256": "f2ce0f7209e8a958fa5ab85aac93d92b3ea8c4de1750869c1470e0f23ed5a4aa",
+      "description": "Pinned reference normalization of proton.jdx",
+      "parent": "proton.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "ascending.jdx.reference.json",
+      "sha256": "e4568b890e649f825b97a6fb6bd08e85a26f38194b55d4306f489924b3c4a346",
+      "description": "Pinned reference normalization of ascending.jdx",
+      "parent": "ascending.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "linked.jdx.reference.json",
+      "sha256": "b8e231ef84173a193fca3ab5301346420ae045e0106f716deb1f0fc92a33358d",
+      "description": "Pinned reference normalization of linked.jdx",
+      "parent": "linked.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "encoded-fix.jdx.reference.json",
+      "sha256": "0c570290c0e13514c1506faa99d1e7d90711d8fdfde8b83938117360606c9deb",
+      "description": "Pinned reference normalization of encoded-fix.jdx",
+      "parent": "encoded-fix.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "encoded-sqz.jdx.reference.json",
+      "sha256": "004df5410f37fe1e2b4a4bf69dcfbb0dd392b3fb7cc4cad33b7ccb9ad57da0c2",
+      "description": "Pinned reference normalization of encoded-sqz.jdx",
+      "parent": "encoded-sqz.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "encoded-dif.jdx.reference.json",
+      "sha256": "f79b49e026fd7dd37af1013b4224003ce1d0d16e17e024e212dd768948ad8149",
+      "description": "Pinned reference normalization of encoded-dif.jdx",
+      "parent": "encoded-dif.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "encoded-difdup.jdx.reference.json",
+      "sha256": "2e67fc12166717d6691fcd3de4c492bf78459cfb097e6621c0579fa09184c04e",
+      "description": "Pinned reference normalization of encoded-difdup.jdx",
+      "parent": "encoded-difdup.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "encoded-pac.jdx.reference.json",
+      "sha256": "f9c684490d0fb9167663ee579e043adfb4e00755fb58980f5c47e97cf225de87",
+      "description": "Pinned reference normalization of encoded-pac.jdx",
+      "parent": "encoded-pac.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "complex.jdx.reference.json",
+      "sha256": "61fb3c9ef41c977aaaae2458c3a3bb34a4939bde6644fc55e679d962cda16d02",
+      "description": "Pinned reference normalization of complex.jdx",
+      "parent": "complex.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "fid.jdx.reference.json",
+      "sha256": "e25654698ab9d1406dce231527ecd57415025b4ffee341bd9a08dea988258fdd",
+      "description": "Pinned reference normalization of fid.jdx",
+      "parent": "fid.jdx",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    }
+  ]
+}

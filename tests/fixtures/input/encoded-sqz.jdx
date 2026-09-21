@@ -1,0 +1,50 @@
+##TITLE=Synthetic SQZ
+##JCAMP-DX=6.00
+##DATA TYPE= NMR SPECTRUM
+##DATA CLASS= XYDATA
+##ORIGIN=
+##OWNER=secs-repro contributors; AGPL-3.0-only
+##.SHIFT REFERENCE=INTERNAL, undefined, 1, -800
+##.OBSERVE FREQUENCY=400
+##.OBSERVE NUCLEUS=1H
+##$OFFSET=10
+##$BF1=400
+##XUNITS=HZ
+##YUNITS=Arbitrary
+##XFACTOR=18.75
+##YFACTOR=1
+##DELTAX=-18.75
+##FIRSTX=4800
+##FIRSTY=0
+##LASTX=0
+##MAXY=10000
+##MINY=0
+##NPOINTS=257
+##XYDATA=(X++(Y..Y))
+256@@@@@@@@@@
+246@@@@@@@@@@
+236@@@@@@@@@@
+226@@@@@@@@@@
+216@@@@@@@@@@
+206@@@BGB5G8B16E22A101
+196B027C259D574E607F000E607D574C259B027A101
+186E22B16G8B5GB@@@@
+176@@@@@@@@@@
+166@@@@@@@@@@
+156@@@@@@@@@@
+146@@@@@@@@@@
+136@@@@@@@@@@
+126@@@@@@@@@@
+116@@@@@@@@@@
+106@@@@@@@@@@
+96@@AFD1B20H70B533E432H585
+86A0000H585E432B533H70B20D1FA@
+76@@@@@@@@@@
+66@@@@@@@@@@
+56@@@@@@@@@@
+46@@@@@@@@@@
+36@@@@@@@@@@
+26@@@@@@@@@@
+16@@@@@@@@@@
+6@@@@@@@
+##END=
