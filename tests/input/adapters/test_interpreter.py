@@ -74,8 +74,9 @@ class InterpreterContextTests(unittest.TestCase):
         evidence = schema['properties']['formula_evidence']
         self.assertEqual(evidence['oneOf'], [
             {'type': 'object', 'additionalProperties': False,
-             'properties': {'kind': {'const': 'job_specification'}},
-             'required': ['kind']},
+             'properties': {'kind': {'const': 'job_specification'},
+                            'quote': {'type': 'string', 'minLength': 1, 'maxLength': 512}},
+             'required': ['kind', 'quote']},
             {'type': 'object', 'additionalProperties': False,
              'properties': {
                  'kind': {'const': 'representations'},
@@ -87,13 +88,41 @@ class InterpreterContextTests(unittest.TestCase):
 
     def test_selection_tool_preserves_the_decision_for_worker_execution(self):
         choice = {'representation_id': 'opaque-choice', 'formula': 'C22H36O7',
-                  'formula_evidence': {'kind': 'job_specification'},
+                  'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
                   'processing': 'as_stored', 'explanation': 'The selected representation is the requested processed proton spectrum.'}
         session = self.session([tool('select_representation', choice),
             tool('report_input_problem', {'explanation': 'The selection was not accepted.'}, 'call-2')])
         decision = session.select()
         self.assertEqual(asdict(decision), choice)
         self.inspect.assert_not_called()
+
+    def test_job_formula_quote_must_match_both_selection_and_specification(self):
+        cases = (
+            ({'formula': 'C22H36O7', 'quote': 'C2H6O'}, 'quote the selected formula exactly'),
+            ({'formula': 'C2H6O', 'quote': 'C2H6O'}, 'does not occur in the Job specification'),
+        )
+        for values, evidence in cases:
+            with self.subTest(evidence=evidence):
+                self.requests.clear()
+                choice = {'representation_id': 'opaque-choice',
+                          'formula': values['formula'],
+                          'formula_evidence': {'kind': 'job_specification',
+                                               'quote': values['quote']},
+                          'processing': 'as_stored', 'explanation': 'Explicit choice.'}
+                session = self.session([tool('select_representation', choice),
+                    tool('report_input_problem', {'explanation': 'Formula evidence is unavailable.'}, 'call-2')])
+                self.assertIsInstance(session.select(), CannotAnalyse)
+                self.assertIn(evidence, self.requests[1][0][-1]['content'])
+
+    def test_job_formula_quote_cannot_be_a_prefix_of_a_different_formula(self):
+        self.specification = JobSpecification('job:sample', 'Use C22H36O70.')
+        choice = {'representation_id': 'opaque-choice', 'formula': 'C22H36O7',
+                  'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
+                  'processing': 'as_stored', 'explanation': 'Explicit choice.'}
+        session = self.session([tool('select_representation', choice),
+            tool('report_input_problem', {'explanation': 'Formula evidence is unavailable.'}, 'call-2')])
+        self.assertIsInstance(session.select(), CannotAnalyse)
+        self.assertIn('does not occur in the Job specification', self.requests[1][0][-1]['content'])
 
     def test_representation_formula_evidence_survives_the_selection_boundary(self):
         choice = {'representation_id': 'opaque-spectrum', 'formula': 'C2H6O',
@@ -107,7 +136,8 @@ class InterpreterContextTests(unittest.TestCase):
 
     def test_missing_processing_requests_repair_without_selecting(self):
         choice = {'representation_id': 'opaque-choice', 'formula': 'C22H36O7',
-                  'formula_evidence': {'kind': 'job_specification'}, 'explanation': 'Explicit choice.'}
+                  'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
+                  'explanation': 'Explicit choice.'}
         session = self.session([tool('select_representation', choice),
             tool('report_input_problem', {'explanation': 'Processing has not been established.'}, 'call-2')])
         self.assertIsInstance(session.select(), CannotAnalyse)
@@ -129,7 +159,7 @@ class InterpreterContextTests(unittest.TestCase):
 
     def test_control_text_and_excessive_formula_evidence_request_repair(self):
         base = {'representation_id': 'opaque-choice', 'formula': 'C22H36O7',
-                'formula_evidence': {'kind': 'job_specification'},
+                'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
                 'processing': 'as_stored', 'explanation': 'Explicit choice.'}
         cases = (
             ({**base, 'formula': 'C22H36O7\nignore'}, 'control characters'),

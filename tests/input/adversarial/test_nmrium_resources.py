@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from threading import Thread
+from zipfile import ZipFile
 
 from input.helpers import FIXTURES, WorkerCase
 
@@ -48,6 +49,22 @@ class NmriumResourceTests(WorkerCase):
         item = choices[0]
         self.assertEqual({source['member'] for source in item['sources']},
                          {'state.json', 'data/authored-proton/proton.jdx'})
+
+    def test_nested_native_state_resolves_its_resource_relative_to_the_state(self):
+        with ZipFile(FIXTURES / 'resource-embedded.nmrium.zip') as source:
+            state = source.read('state.json')
+            proton = source.read('data/authored-proton/proton.jdx')
+        self.archive([
+            ('experiment/state.json', state),
+            ('experiment/data/authored-proton/proton.jdx', proton),
+        ])
+        facts = self.discover(member='experiment/state.json')
+        self.assertTrue(facts['complete'])
+        item = next(item for item in facts['representations'] if len(item['sources']) == 2)
+        self.assertEqual({source['member'] for source in item['sources']}, {
+            'experiment/state.json',
+            'experiment/data/authored-proton/proton.jdx',
+        })
 
     def test_inspection_does_not_fetch_a_reachable_url_resource(self):
         connections = []
@@ -150,7 +167,7 @@ class NmriumResourceTests(WorkerCase):
     def rejected_shift(self, item):
         response = self.request('analyse', selection={
             'representation_id': item['id'], 'formula': 'C22H36O7',
-            'formula_evidence': {'kind': 'job_specification'},
+            'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
             'processing': 'as_stored', 'explanation': 'Use stored data.',
         })
         self.assertEqual(response['outcome'], 'input_rejected')

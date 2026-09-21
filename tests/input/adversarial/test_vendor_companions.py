@@ -44,6 +44,25 @@ class VendorCompanionTests(WorkerCase):
                 self.assertTrue(any(evidence in issue['reason'] for issue in facts['issues']))
                 self.files.clear()
 
+    def test_nonfinite_or_zero_vendor_metadata_is_a_localized_input_issue(self):
+        cases = (
+            ('processed-bruker', [('experiment/1r', (FIXTURES / 'bruker-1r.bin').read_bytes()),
+                                  ('experiment/procs', (FIXTURES / 'bruker-procs.txt').read_text().replace('##$SF= 400', '##$SF= nan').encode())]),
+            ('bruker-fid', [('experiment/fid', (FIXTURES / 'bruker-fid.bin').read_bytes()),
+                            ('experiment/acqus', (FIXTURES / 'bruker-acqus.txt').read_text().replace('##$SFO1= 400', '##$SFO1= 0').encode())]),
+            ('varian-fid', [('experiment/fid', (FIXTURES / 'varian-fid.bin').read_bytes()),
+                            ('experiment/procpar', (FIXTURES / 'varian-procpar.txt').read_text().replace('\n1 400\n', '\n1 nan\n', 1).encode())]),
+        )
+        for name, members in cases:
+            with self.subTest(name=name):
+                self.archive(members)
+                facts = self.discover()
+                self.assertFalse(facts['complete'])
+                self.assertEqual(facts['representations'], [])
+                self.assertTrue(any('malformed or incomplete' in issue['reason']
+                                    for issue in facts['issues']))
+                self.files.clear()
+
     def missing_procs(self, facts, source):
         self.assertFalse(facts['complete'])
         self.assert_issue_mentions(facts, source, 'unavailable', 'procs')

@@ -28,7 +28,7 @@ class SelectionRefusalTests(WorkerCase):
 
     def selection(self, identity):
         return {'representation_id': identity, 'formula': 'C22H36O7',
-                'formula_evidence': {'kind': 'job_specification'},
+                'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
                 'processing': 'as_stored', 'explanation': 'Explicit selection for SECS.'}
 
     def rejected(self, selection, *evidence):

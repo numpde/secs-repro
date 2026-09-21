@@ -33,7 +33,7 @@ def _selection(handler, files, directory, formula="C7H8ClN"):
     if len(choices) != 1:
         raise AssertionError(f"Expected one proton spectrum, found {len(choices)}")
     return {"representation_id": choices[0]["id"], "formula": formula,
-            "formula_evidence": {"kind": "job_specification"}, "processing": "as_stored",
+            "formula_evidence": {"kind": "job_specification", "quote": "C7H8ClN"}, "processing": "as_stored",
             "explanation": "The discovered representation is the requested proton spectrum."}
 
 
@@ -130,7 +130,7 @@ class SelectedSpectrumTests(unittest.TestCase):
                 formula = "C7H8ClN" if kind == "jcamp" else "C2H6O"
                 prepared = adapter.prepare(access, ATTEMPT, {
                     "representation_id": choice["id"], "formula": formula,
-                    "formula_evidence": {"kind": "job_specification"}, "processing": "as_stored",
+                    "formula_evidence": {"kind": "job_specification", "quote": formula}, "processing": "as_stored",
                     "explanation": "Explicit integration choice.",
                 })
                 self.assertEqual(prepared.values.shape, (10000,))
@@ -166,7 +166,7 @@ class SelectedSpectrumTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "program fault"):
                     adapter.prepare(access, ATTEMPT, {
                         "representation_id": choice["id"], "formula": "C7H8ClN",
-                        "formula_evidence": {"kind": "job_specification"},
+                        "formula_evidence": {"kind": "job_specification", "quote": "C7H8ClN"},
                         "processing": "as_stored", "explanation": "Direct proton spectrum.",
                     })
 

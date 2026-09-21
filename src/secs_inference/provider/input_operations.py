@@ -47,8 +47,11 @@ _EXPLANATION = {"type": "string", "minLength": 1, "maxLength": 2048}
 _FORMULA_EVIDENCE = {"oneOf": [
     {
         "type": "object", "additionalProperties": False,
-        "properties": {"kind": {"const": "job_specification"}},
-        "required": ["kind"],
+        "properties": {
+            "kind": {"const": "job_specification"},
+            "quote": {"type": "string", "minLength": 1, "maxLength": 512},
+        },
+        "required": ["kind", "quote"],
     },
     {
         "type": "object", "additionalProperties": False,
@@ -79,8 +82,8 @@ INPUT_OPERATIONS = (
     InputOperation(
         "select_representation",
         "Select one discovered representation for this analysis. Use its opaque identity exactly, "
-        "state the evidenced molecular formula, cite either the Job specification or discovered structure "
-        "representations as formula evidence, choose stored data or automatic FID processing, and explain the choice.",
+        "state the evidenced molecular formula, cite it either by quoting that exact formula from the Job specification "
+        "or by naming discovered structure representations, choose stored data or automatic FID processing, and explain the choice.",
         _arguments({
             "representation_id": _TEXT,
             "formula": _TEXT,

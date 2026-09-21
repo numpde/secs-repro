@@ -219,7 +219,7 @@ class WireScenario:
                                 if item["sources"] == [{"upload_ref": UPLOAD, "member": member}])
                 name, arguments = "select_representation", {
                     "representation_id": identity, "formula": "C7H8ClN",
-                    "formula_evidence": {"kind": "job_specification"}, "processing": "as_stored",
+                    "formula_evidence": {"kind": "job_specification", "quote": "C7H8ClN"}, "processing": "as_stored",
                     "explanation": "The selected experiment provides the proton spectrum for the supplied formula.",
                 }
             document = {"choices": [{"message": {"role": "assistant", "tool_calls": [{"id": f"call-{self.turns}", "type": "function",

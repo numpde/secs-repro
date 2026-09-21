@@ -35,7 +35,7 @@ def selection(*, representation_id="opaque-spectrum", formula="C2H6O",
     return tool("select_representation", {
         "representation_id": representation_id,
         "formula": formula,
-        "formula_evidence": evidence or {"kind": "job_specification"},
+        "formula_evidence": evidence or {"kind": "job_specification", "quote": formula},
         "processing": processing,
         "explanation": explanation,
     }, call_id)
@@ -360,7 +360,8 @@ class InterpreterTests(unittest.TestCase):
             explanation="This processed pair identifies proton data.",
         ))).select()
         self.assertEqual(decision, SelectedRepresentation(
-            "opaque-bruker-pair", "C2H6O", {"kind": "job_specification"},
+            "opaque-bruker-pair", "C2H6O",
+            {"kind": "job_specification", "quote": "C2H6O"},
             "as_stored", "This processed pair identifies proton data.",
         ))
 
@@ -397,7 +398,7 @@ class InterpreterTests(unittest.TestCase):
 
     def test_repair_feedback_distinguishes_unknown_tools_and_text_constraints(self):
         valid = {"representation_id": "opaque-spectrum", "formula": "C2H6O",
-                 "formula_evidence": {"kind": "job_specification"},
+                 "formula_evidence": {"kind": "job_specification", "quote": "C2H6O"},
                  "processing": "as_stored", "explanation": "Proton spectrum."}
         cases = [(tool("invent_reader", {}), "choose one of the advertised tools")]
         for value, reason in ((5, "formula field must be text"), ("", "formula field must not be empty"),

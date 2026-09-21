@@ -65,9 +65,11 @@ set; its spelling is not prescribed. These are internal discovery requirements,
 not the reference frontend's response schema. The execution
 request uses
 `selection={representation_id, formula, formula_evidence, processing, explanation}`.
-Formula evidence names either the admitted Job specification or one or more
-discovered structure representations. It makes the interpreter's source
-auditable; explanation prose cannot substitute for it.
+Formula evidence either quotes the selected formula exactly from the admitted
+Job specification or names one or more discovered structure representations.
+The controller verifies a Job quote against the exact specification text. This
+makes the interpreter's source auditable; explanation prose cannot substitute
+for it.
 There is no format-specific reader discriminator. The opaque identity must
 survive separate inspect/analyse calls for unchanged acquired sources; removed
 or changed sources invalidate it, and it is valid only in the Attempt that

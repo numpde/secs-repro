@@ -212,7 +212,12 @@ def _discover_nmrium(access: SourceAccess, reads: list[ReadSource]):
                 }
                 frequency = info.get("originFrequency", info.get("baseFrequency"))
                 if type(frequency) in {int, float}:
-                    metadata["frequency_mhz"] = frequency
+                    try:
+                        frequency = float(frequency)
+                    except (OverflowError, TypeError, ValueError):
+                        frequency = None
+                    if frequency is not None and np.isfinite(frequency) and frequency > 0:
+                        metadata["frequency_mhz"] = frequency
             elif type(spectrum_data) is dict and ({"x", "re"} & set(spectrum_data)):
                 issues.append({"source": source_document(read.source),
                                "reason": "Cannot inspect this NMRium state: dense spectrum arrays are malformed or have different lengths"})
@@ -222,7 +227,10 @@ def _discover_nmrium(access: SourceAccess, reads: list[ReadSource]):
                 files = selector.get("files")
                 root = selector.get("root")
                 relative = files[0] if type(files) is list and len(files) == 1 and type(files[0]) is str else None
-                member = f"data/{root}/{relative}" if read.source.member == "state.json" and root and relative else None
+                state_path = PurePosixPath(read.source.member) if read.source.member is not None else None
+                member = (str(state_path.parent / "data" / root / relative)
+                          if state_path is not None and state_path.name == "state.json"
+                          and type(root) is str and root and relative else None)
                 resource = by_member.get(member) if member else None
                 if resource is None:
                     name = _safe_label(relative) if relative else "the declared spectrum resource"
@@ -454,9 +462,12 @@ def _jcamp_metadata(labels: dict[str, str]) -> dict:
     frequency = _label(labels, "OBSERVEFREQUENCY")
     if frequency:
         try:
-            metadata["frequency_mhz"] = float(frequency)
-        except ValueError:
+            value = float(frequency)
+        except (OverflowError, ValueError):
             pass
+        else:
+            if np.isfinite(value) and value > 0:
+                metadata["frequency_mhz"] = value
     return metadata
 
 def _cross_reference(labels: dict[str, str]) -> str:
@@ -476,7 +487,7 @@ def _bruker_metadata(contents: bytes) -> dict | None:
         frequency = float(_label(labels, "$SF"))
     except ValueError:
         return None
-    if not text or points < 2:
+    if not text or points < 2 or not np.isfinite(frequency) or frequency <= 0:
         return None
     return {"dimension": dimension, "nucleus": nucleus or None,
             "points": points, "frequency_mhz": frequency}
@@ -490,10 +501,12 @@ def _bruker_fid_metadata(contents: bytes) -> dict | None:
         sweep = float(_label(labels, "$SW"))
         center = float(_label(labels, "$O1")) / frequency
         group_delay = float(_label(labels, "$GRPDLY"))
-    except ValueError:
+    except (ValueError, ZeroDivisionError):
         return None
     nucleus = _label(labels, "$NUC1").strip("<> ").replace("H1", "1H")
-    if points < 2:
+    if (points < 2 or not all(np.isfinite(value) for value in
+                              (frequency, sweep, center, group_delay))
+            or frequency <= 0 or sweep <= 0):
         return None
     return {"dimension": dimension, "nucleus": nucleus or None,
             "points": points, "frequency_mhz": frequency,
@@ -524,7 +537,7 @@ def _process_bruker_fid(data: bytes, parameters: bytes):
         dtype = {(0, 0): "<i4", (0, 1): ">i4", (2, 0): "<f8", (2, 1): ">f8"}[
             (dtype_code, byte_order)
         ]
-    except (KeyError, ValueError) as error:
+    except (KeyError, ValueError, ZeroDivisionError) as error:
         raise SpectrumReadError("Cannot process this Bruker FID because its acquisition parameters are unsupported or incomplete") from error
     if values < 4 or values % 2 or len(data) < values * np.dtype(dtype).itemsize:
         raise SpectrumReadError("Cannot process this Bruker FID because its complex trace is incomplete")
@@ -552,7 +565,11 @@ def _varian_fid_metadata(contents: bytes) -> dict | None:
         sweep_hz = float(values["sw"])
         reference_hz = float(values["rfl"]) - float(values["rfp"])
         reference_frequency = float(values["reffrq"])
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, ZeroDivisionError):
+        return None
+    if (points < 2 or not all(np.isfinite(value) for value in
+                              (frequency, sweep_hz, reference_hz, reference_frequency))
+            or frequency <= 0 or sweep_hz <= 0 or reference_frequency <= 0):
         return None
     nucleus = {"H1": "1H", "C13": "13C"}.get(values.get("tn"), values.get("tn"))
     center = (reference_hz - sweep_hz / 2) / frequency
@@ -631,6 +648,7 @@ def _discover_jeol(read: ReadSource):
                       "reason": "Cannot inspect this JEOL source: its stored axis is not in ppm"}
     if (points < 2 or data_offset + points * 8 > len(read.contents)
             or not all(np.isfinite(value) for value in (frequency, axis_start, axis_stop))
+            or frequency <= 0
             or axis_start == axis_stop):
         return None, {"source": source,
                       "reason": "Cannot inspect this JEOL source: incomplete spectrum data"}
