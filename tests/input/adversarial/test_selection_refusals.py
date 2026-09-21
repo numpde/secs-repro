@@ -5,6 +5,11 @@ from pathlib import Path
 
 
 class SelectionRefusalTests(WorkerCase):
+    def test_two_dimensional_proton_data_are_not_flattened_for_secs(self):
+        self.upload('synthetic-2d.jdx')
+        item = self.one(self.discover(), nucleus=None)
+        self.rejected(self.selection(item['id']), '2D', '1D')
+
     def selection(self, identity):
         return {'representation_id': identity, 'formula': 'C22H36O7',
                 'processing': 'as_stored', 'explanation': 'Explicit selection for SECS.'}
