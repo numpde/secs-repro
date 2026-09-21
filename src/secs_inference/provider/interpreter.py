@@ -42,6 +42,7 @@ class InterpretationSession:
     def __init__(self, chat, specification, uploads, inspect, *, deadline: float, max_turns: int = 8, check_running=None):
         self.chat = chat
         self.inspect = inspect
+        self.specification_text = specification.text
         self.deadline = deadline
         self.check_running = check_running
         self.remaining_turns = max_turns
@@ -97,6 +98,20 @@ class InterpretationSession:
                 self.rejections.append({"stage": "tool_call", "reason": str(error)})
                 self._feedback(call["id"], f"{error}. Correct this call.")
                 continue
+            if isinstance(action, SelectedRepresentation):
+                evidence = action.formula_evidence
+                if evidence.get("kind") == "job_specification":
+                    quote = evidence["quote"]
+                    if quote != action.formula:
+                        reason = "Job-specification formula evidence must quote the selected formula exactly"
+                        self.rejections.append({"stage": "tool_call", "reason": reason})
+                        self._feedback(call["id"], reason + ". Correct this call.")
+                        continue
+                    if not _contains_formula_quote(self.specification_text, quote):
+                        reason = "The quoted formula does not occur in the Job specification"
+                        self.rejections.append({"stage": "tool_call", "reason": reason})
+                        self._feedback(call["id"], reason + ". Correct this call.")
+                        continue
             if isinstance(action, SourceRef):
                 try:
                     facts = self.inspect(action)
@@ -162,7 +177,11 @@ def _decode_call(call: dict):
         return _decode_source(arguments["source"])
     if name == "select_representation":
         evidence = arguments["formula_evidence"]
-        if evidence == {"kind": "job_specification"}:
+        if (type(evidence) is dict and set(evidence) == {"kind", "quote"}
+                and evidence.get("kind") == "job_specification"
+                and type(evidence.get("quote")) is str
+                and 0 < len(evidence["quote"]) <= 512
+                and evidence["quote"].isprintable()):
             pass
         elif (type(evidence) is not dict or set(evidence) != {"kind", "representation_ids"}
               or evidence.get("kind") != "representations"
@@ -177,6 +196,19 @@ def _decode_call(call: dict):
             raise _InvalidArguments("The processing field must be as_stored or auto")
         return SelectedRepresentation(**arguments)
     raise AssertionError("No input handler is bound to the advertised operation")
+
+
+def _contains_formula_quote(specification: str, quote: str) -> bool:
+    """Require the exact quote as a formula-sized token, not inside a larger formula."""
+    offset = 0
+    while (index := specification.find(quote, offset)) >= 0:
+        before = specification[index - 1] if index else None
+        end = index + len(quote)
+        after = specification[end] if end < len(specification) else None
+        if (before is None or not before.isalnum()) and (after is None or not after.isalnum()):
+            return True
+        offset = index + 1
+    return False
 
 
 def _decode_source(source: object) -> SourceRef:

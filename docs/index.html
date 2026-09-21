@@ -45,8 +45,11 @@
     ask the deployment operator whether it is available.</p>
   <p>For every job, a language-model interpreter receives the job instructions
     and attachment descriptions to choose one discovered spectrum representation,
-    its processing, and the formula evidence. It can inspect recognized data and
-    relationships across every attachment linked to the job.
+    its processing, and the formula evidence. A formula taken from the job
+    instructions must be quoted exactly; a formula taken from an attached
+    structure must cite that discovered representation. The interpreter can
+    inspect recognized data and relationships across every attachment linked to
+    the job.
     These are sent to the deployment's configured language-model service;
     check with the operator before submitting confidential information.</p>
 

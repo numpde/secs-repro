@@ -177,7 +177,7 @@ class InputAdapter:
             components = claim["components"]
             if type(components) is not list or not components:
                 raise KeyError
-            sources = [source_from_document(component["source"]) for component in components]
+            sources = [_source_from_document(component["source"]) for component in components]
             digests = [component["digest"] for component in components]
         except (KeyError, TypeError) as error:
             raise InputReadError(
@@ -199,7 +199,9 @@ class InputAdapter:
         return current
 
     def _verify_formula_evidence(self, access, attempt_ref, formula, evidence):
-        if evidence == {"kind": "job_specification"}:
+        if (type(evidence) is dict and set(evidence) == {"kind", "quote"}
+                and evidence.get("kind") == "job_specification"
+                and evidence.get("quote") == formula):
             return
         if (type(evidence) is not dict or set(evidence) != {"kind", "representation_ids"}
                 or evidence.get("kind") != "representations"
