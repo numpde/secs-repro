@@ -21,7 +21,8 @@ Prefer reuse of its decoding machinery over another parallel parser stack.
 
 A Job can link multiple Uploads, and each can contain multiple datasets or
 representations. Expose the options with their source identities, relationships
-and scientific metadata. Give the interpreter the authoritative analysis kind,
+and scientific metadata. Give the interpreter the analysis kind admitted by the
+provider offering and API, rather than deriving it from Job prose, together with
 Job instructions and Upload evidence. Execute its exact, explained selection
 or explain what prevents one. For the current SECS offering, the required
 result is one usable 1D proton spectrum and an evidenced molecular formula.
@@ -34,6 +35,198 @@ Descriptions do not restore filenames or directory relationships absent from
 the available evidence. Formula conflicts, partial discovery and admissible
 processing alternatives need explicit decisions grounded in the first cases;
 this note does not prescribe their complete schema.
+
+
+Architecture and ownership
+--------------------------
+
+Keep one narrow scientific-input boundary between acquired bytes and SECS:
+
+    SourceAccess -> InputAdapter.discover(scope) -> Inventory
+    Selection(representation_id, formula, formula_evidence, processing, explanation)
+    SourceAccess -> InputAdapter.prepare(selection) -> PreparedSpectrum -> inference
+
+AttemptSources remains the authority for current Job membership and acquisition.
+SourceAccess owns exact direct or ZIP-member access, archive integrity, byte
+limits and safe staging. The input adapter owns content recognition, dataset
+relationships, decoding and processing. The interpreter chooses among the
+adapter's public representations; it does not choose a reader. The scientific
+worker admits a chosen representation to SECS, validates formula syntax and
+composition for the model, and owns inference. The interpreter remains
+responsible for citing why the supplied formula is evidenced. Parser completion
+does not decide the Job outcome;
+provider/outcomes.py continues to distinguish input rejection, operational
+failure, empty retrieval and analysed results.
+
+The public discovery model is deliberately small:
+
+* Inventory: representations, completeness relative to the requested inspection
+  scope, and attributed issues.
+* Representation: opaque identity, kind, exact sources, scientific metadata and
+  related representation identities.
+* Selection: representation identity, formula, formula evidence, explicit
+  processing choice and explanation.
+* PreparedSpectrum: selected identity and exact sources derived from the verified
+  representation claim, the canonical Float32 model input, and observed
+  processing facts including whether it came from an FID or used magnitude data.
+  Report preparation from this object rather than reconstructing it beside
+  inference.
+
+The present red four-field Selection does not make formula provenance
+machine-auditable. Before implementation, revise its acceptance contract with a
+formula-evidence field that can cite the admitted Job specification or one or more
+representation identities. The exact schema belongs to that test slice. Do not
+rely on explanation prose when execution must revalidate a removed or changed
+formula source.
+
+Structured representation, formula and processing fields control execution.
+The explanation records the interpreter's rationale and cannot override or
+repair a conflicting structured choice.
+Decoded titles and metadata remain quoted input evidence, never interpreter
+instructions.
+
+Do not expose parser or reader discriminators. A localized malformed item is an
+attributed issue and does not erase useful siblings. An unknown or stale identity,
+an unsuitable representation or incompatible processing is rejected before
+inference. Unexpected decoder exit, timeout or protocol corruption remains an
+operational failure. Filesystem failures are not relabelled as bad scientific
+input.
+
+Input feedback names the blocked inspection or preparation, attributes the safe
+Upload/member evidence, explains the missing, malformed, stale or unsuitable
+fact, and states a next input action only when the boundary knows one. Keep
+stable machine facts structured and test the facts and disclosure rules rather
+than incidental prose. Decoder spawn, signal, memory, protocol and cleanup
+diagnostics remain private operator evidence behind a bounded public operational
+failure; never echo raw library errors or workspace paths to the interpreter.
+
+
+Decoder and build boundary
+--------------------------
+
+The preferred replacement seam, subject to the gates below, is a
+repository-owned, one-shot Node adapter inside the existing offline scientific
+worker image. It would call the exact pinned low-level loader and processing
+libraries directly. Do not import the reference application's
+parseDroppedFiles/readSpectrum policy: it mixes decoding with user-interface
+messages, normalization and automatic preferred-spectrum selection. A Python
+port of that complete stack would create another vendor-format and FID
+implementation. A daemon or sidecar adds lifecycle, readiness and deployment
+state before measurements show that one-shot startup or isolation requires it.
+
+Before adopting this shape, use a bounded spike to prove that the permitted
+low-level APIs can enumerate every required representation rather than only a
+preferred spectrum, retain stable source relationships and processing history,
+run without browser or network authority, and preserve the current processed
+Bruker pair support. Measure startup and memory beside the loaded model. If the
+licensing, enumeration or supervision gates fail, use separately licensed
+lower-level libraries or implement formats behind the same boundary; a parser
+sidecar is justified only when an independent resource/security boundary is
+required. Do not retain two production decoder stacks as a fallback.
+
+The production adapter needs its own minimal package manifest, exact lockfile
+and provenance record in this repository. Record the reference frontend commit,
+its lockfile hash, the dependency mapping and the reference-vector revision.
+The explicit update lane verifies this mapping; it is not a second hand-maintained
+dependency catalogue.
+Ordinary builds must use only repository-contained inputs and pinned base images;
+the sibling frontend checkout is an explicit update and fixture-generation input,
+not a deployment prerequisite. Materialize dependencies into a dedicated output
+in an explicit networked lane without repository-source write access, then verify
+and consume that output in the offline production build as for the Python
+wheelhouse. Hash the adapter, lock, provenance and Node runtime into the worker
+image identity, and prove the built decoder starts and reports the expected
+protocol version.
+The repository also owns the small versioned decoder request/response contract.
+Record decoder, runtime and dependency versions in diagnostics and analysis
+evidence, without exposing private paths or raw decoder messages to the
+interpreter.
+
+Pass the adapter a manifest of logical SourceRefs mapped to safely materialized
+objects. SourceAccess remains the one archive-expansion owner; the decoder does
+not reopen an acquired Upload as an unchecked archive. Never give it
+archive-controlled output paths. Exact-member inspection
+starts from that member and may expand only to format-declared companions in the
+same Upload. Root inspection exposes every admitted member within explicit
+resource bounds. The adapter must not fetch external resources. Limits on total
+expanded bytes, output size, representation count or companion expansion need
+acceptance tests and helpful effects before they become policy.
+
+Companion expansion needs a bounded protocol exchange: SourceAccess exposes safe
+same-Upload member locators, the adapter requests exact members by scientific
+role, and SourceAccess validates and stages them. This keeps archive authority out
+of the decoder and format policy out of SourceAccess.
+
+Run each adapter request inside the scientific worker's proved termination unit.
+Before doing so, extend cancellation proof from its Python child to the whole
+decoder process tree: a Node descendant must not survive a deadline, cancellation,
+controller disconnect, Python failure or container shutdown while the supervisor
+reports that scientific work stopped. Bound input count and bytes, expanded
+archive data, memory, output and diagnostic bytes, elapsed time and temporary
+space. Give the process read-only inputs and only the private temporary write
+space it needs. Keep the one-shot design until measurements or a required
+security boundary justify a longer-lived process or separate cgroup.
+The spike may use conservative experimental bounds; supported production limits
+and their visible effects require acceptance tests before release.
+
+Bundling Node also gives it the scientific worker's visible checkpoint, device,
+source/socket mounts and cgroup. The spike must treat that as a concrete authority
+and failure-containment tradeoff. If the parser requires less authority or an
+independent memory limit, move the same protocol behind an offline sidecar rather
+than describing the bundled process as isolated.
+
+
+Representation identity
+-----------------------
+
+The stable fact is a versioned execution claim: an adapter-local
+block/record/dataset locator, the role of each required component, and canonically
+ordered exact SourceRefs and their byte identities. It excludes unrelated
+acquired Uploads and the discovery route. Root and exact-member inspection agree
+only when they resolve the same claim; an explicitly associated resource may
+correctly produce a richer, different claim. The claim must distinguish identical
+bytes in different Uploads and cease matching when a required source changes or
+disappears.
+
+Reuse byte identities established by acquisition and bounded member staging;
+do not add a peer digest catalogue inside the decoder.
+
+Expose the stable claim through a bounded opaque Attempt-local capability.
+Before preparing, verify that it was issued in the current worker/Attempt,
+re-resolve its exact source closure without widening the original association,
+and require the recomputed claim to match. A duplicate member name makes that
+member ambiguous; report the localized issue or reject its exact use rather than
+inventing a hidden ZIP ordinal. A worker restart is an operational failure for
+the in-flight Attempt, not a stale-input diagnosis. The token identifies already
+acquired sources; it grants no acquisition or cross-Upload association.
+
+The implementation may use an integrity-protected self-contained token, but the
+contract does not prescribe its encoding. It must avoid an unbounded worker
+catalogue, a hidden controller-only execution form and global rediscovery across
+unrelated Uploads. If a future format truly requires a resource from another
+Upload, add an explicit acquisition-planning contract rather than treating
+matching names as authority.
+
+Normalization also needs one owner. The prepared model input must follow the
+pinned numerical reference exactly once. The decoder spike decides whether that
+operation lives in the decoder or in the existing SECS preparation boundary,
+then the replaced normalization path is deleted.
+
+
+Licensing gate
+--------------
+
+Do not assume that use in the reference application grants production
+redistribution rights. Package metadata in its pinned lock records @zakodium/nmrium-core,
+@zakodium/nmrium-core-plugins, nmr-processing and jcampconverter as
+CC-BY-NC-SA-4.0, while the pinned frontend tree has no root licence file. Before
+copying frontend source, distributing these packages or using them for the
+intended service, review the authoritative licence terms and establish that the
+planned evaluation and deployment are permitted or obtain another grant. Record
+licence texts, attribution and the reviewed dependency inventory. Keep dependency
+and licence changes reviewable in the explicit adapter update flow. This gate
+does not turn reference vectors into evidence that production redistribution is
+permitted.
 
 
 Test structure
@@ -93,33 +286,51 @@ coverage gaps rather than claims of support.
 Roadmap and deletion gates
 --------------------------
 
-1. Inventory reference capabilities and admitted fixtures. Establish the
-   observable obligations and resolve initial evidence/processing ambiguities.
-2. Write and review failing tests for a multi-upload, multi-block path, using
-   the original JDX locally and a portable counterpart. Include exact model
-   input, useful refusal, source protections and a small live-interpreter check.
-3. Expand through processed spectra, dataset combinations, FID processing and
-   remaining reference families. Each slice proceeds from demonstrated failure
-   to implementation, legacy deletion, independent audit and meaningful commit.
-4. Broaden adversarial interactions and live-model qualification, then exercise
-   representative API/GUI flows and the actual scientific worker. Record model
-   configuration and variability; retries must not hide judgment failures.
+The versioned coverage map in tests/input/README.md, admitted corpus and red
+normative, scenario and adversarial suite establish the starting contract.
+Continue in reviewable vertical slices:
 
-Safety and helpful feedback apply from the first slice. Keep protections with
-their owners: membership and integrity at acquisition, archive limits at source
-access, cancellation and confirmed termination at supervision. Feedback names
-the affected source, relevant evidence, blocked operation and supported next
-step, while preserving whether scientific execution actually started.
+1. Using the existing versioned coverage map, admitted corpus and red suite,
+   establish what dependency evaluation and deployment are permitted, then run
+   the bounded decoder spike. Prove enumeration of every mapped representation,
+   source relationships, offline operation, processing history, processed-Bruker
+   pair compatibility, cold-start cost and memory. Choose the decoder
+   implementation only from that evidence.
+2. Establish the runtime boundary: reproducible dependency materialization,
+   offline image construction, versioned protocol, safe source staging, bounded
+   output and whole-process-tree termination. Its smoke tests claim no format
+   support.
+3. Revise the red selection contract for Job-specification and representation
+   formula evidence. Then implement processed JCAMP discovery and preparation
+   through the new boundary:
+   encodings, axes, multiple blocks, complex channels, peak tables and refusal
+   of unsuitable data. Replace the interpreter selection tool and delete the
+   Python JCAMP path when its surviving obligations pass.
+4. Add structure and annotation evidence with explicit relationships. Do not let
+   structure evidence become a runnable spectrum or turn
+   declared atom counts into measured integrals.
+5. Add processed vendor datasets and companion association: Bruker pairs and
+   complete datasets, multiple pdata directories and JEOL. Delete the legacy
+   Bruker selection and reader only after pair-only support and source protections
+   pass through the replacement.
+6. Add NMRium saved processing and resource closure, including multiple nuclei,
+   embedded resources, unavailable resources and observed no-fetch behavior.
+7. Add FID processing for JCAMP, Bruker and Varian. Extend the current numerical
+   qualification beyond JCAMP, prove phase and magnitude behavior, and report
+   the actual processing rather than an intended option.
+8. Qualify multi-Upload decisions with a live interpreter and representative
+   API/GUI flows, then remove remaining format dispatch, obsolete dependencies,
+   superseded tests and documentation. Record model configuration and
+   variability; retries must not hide judgment failures.
 
-Replace the Python JCAMP/Bruker readers, format-specific selection types and
-repeated reader dispatch as their replacements meet the surviving obligations.
-Remove obsolete dependencies, tests and documentation with them. Prefer the
-reference normalization path too, retaining SECS's model-input requirements.
-No permanent legacy fallback or intermediate compatibility-JDX round trip.
+Each slice starts from a demonstrated acceptance failure, makes one coherent
+path pass, runs independent review, and removes replaced machinery in the same
+slice where practical. Do not create a compatibility translation from the new
+representation selection back to the old reader selections.
 
-Do not preserve an old decoder restriction merely because a test asserts it;
-adjudicate the intended behavior. Do not delete scientific or source-safety
-proof on the strength of a reference happy path alone. Apply relevant QA/QC
-reviews individually and resolve meaningful findings. Full evidenced parity,
-fixture provenance/licensing, honest outcomes and retirement of the replaced
-path define completion; the first successful JDX is only the first milestone.
+Keep source, cancellation, outcome and diagnostic protections with their named
+owners throughout the slices. Do not preserve an old decoder restriction merely
+because a test asserts it, or delete a surviving protection on the strength of a
+reference happy path. Full evidenced coverage of the versioned map, admitted
+fixtures and licences, honest outcomes and retirement of the replaced path define
+completion; the first successful JDX is only the first milestone.
