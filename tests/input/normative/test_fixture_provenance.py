@@ -26,12 +26,21 @@ class FixtureProvenanceTests(unittest.TestCase):
             with self.subTest(fixture=item['path']):
                 self.assertEqual(sha256((ROOT / item['path']).read_bytes()).hexdigest(), item['sha256'])
                 self.assertTrue(item['description'].strip())
-                for field in ('generator', 'author', 'licence', 'licence_text', 'basis'):
+                self.assertIn('author', item['origin'])
+                author = item['origin']['author']
+                self.assertTrue(author is None or isinstance(author, str) and author.strip())
+                for field in ('generator', 'licence', 'licence_text', 'basis'):
                     self.assertTrue(item['origin'][field].strip(), field)
 
     def test_generator_is_the_one_that_produced_the_corpus(self):
         self.assertEqual(sha256(Path('/generator.mjs').read_bytes()).hexdigest(),
                          self.document['generator_sha256'], 'Explicitly regenerate after changing the fixture producer')
+
+    def test_imported_specimens_retain_the_pinned_source_bytes(self):
+        imported = [item for item in self.records if 'source_path' in item['origin'] and 'parent' not in item]
+        self.assertTrue(imported, 'The admitted upstream specimen must remain in the corpus')
+        for item in imported:
+            self.assertEqual(item['sha256'], self.document['reference_sources'][item['origin']['source_path']])
 
     def test_reference_vectors_name_their_exact_parent(self):
         records = {item['path']: item for item in self.records}
