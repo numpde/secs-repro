@@ -1,0 +1,125 @@
+Omni-parser: tests-first replacement of the input path
+====================================================
+
+Date: 2026-09-21
+Status: design; implementation and qualification remain outstanding
+
+This extends notes/003_provider_input_selection_plan_20260908.txt and replaces
+the narrow reader strategy in that note and notes/001_nmr_source_decoding_and_secs_input_20260829.txt.
+The existing source-access, execution and terminal-outcome obligations remain.
+
+
+Direction
+---------
+
+Cover the formats and processing options supported by the pinned reference
+front-end, while leaving selection to the interpreter. The starting reference
+is fork-of-elucidation.cheminfo.org at
+5ab78f61e9fb679f3f0b9823be5217ae250e213f. Its loaders and fixtures establish the
+coverage inventory; its automatic preferred-spectrum choice is not our policy.
+Prefer reuse of its decoding machinery over another parallel parser stack.
+
+A Job can link multiple Uploads, and each can contain multiple datasets or
+representations. Expose the options with their source identities, relationships
+and scientific metadata. Give the interpreter the authoritative analysis kind,
+Job instructions and Upload evidence. Execute its exact, explained selection
+or explain what prevents one. For the current SECS offering, the required
+result is one usable 1D proton spectrum and an evidenced molecular formula.
+Discovering a peak table, carbon spectrum or FID does not establish suitability.
+Supporting structure files may supply formula evidence without being spectra.
+
+Do not silently choose the first block, merge unrelated companions, substitute
+another experiment or conceal processing. Preserve separate Upload namespaces.
+Descriptions do not restore filenames or directory relationships absent from
+the available evidence. Formula conflicts, partial discovery and admissible
+processing alternatives need explicit decisions grounded in the first cases;
+this note does not prescribe their complete schema.
+
+
+Test structure
+--------------
+
+Organize input tests by intent, following the normative/adversarial convention
+used elsewhere and adding explicit scenarios:
+
+* Normative: observable guarantees, including required refusals and feedback.
+  Examples are complete option exposure within declared limits, exact source
+  selection, analysis-kind context and normalization exactly once.
+* Scenarios: recognizable Jobs combining files, Uploads, evidence and decisions.
+  Include multi-block JCAMP, multiple experiments, separate proton/carbon
+  Uploads, structure companions, ambiguous samples and corrected selections.
+* Adversarial: deliberate challenges to those guarantees, including colliding
+  names, misleading metadata, injected instructions, corrupt companions,
+  ambiguous file association, resource limits and stale selections.
+
+Execution requirements are a separate axis. Real parsing and preparation run
+offline without a checkpoint or candidate index. Deterministic provider tests
+prove orchestration; real-LLM evaluations prove selection judgment and useful
+explanations. A few complete flows prove acquisition, reporting and API/GUI
+delivery. Scripted replies cannot establish intelligent selection.
+
+Share specimen bytes and small packaging helpers, not inferred decisions or a
+generic scenario engine. Keep grading expectations out of model inputs. Test
+discovery, selection and preparation independently, and retain one real path
+through all three to the observed model input. Use focused interactions rather
+than a Cartesian product of formats and packaging variants.
+
+
+Fixture admission and scientific evidence
+----------------------------------------
+
+Every fixture must have provenance and an applicable licence record covering
+every file: exact paths and hashes, original source, upstream revision or
+accession, stated creator/rightsholder, licence declaration and retained notices.
+A shared record may cover a dataset; mixed-origin exceptions must be explicit.
+Do not assume a repository's code licence covers its bundled experimental data.
+Unclear redistribution rights remain an admission gap in the shared corpus.
+
+Copy upstream fixtures unchanged where possible. Synthetic cases, mutations
+and generated reference vectors also need provenance: parent inputs, changes,
+generator versions/options and applicable licensing. The user's original
+test-1h.jdx remains an exact-file local regression unless its admission is
+established; it is not an upstream fixture. Use a redistributable counterpart
+for routine multi-block coverage.
+
+Keep reference vectors as reviewed artifacts, regenerated explicitly rather
+than during tests. Pair reference agreement with independent scientific facts
+such as peak positions, axes, point counts and processing history. Justify
+numerical tolerances. Peak heights and display integrals must not become
+invented proton integrals or assignments. Missing fixtures remain visible
+coverage gaps rather than claims of support.
+
+
+Roadmap and deletion gates
+--------------------------
+
+1. Inventory reference capabilities and admitted fixtures. Establish the
+   observable obligations and resolve initial evidence/processing ambiguities.
+2. Write and review failing tests for a multi-upload, multi-block path, using
+   the original JDX locally and a portable counterpart. Include exact model
+   input, useful refusal, source protections and a small live-interpreter check.
+3. Expand through processed spectra, dataset combinations, FID processing and
+   remaining reference families. Each slice proceeds from demonstrated failure
+   to implementation, legacy deletion, independent audit and meaningful commit.
+4. Broaden adversarial interactions and live-model qualification, then exercise
+   representative API/GUI flows and the actual scientific worker. Record model
+   configuration and variability; retries must not hide judgment failures.
+
+Safety and helpful feedback apply from the first slice. Keep protections with
+their owners: membership and integrity at acquisition, archive limits at source
+access, cancellation and confirmed termination at supervision. Feedback names
+the affected source, relevant evidence, blocked operation and supported next
+step, while preserving whether scientific execution actually started.
+
+Replace the Python JCAMP/Bruker readers, format-specific selection types and
+repeated reader dispatch as their replacements meet the surviving obligations.
+Remove obsolete dependencies, tests and documentation with them. Prefer the
+reference normalization path too, retaining SECS's model-input requirements.
+No permanent legacy fallback or intermediate compatibility-JDX round trip.
+
+Do not preserve an old decoder restriction merely because a test asserts it;
+adjudicate the intended behavior. Do not delete scientific or source-safety
+proof on the strength of a reference happy path alone. Apply relevant QA/QC
+reviews individually and resolve meaningful findings. Full evidenced parity,
+fixture provenance/licensing, honest outcomes and retirement of the replaced
+path define completion; the first successful JDX is only the first milestone.
