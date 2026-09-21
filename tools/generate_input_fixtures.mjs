@@ -2,7 +2,7 @@
 // Explicit fixture refresh in the pinned reference image; never run by tests.
 import { readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { from1DNMRVariables } from '/opt/frontend/node_modules/convert-to-jcamp/lib/index.js';
+import { from1DNMRVariables, from2DNMRVariables } from '/opt/frontend/node_modules/convert-to-jcamp/lib/index.js';
 import { readSpectrum } from '/opt/frontend/src/spectrum/readSpectrum.ts';
 import { normalizeSpectrum } from '/opt/frontend/src/spectrum/normalize.ts';
 import { NMRiumCore } from '/opt/frontend/node_modules/@zakodium/nmrium-core/dist/nmrium-core.js';
@@ -146,6 +146,39 @@ loadedState.state.data.spectra.forEach((item, index) => { item.id = `synthetic-$
 await save('mixed.nmrium', JSON.stringify(core.serializeNmriumState(loadedState.state)) + '\n',
   'NMRium serialization of authored proton/carbon spectra; data and processing preserved by reference core');
 
+const direct = Array.from({ length: 8 }, (_, i) => i);
+const indirect = Array.from({ length: 4 }, (_, i) => 2 * i);
+const matrix = indirect.map((_, row) => direct.map((_, column) => 10 * row + column + 1));
+let twoDimensional = from2DNMRVariables({
+  x: { data: direct, label: 'Direct [ppm]', symbol: 'F2', units: 'HZ', isDependent: false },
+  y: { data: indirect, label: 'Indirect [ppm]', symbol: 'F1', units: 'HZ', isDependent: false },
+  z: { data: matrix, label: 'Intensity', symbol: 'Y', units: 'ARBITRARY UNITS', isDependent: true },
+}, {
+  nmrInfo: { title: 'Authored 4 by 8 matrix', dataType: 'nD NMR SPECTRUM',
+    owner: 'secs-repro contributors; AGPL-3.0-only', origin: 'Synthetic test data' },
+  meta: { SFO1: 400, SFO2: 400, NUC1: '1H', NUC2: '1H' },
+  factor: { x: 1, y: 1, z: 1 }, xyEncoding: 'FIX',
+});
+// The exporter frequency-scales ppm axes. Its redundant scalar vendor nucleus
+// records make the pinned core misclassify this actual matrix as 1D.
+const vendorNuclei = twoDimensional.match(/^##\$NUC[12]=.*$/gm) ?? [];
+if (vendorNuclei.length !== 2) throw Error(`Cannot generate the 2D fixture: expected two vendor nucleus records, got ${vendorNuclei.length}`);
+twoDimensional = twoDimensional.replace(/^##\$NUC[12]=.*\n/gm, '') + '##END NTUPLES=\n##END=\n';
+await save('synthetic-2d.jdx', twoDimensional,
+  'Authored 4x8 1H/1H matrix z[row][column]=10*row+column+1; exporter scalar NUC1/NUC2 records removed, NTUPLES/end terminators appended');
+const matrixCollection = new FileCollection();
+await matrixCollection.appendFileList([new File([twoDimensional], 'synthetic-2d.jdx')]);
+const matrixState = await core.read(matrixCollection, { onLoadProcessing: { autoProcessing: false } });
+const decodedMatrix = matrixState.state.data.spectra;
+const matrixMetadata = decodedMatrix.map(({ info, data }) => ({ dimension: info.dimension,
+  nucleus: info.nucleus, shape: info.spectrumSize,
+  bounds: data.rr && [data.rr.minX, data.rr.maxX, data.rr.minY, data.rr.maxY] }));
+const expectedMatrixMetadata = [{ dimension: 2, nucleus: ['1H', '1H'], shape: [8, 4], bounds: [0, 7, 0, 6] }];
+if (JSON.stringify(matrixMetadata) !== JSON.stringify(expectedMatrixMetadata)
+    || JSON.stringify(decodedMatrix[0].data.rr.z.map((row) => Array.from(row))) !== JSON.stringify(matrix)) {
+  throw Error(`Cannot admit the synthetic 2D fixture: expected the authored 4x8 proton/proton matrix and axes; observed ${JSON.stringify(matrixMetadata)}. Matrix values or metadata differ.`);
+}
+
 function brukerParameters(fields) {
   return '##TITLE=Synthetic parameters\n##JCAMPDX=5.00\n##DATATYPE=Parameter Values\n'
     + '##ORIGIN=secs-repro synthetic fixture\n##OWNER=secs-repro contributors; AGPL-3.0-only\n'
@@ -252,7 +285,8 @@ for (const [format, members, isFid] of [
   }
 }
 
-for (const record of [...files].filter((item) => item.path.endsWith('.jdx') && item.path !== 'peaks.jdx' && item.path !== 'carbon.jdx')) {
+for (const record of [...files].filter((item) => item.path.endsWith('.jdx')
+  && !['peaks.jdx', 'carbon.jdx', 'synthetic-2d.jdx'].includes(item.path))) {
   const bytes = await readFile(`/output/${record.path}`);
   const loaded = await readSpectrum([new File([bytes], record.path)]);
   if (!loaded) throw Error(`Cannot generate a reference for ${record.path}: the loader returned no spectrum`);

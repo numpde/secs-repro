@@ -4,6 +4,14 @@ from input.helpers import FIXTURES, WorkerCase
 
 
 class DiscoveryTests(WorkerCase):
+    def test_two_dimensional_metadata_are_preserved_in_discovery(self):
+        self.upload('synthetic-2d.jdx')
+        facts = self.discover()
+        self.assertEqual(len(facts['representations']), 1)
+        item = self.one(facts, nucleus=None)
+        self.assertEqual(item['metadata']['dimension'], 2)
+        self.assertEqual(item['metadata']['nucleus'], ['1H', '1H'])
+
     def test_jcamp_encodings_retain_scientific_metadata(self):
         names = ['proton.jdx', 'ascending.jdx', 'complex.jdx']
         names += [f'encoded-{encoding}.jdx' for encoding in ('fix', 'sqz', 'dif', 'difdup', 'pac')]

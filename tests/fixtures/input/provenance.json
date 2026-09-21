@@ -15,7 +15,7 @@
     "normalization": "normalizeSpectrum",
     "float32_cast": false
   },
-  "generator_sha256": "2dbed195df6871287bf8d0136ef6e4c0a2028b43769e1e153c1acff9ef92fb22",
+  "generator_sha256": "5d14008f2946bd7187fc18df8790bbada086843d87f116f8e0c00cb89f4a0278",
   "exporter": "convert-to-jcamp@7.0.1 (MIT)",
   "files": [
     {
@@ -218,6 +218,18 @@
       "path": "mixed.nmrium",
       "sha256": "01304ee308bc98bee7c45d70a8b7e04240f22def480bba3ce772f55a7ebc7fef",
       "description": "NMRium serialization of authored proton/carbon spectra; data and processing preserved by reference core",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "synthetic-2d.jdx",
+      "sha256": "5e36484e753255065345919afd87cc956599ef37f7972be1ca70fc663279c8e5",
+      "description": "Authored 4x8 1H/1H matrix z[row][column]=10*row+column+1; exporter scalar NUC1/NUC2 records removed, NTUPLES/end terminators appended",
       "origin": {
         "generator": "tools/generate_input_fixtures.mjs",
         "author": "secs-repro contributors",
