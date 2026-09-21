@@ -81,7 +81,23 @@ class DiscoveryTests(WorkerCase):
         self.assertEqual(len({item['id'] for item in facts['representations']}), 2)
 
     def test_supported_content_is_identified_without_a_trusted_extension(self):
-        for name in ('SPECTRUM.JDX', 'unknown', 'misleading.fid'):
-            with self.subTest(filename=name):
-                self.upload(name, contents=(FIXTURES / 'proton.jdx').read_bytes())
-                self.one(self.discover())
+        cases = [
+            ('proton.jdx', [('spectrum', '1H', 257)]),
+            ('synthetic.jdf', [('spectrum', '1H', 64)]),
+            ('mixed.nmrium', [('spectrum', '1H', 257), ('spectrum', '13C', 257)]),
+            ('ethanol.mol', [('structure', None, None)]),
+            ('ethanol.sdf', [('structure', None, None)]),
+        ]
+        for fixture, expected in cases:
+            for name in (fixture.upper(), 'unknown', 'misleading.fid'):
+                with self.subTest(fixture=fixture, filename=name):
+                    self.upload(name, contents=(FIXTURES / fixture).read_bytes())
+                    facts = self.discover()
+                    self.assertEqual(len(facts['representations']), len(expected))
+                    for kind, nucleus, points in expected:
+                        item = self.one(facts, kind, nucleus)
+                        self.assertEqual(item['sources'], [{'upload_ref': 'upload:sample', 'member': None}])
+                        if kind == 'structure':
+                            self.assertEqual(item['metadata']['formula'], 'C2H6O')
+                        else:
+                            self.assertEqual(item['metadata']['points'], points)

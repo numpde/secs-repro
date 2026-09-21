@@ -44,6 +44,9 @@ failure may coexist with useful choices; it cannot be reported as an exhaustive
 empty inventory. Insufficient inspection budgets must be explicit. A supplied
 file's title, extension or description cannot override contradictory scientific
 metadata. Explicit formula instructions do not establish molecular identity.
+Direct acquired Uploads do not retain an authoritative filename. Standalone
+format recognition must therefore use contents, including JEOL, NMRium and
+structure files; archive companion paths retain their separate meaning.
 
 ## Evidence and scope
 
