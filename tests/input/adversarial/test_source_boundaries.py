@@ -12,6 +12,7 @@ from input.helpers import FIXTURES, WorkerCase
 class SourceBoundaryTests(WorkerCase):
     def rejected(self, response, *terms):
         self.assertEqual(response['outcome'], 'input_rejected')
+        self.assertNotIn('facts', response, 'Source admission failed before an inventory existed')
         for term in terms:
             self.assertIn(term.lower(), response['reason'].lower())
         self.assertNotIn(str(self.root), response['reason'])

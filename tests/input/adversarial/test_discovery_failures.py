@@ -27,6 +27,8 @@ class DiscoveryFailureTests(WorkerCase):
         self.upload('unlabelled.jdx', contents=contents)
         facts = self.discover()
         self.assertTrue(facts['representations'], 'Missing nucleus must not hide otherwise readable data')
+        self.assertTrue(facts['complete'], 'Known-unknown metadata does not make the inventory partial')
+        self.assertEqual(facts['issues'], [])
         for item in facts['representations']:
             self.assertIsNone(item['metadata'].get('nucleus'))
 
@@ -60,18 +62,27 @@ class DiscoveryFailureTests(WorkerCase):
         contents = (FIXTURES / 'proton.jdx').read_text()
         self.assertEqual(contents.count('##XYDATA=(X++(Y..Y))'), 1)
         broken = contents.replace('##XYDATA=(X++(Y..Y))', '##XYDATA=garbage')
-        self.archive([('broken.jdx', broken.encode()),
-                      ('valid.jdx', (FIXTURES / 'proton.jdx').read_bytes())])
+        self.archive([('broken.dat', broken.encode()),
+                      ('valid.jdx', (FIXTURES / 'proton.jdx').read_bytes()),
+                      ('carbon.jdx', (FIXTURES / 'carbon.jdx').read_bytes())])
+        exact = self.discover(member='valid.jdx')
+        self.assertEqual(len(exact['representations']), 1)
+        selected = self.one(exact)
+        self.assertEqual(selected['sources'],
+                         [{'upload_ref': 'upload:sample', 'member': 'valid.jdx'}])
+        self.assertTrue(exact['complete'])
+        self.assertEqual(exact['issues'], [])
         facts = self.discover()
         valid = [item for item in facts['representations']
                  if item['sources'] == [{'upload_ref': 'upload:sample', 'member': 'valid.jdx'}]]
         self.assertEqual(len(valid), 1)
         self.assertEqual(valid[0]['kind'], 'spectrum')
         self.assertEqual(valid[0]['metadata']['nucleus'], '1H')
+        self.one(facts, nucleus='13C')
         self.assertFalse(facts['complete'])
         issues = facts['issues']
         broken = [issue for issue in issues
-                  if issue['source'] == {'upload_ref': 'upload:sample', 'member': 'broken.jdx'}]
+                  if issue['source'] == {'upload_ref': 'upload:sample', 'member': 'broken.dat'}]
         self.assertTrue(broken, 'The malformed member must have its own issue')
         self.assertIn('xydata', ' '.join(issue['reason'] for issue in broken).lower())
 
