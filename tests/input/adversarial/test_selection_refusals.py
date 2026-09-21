@@ -1,6 +1,6 @@
 """Invalid, stale or unsuitable choices fail before scientific computation."""
 
-from input.helpers import FIXTURES, WorkerCase
+from input.helpers import FIXTURES, OTHER_ATTEMPT_REF, WorkerCase
 from pathlib import Path
 
 
@@ -28,6 +28,7 @@ class SelectionRefusalTests(WorkerCase):
 
     def selection(self, identity):
         return {'representation_id': identity, 'formula': 'C22H36O7',
+                'formula_evidence': {'kind': 'job_specification'},
                 'processing': 'as_stored', 'explanation': 'Explicit selection for SECS.'}
 
     def rejected(self, selection, *evidence):
@@ -73,6 +74,42 @@ class SelectionRefusalTests(WorkerCase):
         del selection['formula']
         self.rejected(selection, 'formula')
 
+    def test_missing_formula_evidence_is_not_replaced_by_explanation_prose(self):
+        self.upload('proton.jdx')
+        item = self.one(self.discover())
+        selection = self.selection(item['id'])
+        del selection['formula_evidence']
+        self.rejected(selection, 'formula', 'evidence')
+
+    def test_unknown_formula_evidence_representation_is_rejected(self):
+        self.upload('proton.jdx')
+        item = self.one(self.discover())
+        selection = self.selection(item['id'])
+        selection['formula_evidence'] = {
+            'kind': 'representations', 'representation_ids': ['unissued-structure']}
+        self.rejected(selection, 'formula', 'evidence', 'representation')
+
+    def test_structure_formula_evidence_must_match_the_selected_formula(self):
+        self.upload('proton.jdx', 'upload:spectrum')
+        self.upload('ethanol.mol', 'upload:structure')
+        spectrum = self.one(self.discover('upload:spectrum'))
+        structure = self.one(self.discover('upload:structure'), 'structure', nucleus=None)
+        selection = self.selection(spectrum['id'])
+        selection['formula_evidence'] = {
+            'kind': 'representations', 'representation_ids': [structure['id']]}
+        self.rejected(selection, 'formula', 'evidence', 'C2H6O')
+
+    def test_removed_formula_evidence_representation_is_rejected(self):
+        self.upload('proton.jdx', 'upload:spectrum')
+        self.upload('ethanol.mol', 'upload:structure')
+        spectrum = self.one(self.discover('upload:spectrum'))
+        structure = self.one(self.discover('upload:structure'), 'structure', nucleus=None)
+        del self.files['upload:structure']
+        selection = self.selection(spectrum['id'])
+        selection['formula_evidence'] = {
+            'kind': 'representations', 'representation_ids': [structure['id']]}
+        self.rejected(selection, 'formula', 'evidence', 'representation')
+
     def test_missing_processing_is_not_implicit_auto_processing(self):
         self.upload('fid.jdx')
         item = self.one(self.discover(), 'fid')
@@ -92,3 +129,13 @@ class SelectionRefusalTests(WorkerCase):
         item = self.one(self.discover())
         Path(self.files['upload:sample']).write_bytes((FIXTURES / 'alternate.jdx').read_bytes())
         self.rejected(self.selection(item['id']), 'representation')
+
+    def test_selection_identity_does_not_cross_attempts(self):
+        self.upload('proton.jdx')
+        item = self.one(self.discover())
+        response = self.request('analyse', attempt_ref=OTHER_ATTEMPT_REF, selection=self.selection(item['id']))
+        self.assertEqual(response['outcome'], 'input_rejected')
+        self.assert_safe_reason(response['reason'])
+        self.assertIn('representation', response['reason'].lower())
+        self.assertEqual(self.inference.mock_calls, [])
+        self.assertEqual(self.candidates.mock_calls, [])

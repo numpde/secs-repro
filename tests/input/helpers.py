@@ -10,6 +10,8 @@ from secs_inference.provider.worker_model import ScientificHandler, ScientificWo
 
 
 FIXTURES = Path('/fixtures/input')
+ATTEMPT_REF = 'execution_attempt:sha256:' + '1' * 64
+OTHER_ATTEMPT_REF = 'execution_attempt:sha256:' + '2' * 64
 
 
 class WorkerCase(unittest.TestCase):
@@ -41,9 +43,9 @@ class WorkerCase(unittest.TestCase):
         self.files[ref] = str(path)
         return ref
 
-    def request(self, operation, **arguments):
+    def request(self, operation, *, attempt_ref=ATTEMPT_REF, **arguments):
         return self.worker({'operation': operation, 'files': dict(self.files),
-                            'directory': str(self.root), **arguments})
+                            'directory': str(self.root), 'attempt_ref': attempt_ref, **arguments})
 
     def discover(self, ref='upload:sample', member=None):
         response = self.request('inspect', source={'upload_ref': ref, 'member': member})
