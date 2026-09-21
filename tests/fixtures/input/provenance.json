@@ -11,7 +11,7 @@
     "src/spectrum/integral.ts": "14f998d63e16417a3daad245251c9e30b4858169cb95257fd2c60704d4e9c042"
   },
   "generator_sources": {
-    "tools/generate_input_fixtures.mjs": "71e0a3f603ce417adfe4c55884d6df0d09e47a8055747d2038d412a634774106",
+    "tools/generate_input_fixtures.mjs": "1cc60d09b67cd365458f7a66c665808ac44f7264a2c8c7a53daf27b504c312d9",
     "tools/generate_nmrium_fixtures.mjs": "d19f9f9080854a9187baed676aba5698cf8eaeb61c3ecfc82bbaca08de46a0e3"
   },
   "exporter": "convert-to-jcamp@7.0.1 (MIT)",
@@ -222,6 +222,40 @@
         "licence": "AGPL-3.0-only",
         "licence_text": "LICENSE",
         "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "structures.smi",
+      "sha256": "92fbb2fd3961101bc1e6bdfaa59d8dd971c66bccef3c626a398331724b8519a5",
+      "description": "Authored ethanol and acetic acid SMILES records for the reference archive-member loader",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "New synthetic test data; no experimental measurements copied"
+      }
+    },
+    {
+      "path": "annotations.sdf",
+      "sha256": "07dcbe58b0cf80fc822e3328fdcd88f8da881f1088dce26666246a4bcbebd1b9",
+      "description": "Authored NMReDATA 1.0: ethanol connection table and two synthetic assigned shifts referring to proton.jdx; N=3/2 are declared atom counts, not measured integrals or an experimental ethanol spectrum",
+      "origin": {
+        "generator": "tools/generate_input_fixtures.mjs",
+        "author": "secs-repro contributors",
+        "licence": "AGPL-3.0-only",
+        "licence_text": "LICENSE",
+        "basis": "ethanol.mol extended with authored assignments at the mathematical proton.jdx peaks and an explicit relative resource link",
+        "parents": [
+          {
+            "path": "ethanol.mol",
+            "sha256": "8cda2db06b542750f1a616c6f23374ab9725b26ed40aec5637a05797308c1a50"
+          },
+          {
+            "path": "proton.jdx",
+            "sha256": "5ca3cf4be2aef92c1dbe0b4b259a740fc36bf29930581cd23439628b8cbb4e7d"
+          }
+        ]
       }
     },
     {

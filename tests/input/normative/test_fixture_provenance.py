@@ -30,11 +30,14 @@ class FixtureProvenanceTests(unittest.TestCase):
         self.assertEqual(set(recorded), actual)
 
     def test_bytes_and_attribution_match_the_record(self):
+        records = {item['path']: item for item in self.records}
         for item in self.records:
             with self.subTest(fixture=item['path']):
                 self.assertEqual(sha256((ROOT / item['path']).read_bytes()).hexdigest(), item['sha256'])
                 self.assertTrue(item['description'].strip())
                 self.assert_origin(item['origin'])
+                for parent in item['origin'].get('parents', []):
+                    self.assertEqual(parent['sha256'], records[parent['path']]['sha256'])
 
     def test_generator_is_the_one_that_produced_the_corpus(self):
         sources = self.document['generator_sources']
