@@ -1,5 +1,6 @@
 """A URL-backed state cannot acquire missing bytes or borrow unrelated uploads."""
 
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from pathlib import Path
@@ -12,7 +13,7 @@ from zipfile import ZipFile
 from input.helpers import ATTEMPT_REF, FIXTURES, WorkerCase
 from secs_inference.provider.input_adapter import InputAdapter
 from secs_inference.provider.input_operations import SourceRef
-from secs_inference.provider.source_access import SourceAccess
+from secs_inference.provider.source_access import InputReadError, SourceAccess
 
 
 class NmriumResourceTests(WorkerCase):
@@ -91,6 +92,42 @@ class NmriumResourceTests(WorkerCase):
         self.assertEqual([call.args[0] for call in read.call_args_list],
                          [SourceRef('upload:sample', 'state.json')],
                          'The over-budget companion must be rejected before decompression')
+
+    def test_failed_companion_reads_still_consume_the_expanded_byte_budget(self):
+        with ZipFile(FIXTURES / 'resource-embedded.nmrium.zip') as source:
+            document = json.loads(source.read('state.json'))
+            proton = source.read('data/authored-proton/proton.jdx')
+        second = deepcopy(document['data']['spectra'][0])
+        second['id'] = 'second-spectrum'
+        second['selector']['root'] = 'second-proton'
+        document['data']['spectra'].append(second)
+        state = json.dumps(document).encode()
+        self.archive([
+            ('state.json', state),
+            ('data/authored-proton/proton.jdx', proton),
+            ('data/second-proton/proton.jdx', proton),
+        ])
+        access = SourceAccess({'upload:sample': Path(self.files['upload:sample'])}, self.root,
+                              max_scope_bytes=len(state) + 2 * len(proton) - 1)
+        actual_read = access.read
+
+        def corrupt_companions(source):
+            if source.member == 'state.json':
+                return actual_read(source)
+            raise InputReadError('Cannot read the selected ZIP member: decoding or integrity checking failed')
+
+        with patch.object(access, 'read', side_effect=corrupt_companions) as read:
+            facts = InputAdapter(token_key=b'test' * 8).discover(
+                access, ATTEMPT_REF, SourceRef('upload:sample', 'state.json'))
+        second_resource = SourceRef('upload:sample', 'data/second-proton/proton.jdx')
+        self.assertFalse(facts['complete'])
+        self.assert_issue_mentions(facts, {'upload_ref': second_resource.upload_ref,
+                                           'member': second_resource.member},
+                                   'expanded members', 'inspection limit')
+        self.assertEqual([call.args[0] for call in read.call_args_list], [
+            SourceRef('upload:sample', 'state.json'),
+            SourceRef('upload:sample', 'data/authored-proton/proton.jdx'),
+        ], 'A failed decompression must reserve its declared bytes before the next companion')
 
     def test_inspection_does_not_fetch_a_reachable_url_resource(self):
         connections = []
