@@ -288,7 +288,7 @@ def _discover_bruker(access: SourceAccess, reads: list[ReadSource]):
                 root = Path(temporary)
                 (root / "1r").write_bytes(data.contents)
                 (root / "procs").write_bytes(parameters.contents)
-                read_bruker_pdata(root)
+                read_bruker_pdata(root, required_nucleus=None, required_dimension=None)
         except SpectrumReadError:
             issues.append({
                 "source": source_document(data.source),
@@ -503,9 +503,17 @@ def _bruker_metadata(contents: bytes) -> dict | None:
         dimension = int(_label(labels, "$PPARMOD")) + 1
         points = int(_label(labels, "$SI"))
         frequency = float(_label(labels, "$SF"))
+        sweep_hz = float(_label(labels, "$SW_p"))
+        offset = float(_label(labels, "$OFFSET"))
+        byte_order = int(_label(labels, "$BYTORDP"))
+        data_type = int(_label(labels, "$DTYPP"))
+        scale = float(_label(labels, "$NC_proc"))
     except ValueError:
         return None
-    if not text or points < 2 or not np.isfinite(frequency) or frequency <= 0:
+    if (not text or not nucleus or dimension < 1 or points < 2
+            or not all(np.isfinite(value) for value in (frequency, sweep_hz, offset, scale))
+            or frequency <= 0 or sweep_hz <= 0
+            or byte_order not in {0, 1} or data_type not in {0, 2}):
         return None
     return {"dimension": dimension, "nucleus": nucleus or None,
             "points": points, "frequency_mhz": frequency}

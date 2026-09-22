@@ -10,8 +10,13 @@ from secs_inference.spectra.source import SourceSpectrum
 from secs_inference.spectra.errors import SpectrumReadError
 
 
-def read_bruker_pdata(processed_directory: str | Path) -> SourceSpectrum:
-    """Decode a 1D proton 1r/procs pair and its endpoint-inclusive ppm axis."""
+def read_bruker_pdata(
+    processed_directory: str | Path,
+    *,
+    required_nucleus: str | None = "1H",
+    required_dimension: int | None = 1,
+) -> SourceSpectrum:
+    """Decode a selected 1r/procs pair and its endpoint-inclusive ppm axis."""
     # nmrglue's discovery defaults may select another component or ascend to
     # acquisition files. The caller chose this processed pair, not a search root.
     try:
@@ -24,8 +29,19 @@ def read_bruker_pdata(processed_directory: str | Path) -> SourceSpectrum:
     except (KeyError, IndexError, TypeError, ValueError, FileNotFoundError) as cause:
         raise SpectrumReadError("Cannot read the selected Bruker spectrum: its 1r/procs pair could not be decoded") from cause
     procs = parameters.get("procs", {})
-    if procs.get("AXNUC") != "1H" or procs.get("PPARMOD") != 0:
-        raise SpectrumReadError("Cannot read the selected Bruker spectrum: procs must declare AXNUC=1H and PPARMOD=0 for a 1D proton spectrum")
+    nucleus = procs.get("AXNUC")
+    dimension = procs.get("PPARMOD") + 1 if type(procs.get("PPARMOD")) is int else None
+    wrong_nucleus = required_nucleus is not None and nucleus != required_nucleus
+    wrong_dimension = required_dimension is not None and dimension != required_dimension
+    if wrong_nucleus or wrong_dimension:
+        requirements = []
+        if required_nucleus is not None:
+            requirements.append(f"AXNUC={required_nucleus}")
+        if required_dimension is not None:
+            requirements.append(f"PPARMOD={required_dimension - 1}")
+        raise SpectrumReadError(
+            "Cannot read the selected Bruker spectrum: procs must declare " + " and ".join(requirements)
+        )
     # A library warning (for example, missing optional intensity scaling) is
     # not a scientific verdict. Establish the facts used by this reader below.
     if (not isinstance(intensities, np.ndarray)

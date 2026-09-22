@@ -54,10 +54,12 @@ class ScopeReader:
         entry = self._access.scope(source)[0]
         if entry.byte_length > self._remaining:
             raise ScopeLimitError(source, self._access.max_scope_bytes)
+        self._remaining -= entry.byte_length
         read = self._access.read(source)
-        if len(read.contents) > self._remaining:
+        additional = len(read.contents) - entry.byte_length
+        if additional > self._remaining:
             raise ScopeLimitError(source, self._access.max_scope_bytes)
-        self._remaining -= len(read.contents)
+        self._remaining -= max(0, additional)
         return read
 
 

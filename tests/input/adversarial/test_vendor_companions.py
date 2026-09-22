@@ -84,6 +84,29 @@ class VendorCompanionTests(WorkerCase):
                     '1r', 'malformed or incomplete')
                 self.files.clear()
 
+    def test_processed_bruker_decoding_parameters_are_attributed_to_procs(self):
+        parameters = (FIXTURES / 'bruker-procs.txt').read_text().replace('##$DTYPP= 0', '##$DTYPP= 7')
+        self.archive([
+            ('experiment/1r', (FIXTURES / 'bruker-1r.bin').read_bytes()),
+            ('experiment/procs', parameters.encode()),
+        ])
+        facts = self.discover()
+        self.assertFalse(facts['complete'])
+        self.assertEqual(facts['representations'], [])
+        self.assert_issue_mentions(
+            facts, {'upload_ref': 'upload:sample', 'member': 'experiment/procs'},
+            'procs', 'malformed or incomplete')
+
+    def test_processed_bruker_discovery_preserves_nonproton_metadata(self):
+        parameters = (FIXTURES / 'bruker-procs.txt').read_text().replace('##$AXNUC= <1H>', '##$AXNUC= <13C>')
+        self.archive([
+            ('experiment/1r', (FIXTURES / 'bruker-1r.bin').read_bytes()),
+            ('experiment/procs', parameters.encode()),
+        ])
+        facts = self.discover()
+        self.assertTrue(facts['complete'])
+        self.one(facts, nucleus='13C')
+
     def missing_procs(self, facts, source):
         self.assertFalse(facts['complete'])
         self.assert_issue_mentions(facts, source, 'unavailable', 'procs')
