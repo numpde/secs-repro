@@ -157,6 +157,40 @@ class ProblemDiagnosticsTests(unittest.TestCase):
         self.assertFalse(error.diagnostic["problem_verified"])
         self.assertEqual(error.diagnostic["detail"], "private-server-trace")
 
+    def test_recoverable_authentication_rejections_use_fresh_request_retry(self):
+        base = {
+            "type": "urn:nmr-api:problem:authentication-failed",
+            "title": "Request authentication failed",
+            "status": 401,
+            "request_id": "request-test",
+            "instance": "urn:nmr-api:request:request-test",
+        }
+        for code in ("authentication_nonce_reused", "authentication_window_closed", "signature_expired"):
+            with self.subTest(code=code):
+                error = self.request_error(self.response(base | {
+                    "code": code,
+                    "detail": "This request did not run. Retry with fresh authentication.",
+                }))
+                self.assertIs(type(error), ApiUnavailable)
+                self.assertEqual(error.status, 401)
+                self.assertTrue(error.diagnostic["problem_verified"])
+                self.assertEqual(error.diagnostic["code"], code)
+
+        for code in ("authentication_failed", "signature_created_in_future"):
+            with self.subTest(code=code):
+                error = self.request_error(self.response(base | {
+                    "code": code,
+                    "detail": "Correct the authentication configuration before retrying.",
+                }))
+                self.assertIs(type(error), ApiError)
+
+        unverified = self.request_error(self.response(base | {
+            "code": "authentication_window_closed",
+            "detail": "This request did not run. Retry with fresh authentication.",
+            "request_id": "different",
+        }))
+        self.assertIs(type(unverified), ApiError)
+
     def test_unusable_problem_details_do_not_escape_or_change_http_retry_classification(self):
         bodies = [b"private non-JSON", b'{"status":400,"status":400,"detail":"private"}']
         for detail in ("private\nforged log", "private\u202eforged", "private" * 200, {"private": True}):
