@@ -107,6 +107,20 @@ class VendorCompanionTests(WorkerCase):
         self.assertTrue(facts['complete'])
         self.one(facts, nucleus='13C')
 
+    def test_processed_bruker_discovery_preserves_unknown_nucleus_and_decoder_defaults(self):
+        parameters = (FIXTURES / 'bruker-procs.txt').read_text()
+        for line in ('##$AXNUC= <1H>\n', '##$BYTORDP= 0\n',
+                     '##$DTYPP= 0\n', '##$NC_proc= 0\n'):
+            parameters = parameters.replace(line, '')
+        self.archive([
+            ('experiment/1r', (FIXTURES / 'bruker-1r.bin').read_bytes()),
+            ('experiment/procs', parameters.encode()),
+        ])
+        facts = self.discover()
+        self.assertTrue(facts['complete'])
+        item = self.one(facts, nucleus=None)
+        self.assertIsNone(item['metadata']['nucleus'])
+
     def missing_procs(self, facts, source):
         self.assertFalse(facts['complete'])
         self.assert_issue_mentions(facts, source, 'unavailable', 'procs')

@@ -505,18 +505,39 @@ def _bruker_metadata(contents: bytes) -> dict | None:
         frequency = float(_label(labels, "$SF"))
         sweep_hz = float(_label(labels, "$SW_p"))
         offset = float(_label(labels, "$OFFSET"))
-        byte_order = int(_label(labels, "$BYTORDP"))
-        data_type = int(_label(labels, "$DTYPP"))
-        scale = float(_label(labels, "$NC_proc"))
     except ValueError:
         return None
-    if (not text or not nucleus or dimension < 1 or points < 2
-            or not all(np.isfinite(value) for value in (frequency, sweep_hz, offset, scale))
+    byte_order_valid, byte_order = _optional_integer_label(labels, "$BYTORDP")
+    data_type_valid, data_type = _optional_integer_label(labels, "$DTYPP")
+    scale_valid, _ = _optional_float_label(labels, "$NC_proc")
+    if (not text or dimension < 1 or points < 2
+            or not all(np.isfinite(value) for value in (frequency, sweep_hz, offset))
             or frequency <= 0 or sweep_hz <= 0
-            or byte_order not in {0, 1} or data_type not in {0, 2}):
+            or not byte_order_valid or byte_order not in {None, 0, 1}
+            or not data_type_valid or data_type not in {None, 0, 2}
+            or not scale_valid):
         return None
     return {"dimension": dimension, "nucleus": nucleus or None,
             "points": points, "frequency_mhz": frequency}
+
+def _optional_integer_label(labels: dict[str, str], name: str) -> tuple[bool, int | None]:
+    value = _label(labels, name)
+    if not value:
+        return True, None
+    try:
+        return True, int(value)
+    except ValueError:
+        return False, None
+
+def _optional_float_label(labels: dict[str, str], name: str) -> tuple[bool, float | None]:
+    value = _label(labels, name)
+    if not value:
+        return True, None
+    try:
+        number = float(value)
+    except ValueError:
+        return False, None
+    return (True, number) if np.isfinite(number) else (False, None)
 
 def _bruker_fid_metadata(contents: bytes) -> dict | None:
     labels = _jcamp_labels(contents)

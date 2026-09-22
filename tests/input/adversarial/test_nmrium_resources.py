@@ -111,9 +111,9 @@ class NmriumResourceTests(WorkerCase):
                               max_scope_bytes=len(state) + 2 * len(proton) - 1)
         actual_read = access.read
 
-        def corrupt_companions(source):
+        def corrupt_companions(source, **read_limits):
             if source.member == 'state.json':
-                return actual_read(source)
+                return actual_read(source, **read_limits)
             raise InputReadError('Cannot read the selected ZIP member: decoding or integrity checking failed')
 
         with patch.object(access, 'read', side_effect=corrupt_companions) as read:
