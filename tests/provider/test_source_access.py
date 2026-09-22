@@ -20,20 +20,30 @@ class SourceAccessTests(unittest.TestCase):
             path.write_bytes(b"x")
             access = SourceAccess({"upload:chosen": path}, root,
                                   max_member_bytes=16, max_scope_bytes=2)
-            actual_scope = access.scope
-
-            def measure_then_grow(source):
-                entries = actual_scope(source)
+            with access.scope_reader(SourceRef("upload:chosen")) as reader:
                 path.write_bytes(b"grown")
-                return entries
-
-            reader = access.scope_reader()
-            with patch.object(access, "scope", side_effect=measure_then_grow):
                 with self.assertRaises(ScopeLimitError):
                     reader.read(SourceRef("upload:chosen"))
-            path.write_bytes(b"x")
-            with self.assertRaises(ScopeLimitError):
-                reader.read(SourceRef("upload:chosen"))
+                path.write_bytes(b"x")
+                with self.assertRaises(ScopeLimitError):
+                    reader.read(SourceRef("upload:chosen"))
+
+    def test_maximum_zip_inventory_reuses_one_archive_and_index(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "upload"
+            with ZipFile(path, "w") as archive:
+                for index in range(4096):
+                    archive.writestr(str(index), b"")
+            access = SourceAccess({"upload:chosen": path}, root)
+            with patch.object(access, "_archive", wraps=access._archive) as opened:
+                with patch.object(access, "_member", wraps=access._member) as scanned:
+                    with access.scope_reader(SourceRef("upload:chosen")) as reader:
+                        self.assertEqual(len(reader.entries), 4096)
+                        for entry in reader.entries:
+                            reader.read(entry.source)
+            self.assertEqual(opened.call_count, 1)
+            self.assertEqual(scanned.call_count, 0)
 
     def test_oversized_inventory_is_rejected_without_disabling_exact_member_access(self):
         with TemporaryDirectory() as directory:

@@ -82,14 +82,14 @@ class NmriumResourceTests(WorkerCase):
         ])
         access = SourceAccess({'upload:sample': Path(self.files['upload:sample'])}, self.root,
                               max_scope_bytes=len(state) + len(proton) - 1)
-        with patch.object(access, 'read', wraps=access.read) as read:
+        with patch.object(access, '_read_member', wraps=access._read_member) as read:
             facts = InputAdapter(token_key=b'test' * 8).discover(
                 access, ATTEMPT_REF, SourceRef('upload:sample', 'state.json'))
         self.assertFalse(facts['complete'])
         resource = {'upload_ref': 'upload:sample', 'member': 'data/authored-proton/proton.jdx'}
         self.assert_issue_mentions(facts, resource, 'expanded members', 'inspection limit')
         self.assertFalse(any(resource in item['sources'] for item in facts['representations']))
-        self.assertEqual([call.args[0] for call in read.call_args_list],
+        self.assertEqual([call.args[2] for call in read.call_args_list],
                          [SourceRef('upload:sample', 'state.json')],
                          'The over-budget companion must be rejected before decompression')
 
@@ -109,14 +109,14 @@ class NmriumResourceTests(WorkerCase):
         ])
         access = SourceAccess({'upload:sample': Path(self.files['upload:sample'])}, self.root,
                               max_scope_bytes=len(state) + 2 * len(proton) - 1)
-        actual_read = access.read
+        actual_read = access._read_member
 
-        def corrupt_companions(source, **read_limits):
+        def corrupt_companions(archive, info, source, scope_bytes):
             if source.member == 'state.json':
-                return actual_read(source, **read_limits)
+                return actual_read(archive, info, source, scope_bytes)
             raise InputReadError('Cannot read the selected ZIP member: decoding or integrity checking failed')
 
-        with patch.object(access, 'read', side_effect=corrupt_companions) as read:
+        with patch.object(access, '_read_member', side_effect=corrupt_companions) as read:
             facts = InputAdapter(token_key=b'test' * 8).discover(
                 access, ATTEMPT_REF, SourceRef('upload:sample', 'state.json'))
         second_resource = SourceRef('upload:sample', 'data/second-proton/proton.jdx')
@@ -124,7 +124,7 @@ class NmriumResourceTests(WorkerCase):
         self.assert_issue_mentions(facts, {'upload_ref': second_resource.upload_ref,
                                            'member': second_resource.member},
                                    'expanded members', 'inspection limit')
-        self.assertEqual([call.args[0] for call in read.call_args_list], [
+        self.assertEqual([call.args[2] for call in read.call_args_list], [
             SourceRef('upload:sample', 'state.json'),
             SourceRef('upload:sample', 'data/authored-proton/proton.jdx'),
         ], 'A failed decompression must reserve its declared bytes before the next companion')
