@@ -44,22 +44,12 @@ _GPU_UUID = re.compile(
     r"GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
-_DEPLOYMENT_ENVIRONMENT = {
-    "PROVIDER_IMAGE_REF",
-    "WORKER_IMAGE_REF",
-    "CHECKPOINT_DIRECTORY",
-    "MOLFORMER_CACHE_DIRECTORY",
-}
-
-
 def _toml_document(path: Path) -> dict:
     """Read one strict private TOML table without exposing its contents."""
     try:
         document = tomllib.loads(_private_file(path).decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise ValueError(f"Deployment input is not valid TOML: {path}") from error
-    if type(document) is not dict:
-        raise ValueError(f"Deployment input must be a TOML table: {path}")
     return document
 
 
@@ -73,33 +63,6 @@ def _host_gpu_uuid(repository: Path) -> str:
     if type(identifier) is not str or _GPU_UUID.fullmatch(identifier) is None:
         raise ValueError("config/host.toml worker_gpu_uuid must be one GPU UUID, not an index or all GPUs.")
     return identifier
-
-
-def _validate_deployment_environment(path: Path) -> None:
-    """Keep deployment.env limited to the four artifact selections it owns."""
-    try:
-        lines = _private_file(path).decode("utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise ValueError("deployment.env must be UTF-8 text.") from error
-    names = []
-    for line in lines:
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        match = re.match(r"([A-Z][A-Z0-9_]*)=", line)
-        if match is None:
-            raise ValueError("deployment.env accepts only NAME=value lines and comments.")
-        names.append(match[1])
-    if len(names) != len(set(names)):
-        raise ValueError("deployment.env must define each input exactly once.")
-    missing = sorted(_DEPLOYMENT_ENVIRONMENT - set(names))
-    unexpected = sorted(set(names) - _DEPLOYMENT_ENVIRONMENT)
-    if missing or unexpected:
-        details = []
-        if missing:
-            details.append("missing " + ", ".join(missing))
-        if unexpected:
-            details.append("unexpected " + ", ".join(unexpected))
-        raise ValueError("deployment.env has " + "; ".join(details) + ".")
 
 
 def _provider_network(repository: Path, name: str) -> dict:
@@ -154,6 +117,28 @@ def _admit_provider_network(project: ComposeProject, repository: Path, name: str
         raise ValueError("Docker did not inspect exactly one external provider network.")
     record = records[0]
     labels = record.get("Labels")
+    if record.get("Name") != expected_name:
+        raise ValueError(
+            f"Cannot use the inspected external network named {record.get('Name')!r}; "
+            f"this deployment requires {expected_name!r}."
+        )
+    if record.get("Driver") != "bridge" or record.get("Internal") is not False:
+        raise ValueError(
+            f"Cannot use external network {expected_name!r} with driver={record.get('Driver')!r} "
+            f"and internal={record.get('Internal')!r}; a non-internal bridge is required."
+        )
+    required_labels = {
+        "io.secs-repro.checkout": str(repository.resolve()),
+        "io.secs-repro.deployment": name,
+    }
+    if type(labels) is not dict:
+        raise ValueError(f"Cannot use external network {expected_name!r}; its ownership labels are malformed.")
+    for key, expected in required_labels.items():
+        if labels.get(key) != expected:
+            raise ValueError(
+                f"Cannot use external network {expected_name!r}; label {key!r} is "
+                f"{labels.get(key)!r}, but this deployment requires {expected!r}."
+            )
     ipam = record.get("IPAM")
     configurations = ipam.get("Config") if type(ipam) is dict else None
     if type(configurations) is not list or len(configurations) != 1 or type(configurations[0]) is not dict:
@@ -165,20 +150,26 @@ def _admit_provider_network(project: ComposeProject, repository: Path, name: str
         host = ipaddress.IPv4Address(network["host_address"])
     except (ipaddress.AddressValueError, ipaddress.NetmaskValueError, TypeError) as error:
         raise ValueError("External provider network has invalid IPv4 routing metadata.") from error
-    required_labels = {
-        "io.secs-repro.checkout": str(repository.resolve()),
-        "io.secs-repro.deployment": name,
-    }
+    if gateway != host:
+        raise ValueError(
+            f"Cannot use external network {expected_name!r}; gateway {str(gateway)!r} does not "
+            f"match network.toml host_address {str(host)!r}."
+        )
+    if host not in subnet:
+        raise ValueError(
+            f"Cannot use external network {expected_name!r}; host address {str(host)!r} is outside "
+            f"subnet {str(subnet)!r}."
+        )
     members = record.get("Containers")
+    if type(members) is not dict:
+        raise ValueError(f"Cannot use external network {expected_name!r}; its container membership is malformed.")
     inventory = project.inventory()
     allowed_members = ({inventory["provider"]["Id"]} if "provider" in inventory else set())
-    if (record.get("Name") != expected_name or record.get("Driver") != "bridge"
-            or record.get("Internal") is not False or type(labels) is not dict
-            or any(labels.get(key) != value for key, value in required_labels.items())
-            or gateway != host or host not in subnet or type(members) is not dict
-            or not set(members).issubset(allowed_members)):
+    foreign_members = set(members) - allowed_members
+    if foreign_members:
         raise ValueError(
-            "External provider network identity, ownership, or route does not match this deployment."
+            f"Cannot use external network {expected_name!r}; it has {len(foreign_members)} "
+            "container endpoint(s) not owned by this deployment."
         )
 
 
@@ -191,13 +182,13 @@ def render_deployment(repository: Path, name: str) -> dict:
     """
     config = configuration_directory(repository, name)
     _private_directory(config)
-    _validate_deployment_environment(config / "deployment.env")
+    _private_file(config / "deployment.env")
     network = _provider_network(repository, name)
     return _render_deployment(repository, name, config, network)
 
 
 def _render_deployment(repository: Path, name: str, config: Path, network: dict) -> dict:
-    """Render one deployment from an already admitted network policy."""
+    """Render one deployment from an already validated network policy."""
     gpu_uuid = _host_gpu_uuid(repository)
     state = repository / "secrets/deployments" / name
     if os.getuid() == 0 or os.getgid() == 0:
@@ -281,11 +272,17 @@ def start_deployment(repository: Path, name: str) -> dict:
     """
     config = configuration_directory(repository, name)
     _private_directory(config)
-    _validate_deployment_environment(config / "deployment.env")
+    _private_file(config / "deployment.env")
     network = _provider_network(repository, name)
     plan = _render_deployment(repository, name, config, network)
     project = _project(repository, name)
-    _admit_provider_network(project, repository, name, network)
+    try:
+        _admit_provider_network(project, repository, name, network)
+    except (OSError, ValueError, RuntimeError) as error:
+        error.add_note(
+            "Startup stopped before this attempt changed attempt ownership, runtime workspaces, or containers."
+        )
+        raise
     state = repository / "secrets/deployments" / name
     for path in (config / "provider.toml", config / "worker.toml",
                  state / "provider.signing.private.json", state / "interpreter.key"):

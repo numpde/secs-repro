@@ -168,15 +168,31 @@ mode = "standard". A provider that reaches a forwarded local API instead uses:
   host_address = "172.22.0.1"
 
 That mode maps nmr.localhost to the address and requires an existing external
-bridge named secs-<name>-egress. The bridge must route that address as its
-gateway and carry io.secs-repro.checkout and io.secs-repro.deployment ownership
-labels for the exact checkout and deployment. The controller inspects this
-network before starting services; it does not create or remove tunnel routing.
+bridge named secs-<name>-egress. The bridge gateway must equal host_address and
+the bridge must carry io.secs-repro.checkout and io.secs-repro.deployment labels
+for the exact checkout and deployment. The controller inspects this network
+before starting services; it does not create the bridge or tunnel routing.
+For the example above, replace <name> with the deployment name and run these
+commands from the repository root before starting the deployment:
+
+  checkout=$(pwd -P)
+  docker --context default network create --driver bridge \
+    --subnet 172.22.0.0/16 --gateway 172.22.0.1 \
+    --label "io.secs-repro.checkout=$checkout" \
+    --label "io.secs-repro.deployment=<name>" \
+    "secs-<name>-egress"
+
+This command creates only the Docker bridge. Establish the tunnel route
+separately. Before creating it, confirm the subnet does not overlap an existing
+Docker or host route. Use a subnet containing host_address and make that address
+its gateway. make provider/deployment/down DEPLOYMENT=<name> retains the
+provider container and this external bridge; removing either belongs to a
+deliberate deployment-retirement procedure.
 For a deployment created before these files existed, create and review
 config/host.toml and config/deployments/<name>/network.toml before its next
-restart, then remove WORKER_GPU_UUID from its deployment.env. The controller
-rejects missing, duplicate, and unexpected deployment.env keys rather than
-silently accepting a second GPU selection.
+restart, then delete the entire WORKER_GPU_UUID assignment from deployment.env.
+The controller supplies the GPU selection from config/host.toml; delete the
+obsolete assignment so the file does not imply a second authority.
 Install the two owner-only secret files separately, using their existing paths:
 
   make provider/credential/install DEPLOYMENT=<name> SOURCE=<credential-file>
