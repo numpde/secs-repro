@@ -1,0 +1,2 @@
+# One host-level GPU selection shared by every named deployment.
+worker_gpu_uuid = ""

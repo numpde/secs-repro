@@ -153,8 +153,30 @@ and project secs-<name>, without inherited Docker/Compose settings or .env files
   make provider/deployment/init DEPLOYMENT=<name>
 
 Edit config/deployments/<name>/provider.toml, worker.toml, and deployment.env.
-The environment file needs the two local image IDs, one GPU UUID, and absolute
-checkpoint and model-cache directory paths. Keep credentials out of that file.
+The environment file needs the two local image IDs and absolute checkpoint and
+model-cache directory paths. Keep credentials out of that file. Select the
+host's GPU once for every named deployment:
+
+  cp --no-clobber config/host.toml.example config/host.toml
+  chmod 0600 config/host.toml
+
+Set worker_gpu_uuid in config/host.toml to one GPU UUID. A deployment cannot
+override this host selection. Initialization also creates network.toml with
+mode = "standard". A provider that reaches a forwarded local API instead uses:
+
+  mode = "forwarded-api"
+  host_address = "172.22.0.1"
+
+That mode maps nmr.localhost to the address and requires an existing external
+bridge named secs-<name>-egress. The bridge must route that address as its
+gateway and carry io.secs-repro.checkout and io.secs-repro.deployment ownership
+labels for the exact checkout and deployment. The controller inspects this
+network before starting services; it does not create or remove tunnel routing.
+For a deployment created before these files existed, create and review
+config/host.toml and config/deployments/<name>/network.toml before its next
+restart, then remove WORKER_GPU_UUID from its deployment.env. The controller
+rejects missing, duplicate, and unexpected deployment.env keys rather than
+silently accepting a second GPU selection.
 Install the two owner-only secret files separately, using their existing paths:
 
   make provider/credential/install DEPLOYMENT=<name> SOURCE=<credential-file>
@@ -181,8 +203,7 @@ alone can leave empty retrieval marked successful when an older worker still
 labels its report analysed. Initialization does not update an existing deployment.
 Attempt ownership is fixed to the API origin and provider reference; changing
 either requires another deployment name. Do not copy journals across names.
-The earlier hand-assembled secrets/fw-remote and secrets/nmr-dapp32-com layouts
-are not adopted automatically. These commands do not provide tunnel setup.
+These commands do not provide tunnel setup.
 
 Provider inputs:
 
@@ -206,7 +227,8 @@ Worker inputs:
 
 - Use the initialized worker.toml and mount the existing complete checkpoint,
   candidate parquet/index pair, verified model cache, cache lock and verifier.
-- Choose the one authorized GPU UUID. Inside the worker it is cuda:0.
+- Choose the one authorized GPU UUID in config/host.toml. Inside every worker it
+  is cuda:0.
 - The model cache is verified before imports. Startup loads the existing index;
   it does not rebuild it or rehash the large index on every Job.
 

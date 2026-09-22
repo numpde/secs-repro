@@ -12,11 +12,230 @@ import unittest
 from unittest.mock import patch
 
 from deployment.compose import ComposeProject
-from deployment.provider_deployment import _bind_attempt_owner, _status, install_secret, main
+from deployment.provider_deployment import (
+    _apply_provider_network,
+    _admit_provider_network,
+    _bind_attempt_owner,
+    _host_gpu_uuid,
+    _provider_network,
+    _status,
+    _validate_deployment_environment,
+    install_secret,
+    main,
+    render_deployment,
+)
 from deployment.templates import _locked_parent
 
 
 class ProviderDeploymentTests(unittest.TestCase):
+    def test_host_gpu_is_one_strict_shared_input(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config"
+            config.mkdir()
+            host = config / "host.toml"
+            host.write_text('worker_gpu_uuid = "GPU-00000000-0000-0000-0000-000000000000"\n')
+            host.chmod(0o600)
+            self.assertEqual(
+                _host_gpu_uuid(root),
+                "GPU-00000000-0000-0000-0000-000000000000",
+            )
+            for invalid in (
+                "",
+                'worker_gpu_uuid = "0"\n',
+                'worker_gpu_uuid = "GPU-00000000-0000-0000-0000-000000000000"\nextra = true\n',
+                'worker_gpu_uuid = ["GPU-00000000-0000-0000-0000-000000000000"]\n',
+                'worker_gpu_uuid = "GPU-------------------------------------"\n',
+                'worker_gpu_uuid = "GPU-000000000000000000000000000000000000"\n',
+            ):
+                with self.subTest(invalid=invalid):
+                    host.write_text(invalid)
+                    with self.assertRaises((ValueError, OSError)):
+                        _host_gpu_uuid(root)
+
+    def test_deployment_environment_has_one_exact_authority_set(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "deployment.env"
+            valid = (
+                "# artifact selections\n"
+                "PROVIDER_IMAGE_REF=sha256:provider\n"
+                "WORKER_IMAGE_REF=sha256:worker\n"
+                "CHECKPOINT_DIRECTORY=/checkpoint\n"
+                "MOLFORMER_CACHE_DIRECTORY=/cache\n"
+            )
+            path.write_text(valid)
+            path.chmod(0o600)
+            _validate_deployment_environment(path)
+            for invalid in (
+                valid + "WORKER_GPU_UUID=GPU-ffffffff-ffff-ffff-ffff-ffffffffffff\n",
+                valid + "EXTRA=value\n",
+                valid.replace("WORKER_IMAGE_REF=sha256:worker\n", ""),
+                valid + "PROVIDER_IMAGE_REF=second\n",
+                valid + "export EXTRA=value\n",
+            ):
+                with self.subTest(invalid=invalid):
+                    path.write_text(invalid)
+                    with self.assertRaises(ValueError):
+                        _validate_deployment_environment(path)
+
+    def test_network_modes_have_one_finite_schema(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config/deployments/example"
+            config.mkdir(parents=True, mode=0o700)
+            network = config / "network.toml"
+            network.write_text('mode = "standard"\n')
+            network.chmod(0o600)
+            self.assertEqual(_provider_network(root, "example"), {"mode": "standard"})
+            network.write_text('mode = "forwarded-api"\nhost_address = "172.22.0.1"\n')
+            self.assertEqual(
+                _provider_network(root, "example"),
+                {"mode": "forwarded-api", "host_address": "172.22.0.1"},
+            )
+
+    def test_network_configuration_rejects_ambiguous_or_unsafe_values(self):
+        invalid_documents = (
+            "",
+            "not toml",
+            'mode = "unknown"\n',
+            'mode = "standard"\nhost_address = "172.22.0.1"\n',
+            'mode = "standard"\nextra = true\n',
+            'mode = "forwarded-api"\n',
+            'mode = "forwarded-api"\nhost_address = "host-gateway"\n',
+            'mode = "forwarded-api"\nhost_address = "::1"\n',
+            'mode = "forwarded-api"\nhost_address = "127.0.0.1:443"\n',
+            'mode = "forwarded-api"\nhost_address = "0.0.0.0"\n',
+            'mode = ["standard"]\n',
+        )
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config/deployments/example"
+            config.mkdir(parents=True, mode=0o700)
+            network = config / "network.toml"
+            network.touch()
+            network.chmod(0o600)
+            for document in invalid_documents:
+                with self.subTest(document=document):
+                    network.write_text(document)
+                    with self.assertRaises((ValueError, OSError)):
+                        _provider_network(root, "example")
+
+    def test_forwarded_network_changes_only_provider_route_and_network_ownership(self):
+        plan = {
+            "services": {
+                "provider": {"image": "sha256:" + "a" * 64, "networks": {"provider-egress": None}},
+                "worker": {"image": "sha256:" + "b" * 64, "network_mode": "none"},
+            },
+            "networks": {"provider-egress": {"name": "generated", "driver": "bridge"}},
+        }
+        worker = dict(plan["services"]["worker"])
+        _apply_provider_network(
+            plan,
+            "example",
+            {"mode": "forwarded-api", "host_address": "172.22.0.1"},
+        )
+        self.assertEqual(plan["services"]["provider"]["extra_hosts"], ["nmr.localhost=172.22.0.1"])
+        self.assertEqual(
+            plan["networks"]["provider-egress"],
+            {"external": True, "name": "secs-example-egress"},
+        )
+        self.assertEqual(plan["services"]["worker"], worker)
+
+    def test_standard_network_does_not_change_the_rendered_plan(self):
+        plan = {
+            "services": {"provider": {"networks": {"provider-egress": None}}, "worker": {"network_mode": "none"}},
+            "networks": {"provider-egress": {"name": "generated", "driver": "bridge"}},
+        }
+        original = json.loads(json.dumps(plan))
+        _apply_provider_network(plan, "example", {"mode": "standard"})
+        self.assertEqual(plan, original)
+
+    def test_forwarded_network_must_be_the_owned_route_to_its_host_address(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            project = unittest.mock.Mock()
+            project.command.return_value = json.dumps([{
+                "Name": "secs-example-egress",
+                "Driver": "bridge",
+                "Internal": False,
+                "Labels": {
+                    "io.secs-repro.checkout": str(root),
+                    "io.secs-repro.deployment": "example",
+                },
+                "IPAM": {"Config": [{"Subnet": "172.22.0.0/16", "Gateway": "172.22.0.1"}]},
+                "Containers": {},
+            }]).encode()
+            project.inventory.return_value = {}
+            _admit_provider_network(
+                project,
+                root,
+                "example",
+                {"mode": "forwarded-api", "host_address": "172.22.0.1"},
+            )
+            project.command.assert_called_once_with("network", "inspect", "secs-example-egress")
+
+    def test_standard_network_never_inspects_external_networks(self):
+        project = unittest.mock.Mock()
+        _admit_provider_network(project, Path("/unused"), "example", {"mode": "standard"})
+        project.command.assert_not_called()
+
+    def test_foreign_or_misdirected_external_network_is_rejected(self):
+        valid = {
+            "Name": "secs-example-egress",
+            "Driver": "bridge",
+            "Internal": False,
+            "Labels": {
+                "io.secs-repro.checkout": "/repository",
+                "io.secs-repro.deployment": "example",
+            },
+            "IPAM": {"Config": [{"Subnet": "172.22.0.0/16", "Gateway": "172.22.0.1"}]},
+            "Containers": {},
+        }
+        changes = (
+            {"Name": "other"},
+            {"Driver": "overlay"},
+            {"Internal": True},
+            {"Labels": {}},
+            {"IPAM": {"Config": [{"Subnet": "172.23.0.0/16", "Gateway": "172.23.0.1"}]}},
+            {"Containers": {"c" * 64: {}}},
+        )
+        for change in changes:
+            with self.subTest(change=change):
+                record = valid | change
+                project = unittest.mock.Mock()
+                project.command.return_value = json.dumps([record]).encode()
+                project.inventory.return_value = {}
+                with self.assertRaises(ValueError):
+                    _admit_provider_network(
+                        project,
+                        Path("/repository"),
+                        "example",
+                        {"mode": "forwarded-api", "host_address": "172.22.0.1"},
+                    )
+
+    def test_invalid_controller_inputs_fail_before_compose_render(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config/deployments/example"
+            config.mkdir(parents=True, mode=0o700)
+            deployment = config / "deployment.env"
+            deployment.write_text(
+                "PROVIDER_IMAGE_REF=a\nWORKER_IMAGE_REF=b\n"
+                "CHECKPOINT_DIRECTORY=/checkpoint\nMOLFORMER_CACHE_DIRECTORY=/cache\n"
+            )
+            deployment.chmod(0o600)
+            network = config / "network.toml"
+            network.write_text('mode = "forwarded-api"\n')
+            network.chmod(0o600)
+            host = root / "config/host.toml"
+            host.write_text('worker_gpu_uuid = "GPU-00000000-0000-0000-0000-000000000000"\n')
+            host.chmod(0o600)
+            project = unittest.mock.Mock()
+            with patch("deployment.provider_deployment._project", return_value=project):
+                with self.assertRaises(ValueError):
+                    render_deployment(root, "example")
+            project.render.assert_not_called()
+
     def test_status_exposes_restart_and_oom_evidence_without_private_metadata(self):
         for health in (None, "unhealthy"):
             with self.subTest(health=health):
