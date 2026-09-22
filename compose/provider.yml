@@ -73,7 +73,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["${WORKER_GPU_UUID:?set the one authorized GPU UUID}"]
+              device_ids: ["${SECS_HOST_WORKER_GPU_UUID:?set config/host.toml worker_gpu_uuid}"]
               capabilities: [gpu]
     environment:
       HF_HUB_CACHE: /cache/hub

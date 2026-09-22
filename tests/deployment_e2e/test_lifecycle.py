@@ -15,7 +15,7 @@ import unittest
 from uuid import uuid4
 
 from deployment.compose import ComposeProject
-from deployment.provider_deployment import _status, render_deployment
+from deployment.provider_deployment import _admit_provider_network, _status, render_deployment
 
 
 @contextmanager
@@ -36,6 +36,32 @@ def lifecycle_workspace():
 
 
 class LifecycleEndToEndTests(unittest.TestCase):
+    def test_forwarded_network_admission_reads_the_real_engine_record(self):
+        with TemporaryDirectory(prefix="secs-network-admission-") as temporary:
+            root = Path(temporary).resolve()
+            token = uuid4().hex
+            deployment = "network-" + token[:12]
+            network_name = f"secs-{deployment}-egress"
+            octet = 20 + int(token[:2], 16) % 200
+            gateway = f"10.253.{octet}.1"
+            project = ComposeProject(root, f"secs-{deployment}", ("provider", "worker"))
+            project.command(
+                "network", "create", "--driver", "bridge",
+                "--subnet", f"10.253.{octet}.0/24", "--gateway", gateway,
+                "--label", f"io.secs-repro.checkout={root}",
+                "--label", f"io.secs-repro.deployment={deployment}",
+                network_name,
+            )
+            try:
+                _admit_provider_network(
+                    project,
+                    root,
+                    deployment,
+                    {"mode": "forwarded-api", "host_address": gateway},
+                )
+            finally:
+                project.command("network", "rm", network_name)
+
     def test_secs_recipe_routes_only_declared_inputs_to_their_consumers(self):
         image = os.environ["DEPLOYMENT_TEST_IMAGE"]
         source = Path(__file__).resolve().parents[2]
@@ -45,9 +71,15 @@ class LifecycleEndToEndTests(unittest.TestCase):
             config.mkdir(parents=True, mode=0o700)
             (root / "compose").mkdir()
             (root / "compose/provider.yml").write_bytes((source / "compose/provider.yml").read_bytes())
+            (root / "config/host.toml").write_text(
+                'worker_gpu_uuid = "GPU-00000000-0000-0000-0000-000000000000"\n'
+            )
+            (root / "config/host.toml").chmod(0o600)
+            (config / "network.toml").write_text('mode = "standard"\n')
+            (config / "network.toml").chmod(0o600)
             env = config / "deployment.env"
             env.write_text(f"PROVIDER_IMAGE_REF={image}\nWORKER_IMAGE_REF={image}\n"
-                           f"WORKER_GPU_UUID=GPU-00000000-0000-0000-0000-000000000000\nCHECKPOINT_DIRECTORY={root}/checkpoint\n"
+                           f"CHECKPOINT_DIRECTORY={root}/checkpoint\n"
                            f"MOLFORMER_CACHE_DIRECTORY={root}/cache\n")
             env.chmod(0o600)
             plan = render_deployment(root, "example")
@@ -55,6 +87,11 @@ class LifecycleEndToEndTests(unittest.TestCase):
             self.assertEqual(provider["restart"], "unless-stopped")
             self.assertEqual(worker["restart"], "unless-stopped")
             self.assertEqual(worker["network_mode"], "none")
+            devices = worker["deploy"]["resources"]["reservations"]["devices"]
+            self.assertEqual(
+                devices[0]["device_ids"],
+                ["GPU-00000000-0000-0000-0000-000000000000"],
+            )
             self.assertNotIn("ports", provider)
             self.assertNotIn("ports", worker)
             provider_mounts = {v["target"]: v for v in provider["volumes"]}
@@ -65,6 +102,40 @@ class LifecycleEndToEndTests(unittest.TestCase):
             self.assertFalse(any("/secrets/" in target for target in worker_mounts))
             self.assertTrue(worker_mounts["/checkpoint"]["read_only"])
             self.assertFalse((root / "secrets").exists())
+
+    def test_forwarded_api_network_is_valid_compose_input(self):
+        image = os.environ["DEPLOYMENT_TEST_IMAGE"]
+        source = Path(__file__).resolve().parents[2]
+        with TemporaryDirectory(prefix="secs-forwarded-render-") as temporary:
+            root = Path(temporary)
+            config = root / "config/deployments/fw-remote"
+            config.mkdir(parents=True, mode=0o700)
+            (root / "compose").mkdir()
+            (root / "compose/provider.yml").write_bytes((source / "compose/provider.yml").read_bytes())
+            (root / "config/host.toml").write_text(
+                'worker_gpu_uuid = "GPU-00000000-0000-0000-0000-000000000000"\n'
+            )
+            (root / "config/host.toml").chmod(0o600)
+            (config / "network.toml").write_text(
+                'mode = "forwarded-api"\nhost_address = "172.22.0.1"\n'
+            )
+            (config / "network.toml").chmod(0o600)
+            env = config / "deployment.env"
+            env.write_text(
+                f"PROVIDER_IMAGE_REF={image}\nWORKER_IMAGE_REF={image}\n"
+                f"CHECKPOINT_DIRECTORY={root}/checkpoint\nMOLFORMER_CACHE_DIRECTORY={root}/cache\n"
+            )
+            env.chmod(0o600)
+            plan = render_deployment(root, "fw-remote")
+            self.assertEqual(
+                plan["services"]["provider"]["extra_hosts"],
+                ["nmr.localhost=172.22.0.1"],
+            )
+            self.assertEqual(
+                plan["networks"]["provider-egress"],
+                {"external": True, "name": "secs-fw-remote-egress"},
+            )
+            self.assertEqual(plan["services"]["worker"]["network_mode"], "none")
 
     def test_render_start_inspect_stop_and_preserve_state(self):
         image = os.environ["DEPLOYMENT_TEST_IMAGE"]

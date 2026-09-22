@@ -5,6 +5,7 @@
 /cache/
 /secrets/
 /config/deployments/
+/config/host.toml
 /qualification/
 /checkpoints/*/candidates/*
 !/checkpoints/*/candidates/manifest.json

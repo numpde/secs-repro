@@ -7,6 +7,7 @@ This adapter supplies SECS paths and serializes deployment mutations.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import importlib.util
 import os
@@ -37,7 +38,148 @@ TEMPLATES = {
     "provider.toml": Path("config/provider.toml.example"),
     "worker.toml": Path("config/worker.toml.example"),
     "deployment.env": Path("config/deployment.env.example"),
+    "network.toml": Path("config/network.toml.example"),
 }
+_GPU_UUID = re.compile(
+    r"GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+_DEPLOYMENT_ENVIRONMENT = {
+    "PROVIDER_IMAGE_REF",
+    "WORKER_IMAGE_REF",
+    "CHECKPOINT_DIRECTORY",
+    "MOLFORMER_CACHE_DIRECTORY",
+}
+
+
+def _toml_document(path: Path) -> dict:
+    """Read one strict private TOML table without exposing its contents."""
+    try:
+        document = tomllib.loads(_private_file(path).decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(f"Deployment input is not valid TOML: {path}") from error
+    if type(document) is not dict:
+        raise ValueError(f"Deployment input must be a TOML table: {path}")
+    return document
+
+
+def _host_gpu_uuid(repository: Path) -> str:
+    """Read the host's one GPU selection; deployments cannot override it."""
+    path = repository.resolve(strict=True) / "config/host.toml"
+    document = _toml_document(path)
+    if set(document) != {"worker_gpu_uuid"}:
+        raise ValueError("config/host.toml must contain only worker_gpu_uuid.")
+    identifier = document["worker_gpu_uuid"]
+    if type(identifier) is not str or _GPU_UUID.fullmatch(identifier) is None:
+        raise ValueError("config/host.toml worker_gpu_uuid must be one GPU UUID, not an index or all GPUs.")
+    return identifier
+
+
+def _validate_deployment_environment(path: Path) -> None:
+    """Keep deployment.env limited to the four artifact selections it owns."""
+    try:
+        lines = _private_file(path).decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise ValueError("deployment.env must be UTF-8 text.") from error
+    names = []
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = re.match(r"([A-Z][A-Z0-9_]*)=", line)
+        if match is None:
+            raise ValueError("deployment.env accepts only NAME=value lines and comments.")
+        names.append(match[1])
+    if len(names) != len(set(names)):
+        raise ValueError("deployment.env must define each input exactly once.")
+    missing = sorted(_DEPLOYMENT_ENVIRONMENT - set(names))
+    unexpected = sorted(set(names) - _DEPLOYMENT_ENVIRONMENT)
+    if missing or unexpected:
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected " + ", ".join(unexpected))
+        raise ValueError("deployment.env has " + "; ".join(details) + ".")
+
+
+def _provider_network(repository: Path, name: str) -> dict:
+    """Read one closed provider-network policy before contacting Docker."""
+    path = configuration_directory(repository, name) / "network.toml"
+    document = _toml_document(path)
+    mode = document.get("mode")
+    if mode == "standard" and set(document) == {"mode"}:
+        return document
+    if mode == "forwarded-api" and set(document) == {"mode", "host_address"}:
+        address = document["host_address"]
+        try:
+            parsed = ipaddress.IPv4Address(address) if type(address) is str else None
+        except ipaddress.AddressValueError:
+            parsed = None
+        if (parsed is not None and not parsed.is_unspecified and not parsed.is_loopback
+                and not parsed.is_multicast and not parsed.is_link_local):
+            return document
+    raise ValueError(
+        "network.toml must select exactly mode='standard', or mode='forwarded-api' "
+        "with one unicast IPv4 host_address."
+    )
+
+
+def _apply_provider_network(plan: dict, name: str, network: dict) -> None:
+    """Apply the finite forwarded-API grant to the normalized Compose plan."""
+    if network["mode"] == "standard":
+        return
+    provider = plan["services"]["provider"]
+    if "extra_hosts" in provider:
+        raise ValueError("The base provider recipe already defines host aliases.")
+    provider["extra_hosts"] = [f"nmr.localhost={network['host_address']}"]
+    expected = {"provider-egress"}
+    if set(plan.get("networks", {})) != expected:
+        raise ValueError("The provider recipe network set does not match the controller contract.")
+    plan["networks"]["provider-egress"] = {
+        "external": True,
+        "name": f"secs-{name}-egress",
+    }
+
+
+def _admit_provider_network(project: ComposeProject, repository: Path, name: str, network: dict) -> None:
+    """Admit the exact externally owned route required by forwarded API access."""
+    if network["mode"] == "standard":
+        return
+    expected_name = f"secs-{name}-egress"
+    try:
+        records = json.loads(project.command("network", "inspect", expected_name))
+    except json.JSONDecodeError as error:
+        raise ValueError("Docker returned malformed external network inspection.") from error
+    if type(records) is not list or len(records) != 1 or type(records[0]) is not dict:
+        raise ValueError("Docker did not inspect exactly one external provider network.")
+    record = records[0]
+    labels = record.get("Labels")
+    ipam = record.get("IPAM")
+    configurations = ipam.get("Config") if type(ipam) is dict else None
+    if type(configurations) is not list or len(configurations) != 1 or type(configurations[0]) is not dict:
+        raise ValueError("External provider network must have exactly one IPAM configuration.")
+    configuration = configurations[0]
+    try:
+        subnet = ipaddress.IPv4Network(configuration.get("Subnet"))
+        gateway = ipaddress.IPv4Address(configuration.get("Gateway"))
+        host = ipaddress.IPv4Address(network["host_address"])
+    except (ipaddress.AddressValueError, ipaddress.NetmaskValueError, TypeError) as error:
+        raise ValueError("External provider network has invalid IPv4 routing metadata.") from error
+    required_labels = {
+        "io.secs-repro.checkout": str(repository.resolve()),
+        "io.secs-repro.deployment": name,
+    }
+    members = record.get("Containers")
+    inventory = project.inventory()
+    allowed_members = ({inventory["provider"]["Id"]} if "provider" in inventory else set())
+    if (record.get("Name") != expected_name or record.get("Driver") != "bridge"
+            or record.get("Internal") is not False or type(labels) is not dict
+            or any(labels.get(key) != value for key, value in required_labels.items())
+            or gateway != host or host not in subnet or type(members) is not dict
+            or not set(members).issubset(allowed_members)):
+        raise ValueError(
+            "External provider network identity, ownership, or route does not match this deployment."
+        )
 
 
 def render_deployment(repository: Path, name: str) -> dict:
@@ -49,7 +191,14 @@ def render_deployment(repository: Path, name: str) -> dict:
     """
     config = configuration_directory(repository, name)
     _private_directory(config)
-    _private_file(config / "deployment.env")
+    _validate_deployment_environment(config / "deployment.env")
+    network = _provider_network(repository, name)
+    return _render_deployment(repository, name, config, network)
+
+
+def _render_deployment(repository: Path, name: str, config: Path, network: dict) -> dict:
+    """Render one deployment from an already admitted network policy."""
+    gpu_uuid = _host_gpu_uuid(repository)
     state = repository / "secrets/deployments" / name
     if os.getuid() == 0 or os.getgid() == 0:
         raise ValueError("SECS deployment requires a nonroot host UID and GID.")
@@ -64,14 +213,16 @@ def render_deployment(repository: Path, name: str) -> dict:
         "WORKER_CONFIG_FILE": str(config / "worker.toml"),
         "MOLFORMER_LOCK_FILE": str(repository / "molformer.lock.toml"),
         "CACHE_VERIFIER_FILE": str(repository / "tools/materialize_molformer_cache.py"),
+        "SECS_HOST_WORKER_GPU_UUID": gpu_uuid,
     }
     plan = _project(repository, name).render(
         repository / "compose/provider.yml", config / "deployment.env", environment,
     )
+    _apply_provider_network(plan, name, network)
     devices = plan["services"]["worker"]["deploy"]["resources"]["reservations"]["devices"]
     identifiers = devices[0]["device_ids"]
-    if len(identifiers) != 1 or not re.fullmatch(r"GPU-[0-9a-fA-F-]{36}", identifiers[0]):
-        raise ValueError("WORKER_GPU_UUID must select one GPU UUID, not an index or all GPUs.")
+    if identifiers != [gpu_uuid]:
+        raise ValueError("The rendered worker GPU differs from config/host.toml.")
     return plan
 
 
@@ -128,8 +279,13 @@ def start_deployment(repository: Path, name: str) -> dict:
     Runtime parsers remain authoritative for credential and model semantics.
     Startup never imports model code on the host, downloads, or rebuilds an index.
     """
-    plan = render_deployment(repository, name)
     config = configuration_directory(repository, name)
+    _private_directory(config)
+    _validate_deployment_environment(config / "deployment.env")
+    network = _provider_network(repository, name)
+    plan = _render_deployment(repository, name, config, network)
+    project = _project(repository, name)
+    _admit_provider_network(project, repository, name, network)
     state = repository / "secrets/deployments" / name
     for path in (config / "provider.toml", config / "worker.toml",
                  state / "provider.signing.private.json", state / "interpreter.key"):
@@ -138,7 +294,7 @@ def start_deployment(repository: Path, name: str) -> dict:
     _bind_attempt_owner(state, config)
     for part in ("state", "sources", "socket"):
         _ensure_private_parent(state / part)
-    return _project(repository, name).start(plan)
+    return project.start(plan)
 
 
 def _bind_attempt_owner(state: Path, config: Path) -> None:
