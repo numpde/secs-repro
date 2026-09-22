@@ -55,7 +55,12 @@ class ScopeReader:
         if entry.byte_length > self._remaining:
             raise ScopeLimitError(source, self._access.max_scope_bytes)
         self._remaining -= entry.byte_length
-        read = self._access.read(source)
+        allowance = entry.byte_length + self._remaining
+        try:
+            read = self._access.read(source, scope_bytes=allowance)
+        except ScopeLimitError:
+            self._remaining = 0
+            raise
         additional = len(read.contents) - entry.byte_length
         if additional > self._remaining:
             raise ScopeLimitError(source, self._access.max_scope_bytes)
@@ -114,7 +119,7 @@ class SourceAccess:
                 )
             return entries
 
-    def read(self, source: SourceRef) -> ReadSource:
+    def read(self, source: SourceRef, *, scope_bytes: int | None = None) -> ReadSource:
         """Read one admitted object once, enforcing the decoder byte limit."""
         chunks = []
         total = 0
@@ -125,6 +130,8 @@ class SourceAccess:
                     raise InputReadError(
                         f"Cannot read the selected source: it exceeds the {self.max_member_bytes}-byte member limit"
                     )
+                if scope_bytes is not None and total > scope_bytes:
+                    raise ScopeLimitError(source, self.max_scope_bytes)
                 chunks.append(chunk)
         contents = b"".join(chunks)
         return ReadSource(source, contents, "sha256:" + sha256(contents).hexdigest())

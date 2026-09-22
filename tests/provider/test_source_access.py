@@ -5,14 +5,36 @@ import errno
 from io import BytesIO
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from zipfile import ZipFile, ZipInfo, ZipExtFile, ZIP_BZIP2, ZIP_LZMA
 
 from secs_inference.provider.input_operations import SourceRef
-from secs_inference.provider.source_access import InputReadError, SourceAccess, _read_chunk
+from secs_inference.provider.source_access import InputReadError, ScopeLimitError, SourceAccess, _read_chunk
 
 
 class SourceAccessTests(unittest.TestCase):
+    def test_scope_reader_enforces_growth_during_streaming_and_exhausts_the_scope(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "upload"
+            path.write_bytes(b"x")
+            access = SourceAccess({"upload:chosen": path}, root,
+                                  max_member_bytes=16, max_scope_bytes=2)
+            actual_scope = access.scope
+
+            def measure_then_grow(source):
+                entries = actual_scope(source)
+                path.write_bytes(b"grown")
+                return entries
+
+            reader = access.scope_reader()
+            with patch.object(access, "scope", side_effect=measure_then_grow):
+                with self.assertRaises(ScopeLimitError):
+                    reader.read(SourceRef("upload:chosen"))
+            path.write_bytes(b"x")
+            with self.assertRaises(ScopeLimitError):
+                reader.read(SourceRef("upload:chosen"))
+
     def test_oversized_inventory_is_rejected_without_disabling_exact_member_access(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
