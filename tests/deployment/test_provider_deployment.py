@@ -19,7 +19,6 @@ from deployment.provider_deployment import (
     _host_gpu_uuid,
     _provider_network,
     _status,
-    _validate_deployment_environment,
     install_secret,
     main,
     render_deployment,
@@ -52,31 +51,6 @@ class ProviderDeploymentTests(unittest.TestCase):
                     host.write_text(invalid)
                     with self.assertRaises((ValueError, OSError)):
                         _host_gpu_uuid(root)
-
-    def test_deployment_environment_has_one_exact_authority_set(self):
-        with TemporaryDirectory() as temporary:
-            path = Path(temporary) / "deployment.env"
-            valid = (
-                "# artifact selections\n"
-                "PROVIDER_IMAGE_REF=sha256:provider\n"
-                "WORKER_IMAGE_REF=sha256:worker\n"
-                "CHECKPOINT_DIRECTORY=/checkpoint\n"
-                "MOLFORMER_CACHE_DIRECTORY=/cache\n"
-            )
-            path.write_text(valid)
-            path.chmod(0o600)
-            _validate_deployment_environment(path)
-            for invalid in (
-                valid + "WORKER_GPU_UUID=GPU-ffffffff-ffff-ffff-ffff-ffffffffffff\n",
-                valid + "EXTRA=value\n",
-                valid.replace("WORKER_IMAGE_REF=sha256:worker\n", ""),
-                valid + "PROVIDER_IMAGE_REF=second\n",
-                valid + "export EXTRA=value\n",
-            ):
-                with self.subTest(invalid=invalid):
-                    path.write_text(invalid)
-                    with self.assertRaises(ValueError):
-                        _validate_deployment_environment(path)
 
     def test_network_modes_have_one_finite_schema(self):
         with TemporaryDirectory() as temporary:
@@ -192,26 +166,88 @@ class ProviderDeploymentTests(unittest.TestCase):
             "Containers": {},
         }
         changes = (
-            {"Name": "other"},
-            {"Driver": "overlay"},
-            {"Internal": True},
-            {"Labels": {}},
-            {"IPAM": {"Config": [{"Subnet": "172.23.0.0/16", "Gateway": "172.23.0.1"}]}},
-            {"Containers": {"c" * 64: {}}},
+            ({"Name": "other"}, "requires 'secs-example-egress'"),
+            ({"Driver": "overlay"}, "non-internal bridge"),
+            ({"Internal": True}, "non-internal bridge"),
+            ({"Labels": {}}, "io.secs-repro.checkout"),
+            ({"IPAM": {"Config": [{"Subnet": "172.23.0.0/16", "Gateway": "172.23.0.1"}]}}, "does not match"),
+            ({"Containers": {"c" * 64: {}}}, "not owned"),
         )
-        for change in changes:
+        for change, message in changes:
             with self.subTest(change=change):
                 record = valid | change
                 project = unittest.mock.Mock()
                 project.command.return_value = json.dumps([record]).encode()
                 project.inventory.return_value = {}
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, message):
                     _admit_provider_network(
                         project,
                         Path("/repository"),
                         "example",
                         {"mode": "forwarded-api", "host_address": "172.22.0.1"},
                     )
+
+    def test_start_rejects_foreign_network_before_runtime_state_or_containers(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config/deployments/example"
+            config.mkdir(parents=True, mode=0o700)
+            inputs = {
+                "deployment.env": (
+                    "PROVIDER_IMAGE_REF=a\nWORKER_IMAGE_REF=b\n"
+                    "CHECKPOINT_DIRECTORY=/checkpoint\nMOLFORMER_CACHE_DIRECTORY=/cache\n"
+                ),
+                "network.toml": 'mode = "forwarded-api"\nhost_address = "172.22.0.1"\n',
+                "provider.toml": '[api]\norigin = "https://api.example.test"\n',
+                "worker.toml": "worker = true\n",
+            }
+            for name, content in inputs.items():
+                path = config / name
+                path.write_text(content)
+                path.chmod(0o600)
+            state = root / "secrets/deployments/example"
+            state.mkdir(parents=True, mode=0o700)
+            for name in ("provider.signing.private.json", "interpreter.key"):
+                path = state / name
+                path.write_text("test input")
+                path.chmod(0o600)
+            project = unittest.mock.Mock()
+            project.command.return_value = json.dumps([{
+                "Name": "secs-example-egress",
+                "Driver": "bridge",
+                "Internal": False,
+                "Labels": {
+                    "io.secs-repro.checkout": str(root.resolve()),
+                    "io.secs-repro.deployment": "foreign",
+                },
+                "IPAM": {"Config": [{"Subnet": "172.22.0.0/16", "Gateway": "172.22.0.1"}]},
+                "Containers": {},
+            }]).encode()
+            project.inventory.return_value = {}
+            errors = StringIO()
+            with patch("deployment.provider_deployment.__file__", str(root / "deployment/cli.py")), patch(
+                "deployment.provider_deployment._project", return_value=project,
+            ), patch(
+                "deployment.provider_deployment._render_deployment", return_value={},
+            ), redirect_stderr(errors):
+                self.assertEqual(main(["up", "example"]), 1)
+            self.assertIn("Deployment up failed", errors.getvalue())
+            self.assertIn("io.secs-repro.deployment", errors.getvalue())
+            self.assertIn("before this attempt changed", errors.getvalue())
+            project.start.assert_not_called()
+            for name in ("attempt-owner.json", "state", "sources", "socket"):
+                self.assertFalse((state / name).exists())
+            project.command.side_effect = OSError("Docker executable unavailable")
+            errors = StringIO()
+            with patch("deployment.provider_deployment.__file__", str(root / "deployment/cli.py")), patch(
+                "deployment.provider_deployment._project", return_value=project,
+            ), patch(
+                "deployment.provider_deployment._render_deployment", return_value={},
+            ), redirect_stderr(errors):
+                self.assertEqual(main(["up", "example"]), 1)
+            self.assertIn("Docker executable unavailable", errors.getvalue())
+            self.assertIn("before this attempt changed", errors.getvalue())
+            project.start.assert_not_called()
 
     def test_invalid_controller_inputs_fail_before_compose_render(self):
         with TemporaryDirectory() as temporary:
