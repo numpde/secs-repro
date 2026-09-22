@@ -28,8 +28,10 @@ class ProviderHelloTests(unittest.TestCase):
         self.assertTrue(ADMISSIBLE_SPECTRUM_FORMATS)
         for spectrum_format in ADMISSIBLE_SPECTRUM_FORMATS:
             self.assertIn(spectrum_format, description)
-        self.assertIn("molecular formula", description)
-        self.assertIn("not validated structure assignments", description)
+        for concept in ("molecular formula", "experiment folder", "multiple uploads",
+                        "MOL", "SDF", "SMILES", "result"):
+            self.assertIn(concept, description)
+        self.assertLessEqual(len(description.encode("utf-8")), 1024)
 
     def test_configured_hello_contains_the_new_analysis_kind_and_format_text(self):
         config = decode_provider_config(CONFIG.read_bytes())
