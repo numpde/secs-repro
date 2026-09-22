@@ -31,6 +31,13 @@ from secs_inference.provider.network_errors import network_failure_reason, netwo
 from secs_inference.provider.problem import describe_problem
 
 
+_FRESH_AUTHENTICATION_RETRY_CODES = frozenset({
+    "authentication_nonce_reused",
+    "authentication_window_closed",
+    "signature_expired",
+})
+
+
 @dataclass(frozen=True, slots=True)
 class HelloUnavailable:
     """One send produced no identity-bound hello acceptance receipt."""
@@ -101,7 +108,10 @@ class ProviderApi:
         # Most operations can retry a 500 using a read or retained command.
         # Capability issuance is different: a lost bearer cannot be replayed,
         # and its contract requires diagnosis before issuing another after 500.
-        retryable = outcome.status in {408, 503} or (
+        retryable = (
+            diagnostic["problem_verified"]
+            and diagnostic.get("code") in _FRESH_AUTHENTICATION_RETRY_CODES
+        ) or outcome.status in {408, 503} or (
             outcome.status == 500 and (operation.method == "GET" or operation in {
                 Operation.START, Operation.COMPLETE, Operation.FAIL, Operation.HELLO, Operation.PROGRESS,
             })
