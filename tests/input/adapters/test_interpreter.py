@@ -44,6 +44,24 @@ class InterpreterContextTests(unittest.TestCase):
         self.inspect.assert_not_called()
         return self.requests[0]
 
+    def assert_endpoint_schema(self, schema, path='$'):
+        self.assertNotIn('oneOf', schema, f'{path}: the endpoint rejects oneOf')
+        if 'anyOf' in schema:
+            self.assertTrue(schema['anyOf'], f'{path}: anyOf must contain alternatives')
+            for index, alternative in enumerate(schema['anyOf']):
+                self.assert_endpoint_schema(alternative, f'{path}.anyOf[{index}]')
+            return
+        self.assertIn('type', schema, f'{path}: every ordinary schema node needs a type')
+        if schema['type'] == 'object':
+            self.assertIs(schema.get('additionalProperties'), False,
+                          f'{path}: strict objects must be closed')
+            self.assertEqual(set(schema.get('required', ())), set(schema.get('properties', ())),
+                             f'{path}: strict objects must require every property')
+            for name, child in schema['properties'].items():
+                self.assert_endpoint_schema(child, f'{path}.properties.{name}')
+        elif schema['type'] == 'array':
+            self.assert_endpoint_schema(schema['items'], f'{path}.items')
+
     def test_authoritative_analysis_kind_is_available_separately_from_job_text(self):
         messages, _ = self.first_request()
         context = json.loads(next(message['content'] for message in messages if message['role'] == 'user'))
@@ -71,22 +89,13 @@ class InterpreterContextTests(unittest.TestCase):
                          {'representation_id', 'formula', 'formula_evidence', 'processing', 'explanation'})
         self.assertTrue(set(schema['required']) <= set(schema['properties']))
         self.assertTrue({'as_stored', 'auto'} <= set(schema['properties']['processing']['enum']))
-        evidence = schema['properties']['formula_evidence']
-        self.assertNotIn('oneOf', evidence,
-                         'The configured model endpoint rejects oneOf in function schemas')
-        self.assertEqual(evidence['anyOf'], [
-            {'type': 'object', 'additionalProperties': False,
-             'properties': {'kind': {'const': 'job_specification'},
-                            'quote': {'type': 'string', 'minLength': 1, 'maxLength': 512}},
-             'required': ['kind', 'quote']},
-            {'type': 'object', 'additionalProperties': False,
-             'properties': {
-                 'kind': {'const': 'representations'},
-                 'representation_ids': {'type': 'array', 'items': {'type': 'string', 'minLength': 1},
-                                        'minItems': 1, 'maxItems': 16, 'uniqueItems': True},
-             },
-             'required': ['kind', 'representation_ids']},
-        ])
+
+    def test_all_tools_use_the_endpoint_strict_schema_subset(self):
+        _, tools = self.first_request()
+        for tool in tools:
+            function = tool['function']
+            self.assertIs(function['strict'], True)
+            self.assert_endpoint_schema(function['parameters'], function['name'])
 
     def test_selection_tool_preserves_the_decision_for_worker_execution(self):
         choice = {'representation_id': 'opaque-choice', 'formula': 'C22H36O7',
