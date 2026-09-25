@@ -44,7 +44,7 @@ _SOURCE = {
     "required": ["upload_ref", "member"],
 }
 _EXPLANATION = {"type": "string", "minLength": 1, "maxLength": 2048}
-_FORMULA_EVIDENCE = {"oneOf": [
+_FORMULA_EVIDENCE = {"anyOf": [
     {
         "type": "object", "additionalProperties": False,
         "properties": {

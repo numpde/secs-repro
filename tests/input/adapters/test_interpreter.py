@@ -72,7 +72,9 @@ class InterpreterContextTests(unittest.TestCase):
         self.assertTrue(set(schema['required']) <= set(schema['properties']))
         self.assertTrue({'as_stored', 'auto'} <= set(schema['properties']['processing']['enum']))
         evidence = schema['properties']['formula_evidence']
-        self.assertEqual(evidence['oneOf'], [
+        self.assertNotIn('oneOf', evidence,
+                         'The configured model endpoint rejects oneOf in function schemas')
+        self.assertEqual(evidence['anyOf'], [
             {'type': 'object', 'additionalProperties': False,
              'properties': {'kind': {'const': 'job_specification'},
                             'quote': {'type': 'string', 'minLength': 1, 'maxLength': 512}},
