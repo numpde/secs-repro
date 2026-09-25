@@ -16,6 +16,7 @@ JCAMP_SPECTRUM = (
 FRONTEND_REFERENCE = FIXTURES / "frontend/4-chlorobenzylamine.json"
 NTUPLES_SPECTRUM = FIXTURES / "jcamp/ethylvinylether/1h.jdx"
 NTUPLES_FRONTEND_REFERENCE = FIXTURES / "frontend/ethylvinylether.json"
+HZ_XYDATA_SPECTRUM = FIXTURES / "input/encoded-fix.jdx"
 
 
 class JcampFrontendReferenceTest(unittest.TestCase):
@@ -46,11 +47,35 @@ class JcampFrontendReferenceTest(unittest.TestCase):
 
         np.testing.assert_array_max_ulp(actual, expected, maxulp=1)
 
-    def test_ntuples_hz_axis_requires_a_chemical_shift_reference(self):
+    def test_ntuples_hz_axis_without_an_explicit_reference_divides_by_frequency(self):
         contents = NTUPLES_SPECTRUM.read_text()
         contents = contents.replace("##$OFFSET= 11.00659\n", "", 1)
 
-        with self.assertRaisesRegex(ValueError, "chemical-shift reference"):
+        source = read_jcamp_spectrum(self._write_variant(contents))
+
+        frequency = 400.112
+        self.assertAlmostEqual(source.ppm[0], 4807.69230769231 / frequency)
+        self.assertEqual(source.ppm[-1], 0)
+
+    def test_xydata_hz_axis_without_an_explicit_reference_divides_by_frequency(self):
+        contents = HZ_XYDATA_SPECTRUM.read_text()
+        contents = contents.replace(
+            "##.SHIFT REFERENCE=INTERNAL, undefined, 1, -800\n", "", 1,
+        ).replace("##$OFFSET=10\n", "", 1)
+
+        source = read_jcamp_spectrum(self._write_variant(contents))
+
+        np.testing.assert_allclose(source.ppm, np.linspace(12, 0, 257))
+
+    def test_hz_axis_without_an_observe_frequency_is_rejected(self):
+        contents = HZ_XYDATA_SPECTRUM.read_text()
+        contents = contents.replace(
+            "##.SHIFT REFERENCE=INTERNAL, undefined, 1, -800\n", "", 1,
+        ).replace("##$OFFSET=10\n", "", 1).replace(
+            "##.OBSERVE FREQUENCY=400\n", "", 1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "OBSERVEFREQUENCY"):
             read_jcamp_spectrum(self._write_variant(contents))
 
     def test_ntuples_encoded_rows_preserve_the_axis_and_values(self):
@@ -232,10 +257,10 @@ class JcampFrontendReferenceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             read_jcamp_spectrum(self._write_variant(contents))
 
-    def test_non_ppm_axis_is_rejected(self):
+    def test_unsupported_axis_unit_is_rejected(self):
         contents = JCAMP_SPECTRUM.read_text().replace(
             "##XUNITS=PPM",
-            "##XUNITS=HZ",
+            "##XUNITS=SECONDS",
             1,
         )
 
