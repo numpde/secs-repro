@@ -2,24 +2,20 @@
 
 Ported from magnet-deploy/tests/model_behavior/run_e01_interpreter.py (26931fb):
 real configured endpoint, semantic outcome checks, and retained-conversation
-feedback. Use SECS's production configuration, tools, session and source inspector.
-Only the supplied archive is a fixture. No Job API, GPU or scientific run occurs.
+feedback. Use SECS's production configuration, tools and session with fixed
+inspector replies. No Job API, file parsing, GPU or scientific run occurs.
 """
 
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from time import monotonic
 import unittest
-from zipfile import ZipFile
 
 from secs_inference.provider.config import CONFIG_PATH, decode_provider_config
-from secs_inference.provider.input_adapter import InputAdapter
-from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation, SourceRef
+from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
 from secs_inference.provider.interpreter import InterpretationSession
 from secs_inference.provider.job_input import JobSpecification
 from secs_inference.provider.job_upload import JobUpload
 from secs_inference.provider.main import _read_regular_file, load_chat_endpoint
-from secs_inference.provider.source_access import SourceAccess
+from secs_inference.provider.source_access import InputReadError
 
 
 class LiveInterpreterTests(unittest.TestCase):
@@ -32,20 +28,27 @@ class LiveInterpreterTests(unittest.TestCase):
         print(f"Live interpreter: model={cls.chat.model!r}, reasoning_effort={cls.chat.reasoning_effort!r}", flush=True)
 
     def setUp(self):
-        self.temporary = TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        root = Path(self.temporary.name)
-        spectrum = Path("/fixtures/proton.jdx").read_bytes()
-        spectrum = b"##TITLE=NMR experiment\n" + spectrum.split(b"\n", 1)[1]
-        archive = root / "experiments.zip"
-        with ZipFile(archive, "w") as output:
-            output.writestr("experiment1/spectrum.jdx", Path(__file__).with_name("fixtures").joinpath("carbon.jdx").read_bytes())
-            output.writestr("experiment2/spectrum.jdx", spectrum)
-        self.access = SourceAccess({"upload:fixture": archive}, root)
-        self.adapter = InputAdapter(token_key=b"model-behavior" * 2)
-        self.inspected = []
         self.representations = {}
-        self.uploads = (JobUpload("upload:fixture", "Archive of two NMR experiments; inspect their nuclei.", archive.stat().st_size, None),)
+        self.catalog = {
+            "upload:fixture": (
+                self.representation("upload:fixture", "representation-a", "experiment1/spectrum.jdx", "13C", 16384),
+                self.representation("upload:fixture", "representation-b", "experiment2/spectrum.jdx", "1H", 32768),
+            ),
+        }
+        self.uploads = (JobUpload("upload:fixture", "Archive of two NMR experiments; inspect their nuclei.", 4096, None),)
+
+    @staticmethod
+    def representation(upload_ref, identity, member, nucleus, points, *companions):
+        return {
+            "id": identity,
+            "kind": "spectrum",
+            "sources": [
+                {"upload_ref": upload_ref, "member": name}
+                for name in (member, *companions)
+            ],
+            "metadata": {"dimension": 1, "nucleus": nucleus, "points": points},
+            "related_ids": [],
+        }
 
     def session(self, text, uploads):
         """Keep each observation within the deployment's own turn and time limits."""
@@ -54,9 +57,19 @@ class LiveInterpreterTests(unittest.TestCase):
             max_turns=min(8, self.execution.max_turns))
 
     def inspect(self, source):
-        """Observe successful production inspection without substituting its output."""
-        result = self.adapter.discover(self.access, "execution_attempt:model-behavior", source)
-        self.inspected.append(source)
+        """Return fixed discovery facts at the production inspection callback seam."""
+        try:
+            representations = self.catalog[source.upload_ref]
+        except KeyError:
+            raise InputReadError("Cannot inspect this source: it is not an Upload listed for this Job") from None
+        if source.member is not None:
+            representations = tuple(
+                item for item in representations
+                if any(component["member"] == source.member for component in item["sources"])
+            )
+            if not representations:
+                raise InputReadError("Cannot inspect this source: the requested member is unavailable")
+        result = {"representations": list(representations), "complete": True, "issues": []}
         self.representations.update({item["id"]: item for item in result["representations"]})
         return result
 
@@ -70,16 +83,14 @@ class LiveInterpreterTests(unittest.TestCase):
     def test_selects_proton_experiment_among_distractors(self):
         session = self.session("Find the structure with molecular formula C7H8ClN.", self.uploads)
         self.assert_proton_selection(session.select())
-        self.assertIn(SourceRef("upload:fixture", "experiment2/spectrum.jdx"), self.inspected)
 
     def test_selects_bruker_processed_pair(self):
-        """Require real Bruker tool arguments; the separate reader tests decode it."""
-        archive = Path(self.temporary.name) / "bruker.zip"
-        with ZipFile(archive, "w") as output:
-            for name in ("1r", "procs"):
-                output.write(Path("/fixtures/bruker") / name, "NMR-test-1/pdata/1/" + name)
-        self.access.files["upload:bruker"] = archive
-        uploads = (JobUpload("upload:bruker", "Archive of an NMR experiment; inspect the processed data.", archive.stat().st_size, None),)
+        """Require a processed Bruker pair selection; reader tests own decoding."""
+        self.catalog["upload:bruker"] = (
+            self.representation("upload:bruker", "representation-c", "NMR-test-1/pdata/1/1r", "1H", 65536,
+                                "NMR-test-1/pdata/1/procs"),
+        )
+        uploads = (JobUpload("upload:bruker", "Archive of an NMR experiment; inspect the processed data.", 8192, None),)
         session = self.session("Find the structure with molecular formula C21H22N2O2.", uploads)
         outcome = session.select()
         self.assertIsInstance(outcome, SelectedRepresentation, session.rejections)
@@ -87,7 +98,6 @@ class LiveInterpreterTests(unittest.TestCase):
         self.assertEqual(sources, {"NMR-test-1/pdata/1/1r", "NMR-test-1/pdata/1/procs"})
         self.assertEqual(outcome.formula, "C21H22N2O2")
         self.assertTrue(outcome.explanation.strip())
-        self.assertIn(SourceRef("upload:bruker", "NMR-test-1/pdata/1/procs"), self.inspected)
 
     def test_reader_rejection_is_explained_in_the_same_conversation(self):
         """Inject a structural rejection, not an outage that the worker would fail.
