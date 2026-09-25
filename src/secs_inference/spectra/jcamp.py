@@ -97,7 +97,7 @@ def _read_xydata(
     # FIRSTX and LASTX define the dense axis after the encoded row checkpoints
     # agree; nmrglue's universal dictionary cannot recover its absolute position.
     x_axis = np.linspace(first_ppm, last_ppm, declared_points, dtype=np.float64)
-    ppm = _referenced_ppm_axis(parameters, x_axis) if x_units == "HZ" else x_axis
+    ppm = _ppm_axis_from_hz(parameters, x_axis) if x_units == "HZ" else x_axis
     return SourceSpectrum(
         ppm=ppm,
         intensities=intensities,
@@ -154,7 +154,7 @@ def _read_ntuples(
         _validate_ntuple_checkpoints(rows, channel, x_axis, factors["X"])
     x_units = units["X"].upper()
     if x_units == "HZ":
-        ppm = _referenced_ppm_axis(parameters, x_axis)
+        ppm = _ppm_axis_from_hz(parameters, x_axis)
     elif x_units == "PPM":
         ppm = x_axis
     else:
@@ -308,12 +308,14 @@ def _x_checkpoint(token: str) -> tuple[float, float]:
     return checkpoint, precision
 
 
-def _referenced_ppm_axis(parameters: dict, x_axis: np.ndarray) -> np.ndarray:
+def _ppm_axis_from_hz(parameters: dict, x_axis: np.ndarray) -> np.ndarray:
+    """Convert a Hz axis to ppm using the MHz observation frequency and reference metadata."""
+    frequency = _finite_parameter(parameters, ".OBSERVEFREQUENCY")
+    if frequency <= 0:
+        _reject("the observed frequency is not positive")
+
     if "$OFFSET" in parameters:
         offset = _finite_parameter(parameters, "$OFFSET")
-        frequency = _finite_parameter(parameters, ".OBSERVEFREQUENCY")
-        if frequency <= 0:
-            _reject("the observed frequency is not positive")
         return offset + (x_axis - x_axis[0]) / frequency
 
     if ".SHIFTREFERENCE" in parameters:
@@ -333,16 +335,17 @@ def _referenced_ppm_axis(parameters: dict, x_axis: np.ndarray) -> np.ndarray:
         if not 1 <= reference_point <= x_axis.size:
             _reject(".SHIFT REFERENCE points outside the spectrum")
 
-        frequency = _finite_parameter(parameters, ".OBSERVEFREQUENCY")
-        if frequency <= 0:
-            _reject("the observed frequency is not positive")
         # JCAMP numbers points from one; AFFN also permits a reference between points.
         reference_x = x_axis[0] + (reference_point - 1) * (
             x_axis[-1] - x_axis[0]
         ) / (x_axis.size - 1)
         return reference_ppm + (x_axis - reference_x) / frequency
 
-    _reject("its Hz axis has no chemical-shift reference")
+    # The pinned frontend accepts processed JCAMP spectra without an explicit
+    # chemical-shift reference by treating their Hz coordinates as frequency
+    # offsets. Preserve that compatibility without claiming the producer
+    # chemically referenced the spectrum.
+    return x_axis / frequency
 
 
 def _validated_intensities(
