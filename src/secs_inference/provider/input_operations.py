@@ -48,7 +48,7 @@ _FORMULA_EVIDENCE = {"anyOf": [
     {
         "type": "object", "additionalProperties": False,
         "properties": {
-            "kind": {"const": "job_specification"},
+            "kind": {"type": "string", "enum": ["job_specification"]},
             "quote": {"type": "string", "minLength": 1, "maxLength": 512},
         },
         "required": ["kind", "quote"],
@@ -56,7 +56,7 @@ _FORMULA_EVIDENCE = {"anyOf": [
     {
         "type": "object", "additionalProperties": False,
         "properties": {
-            "kind": {"const": "representations"},
+            "kind": {"type": "string", "enum": ["representations"]},
             "representation_ids": {
                 "type": "array", "items": _TEXT, "minItems": 1, "maxItems": 16,
                 "uniqueItems": True,
