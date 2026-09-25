@@ -45,7 +45,8 @@ class InterpreterContextTests(unittest.TestCase):
         return self.requests[0]
 
     def assert_endpoint_schema(self, schema, path='$'):
-        self.assertNotIn('oneOf', schema, f'{path}: the endpoint rejects oneOf')
+        for keyword in ('oneOf', 'uniqueItems'):
+            self.assertNotIn(keyword, schema, f'{path}: the endpoint rejects {keyword}')
         if 'anyOf' in schema:
             self.assertTrue(schema['anyOf'], f'{path}: anyOf must contain alternatives')
             for index, alternative in enumerate(schema['anyOf']):

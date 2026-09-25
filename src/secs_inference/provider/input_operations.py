@@ -59,7 +59,6 @@ _FORMULA_EVIDENCE = {"anyOf": [
             "kind": {"type": "string", "enum": ["representations"]},
             "representation_ids": {
                 "type": "array", "items": _TEXT, "minItems": 1, "maxItems": 16,
-                "uniqueItems": True,
             },
         },
         "required": ["kind", "representation_ids"],
