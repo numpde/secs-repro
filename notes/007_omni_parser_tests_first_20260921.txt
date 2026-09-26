@@ -2,15 +2,16 @@ Unified scientific Job input
 ============================
 
 Date: 2026-09-21
-Revised: 2026-09-25
-Status: target architecture; the current Python decoders are transitional
+Revised: 2026-09-26
+Status: target architecture; the pinned reference decoder does not qualify at
+this revision and the current Python decoders are transitional
 
 This note supersedes the input-selection design in notes 001 and 003. The
 current worker provides per-Upload or exact-member inspection, opaque
 representation identities, formula evidence, and Python format-specific
 discovery and preparation. The target below adds Job-wide acquisition,
 advertised preparation-option identities, a versioned decoder boundary and a
-qualification ledger with explicit reference comparisons.
+structured support catalog with build-bound qualification evidence.
 
 
 Objective
@@ -167,6 +168,30 @@ pinned artifacts without a sibling frontend checkout or runtime network. The
 decoder and protocol versions are part of the worker image identity and of each
 execution claim.
 
+The pinned reference stack does not qualify as the production decoder at the
+evaluated revision. Its low-level JCAMP parser can expose the entry tree needed
+to keep linked blocks, complex channels and two-dimensional rows distinct, but
+the canonical inventory and positional locators remain project-owned
+projections.
+The general core returns no representation for the maintained `1r` plus
+`procs` Bruker case, and its generic expanded-file path does not preserve the
+NMRium state and resource relationship. Its JCAMP and core package manifests
+also declare `CC-BY-NC-SA-4.0`; production use has not been approved under
+those terms.
+
+Do not fill those gaps with a second companion table, resource resolver or
+identity scheme around this stack. None of its packages enters production
+unless a later qualification and licence review clears it. Retain the fixtures,
+pinned expected outputs and spike observations. Delete the candidate probe and
+its tests, or replace them with production-protocol conformance tests cited by
+the support catalog, when JCAMP migrates.
+
+The production decoder is one repository-owned protocol and dataset graph,
+with one implementation owner per format family. Its components must pass the
+qualification suite under reviewed production-compatible licence terms.
+Migrate qualified behavior from the current stack one format family at a time,
+deleting each displaced discovery and preparation path in the same slice.
+
 
 Representation and preparation contract
 ---------------------------------------
@@ -210,69 +235,75 @@ Sources of truth and qualification
 There is no single format-name allowlist. Different facts have different
 owners:
 
-* the pinned decoder package owns what bytes it can recognize and decode;
+* each format implementation owns what bytes it can recognize and decode;
 * the canonical inventory schema owns how discovered choices are represented;
 * SECS admission code owns which represented choices are executable;
 * the interpreter tool schema owns the required decision and evidence;
-* a machine-readable qualification ledger owns the compatibility claims that
-  the project may make;
-* the provider offering owns the support categories promised to users and
-  cites the qualification claims supporting each category.
+* fixture provenance owns byte hashes, origin, licence and derivation;
+* direct contract tests own case-specific expected inventory, failure and
+  preparation observations;
+* a reference lock owns the pinned comparison revision and source hashes;
+* a versioned extracted reference-target inventory, when available, owns
+  upstream capability keys and applicability decisions;
+* a structured support catalog owns stable public claim identities, wording,
+  limits and required evidence dimensions; and
+* a qualification receipt owns the result that named evidence passed for one
+  exact qualification-input digest.
 
-The current comparison baseline is
-fork-of-elucidation.cheminfo.org at
-5ab78f61e9fb679f3f0b9823be5217ae250e213f. The reference frontend is an update
-and evidence source, not production policy. A claim to cover all of its formats
-requires an exhaustive inventory extracted from its pinned loader or plugin
-registry. If no such authority can be extracted, qualify named cases and do not
-claim full frontend parity.
+The reference lock owns the current comparison baseline. The reference
+frontend is an update and evidence source, not production policy. A claim to
+cover all of its formats requires an exhaustive inventory extracted from its
+pinned loader or plugin registry. If no such authority can be extracted,
+qualify named cases and do not claim full frontend parity.
 
-The qualification ledger defines the compatibility claims evaluated for a
-release and links each claim to its evidence. It is not runtime policy. Each
-case records:
-
-* fixture identity, provenance, licence and exact byte hash;
-* decoder and reference revisions and the invoked entry point;
-* expected representations, relationships and localized issues;
-* whether SECS execution is expected and with which preparation option;
-* the comparison boundary, oracle, tolerance and independently known
-  scientific facts; and
-* deliberate divergences and qualification limits.
+The support catalog is product authority, not runtime admission policy. Each
+claim records only its stable identity, public wording and limits, and exact
+pairs of required evidence dimension and evidence identity. It does not copy
+fixture provenance, expected representations, tolerances, decoder revisions
+or reference revisions from their stronger owners. The provider Hello
+`analysis_offerings` and any published support table are projections of this
+catalog rather than separately maintained claim lists.
 
 Every capability in the extracted reference target, when such an inventory is
-available, is classified as qualified, a visible gap, or not applicable to the
-offering. Absence is not a classification.
+available, has an explicit applicability decision. Comparison with the current
+qualification receipt reports each applicable capability as qualified or a
+visible gap. Absence is not a classification.
 
-The first ledger freezes a migration floor derived from the current provider
-offering and every existing qualified coverage case. Its capability keys do
-not disappear: a retired claim keeps an explicit removed status, rationale and
-offering decision. The extracted reference target is tracked separately; its
-gaps remain visible without silently becoming current product commitments. A
-new decoder cannot define completeness by returning a narrower set.
+The first catalog freezes a migration floor through reviewed reconciliation of
+the current provider offering with passing evidence; overstated wording is
+corrected rather than admitted as a claim. The extracted reference target is
+tracked separately; its gaps remain visible without silently becoming current
+product commitments. A new decoder cannot define completeness by returning a
+narrower set. Release receipts preserve what passed for a released build.
+Removing a claim is an explicit product change rather than a silent narrowing.
 
-Compatibility is multidimensional. The ledger distinguishes reference
-admission, representation enumeration, metadata agreement, inference-port
-numerical agreement, real-instrument qualification and deployed Job-flow
-qualification. A shared fixture recognized by both implementations proves only
-admission unless the stronger comparison is recorded and executed.
+Compatibility is multidimensional: admission, representation enumeration,
+metadata agreement, inference-port numerical agreement, real-instrument
+qualification and deployed Job flow are separate evidence dimensions. A
+shared fixture recognized by two implementations proves only admission unless
+the stronger comparison runs.
 
-Tests validate every ledger record against fixture bytes and provenance,
-reject unknown statuses and stale reference revisions, and require the claimed
-comparison to run. The published qualification table is generated from the
-ledger. A bidirectional check requires every advertised support category to
-cite current passing claim identities and every advertised claim to appear in
-that category's projection. Runtime does not compare submitted data with
-fixture rows: variants may run when the pinned decoder and SECS contract admit
-them, but the project makes no broader qualification claim from that event. A
-decoder update cannot change a published claim until its cases pass for the new
-revision. Adding, weakening or removing a claim is an explicit classified
-compatibility change. Each claim binds a separately collected test case.
+The qualification command verifies the reference lock and decoder artifact
+manifest, runs the direct tests named by active claims, and emits a receipt
+containing the passed dimension/evidence pairs and exact build identities. It
+also records one digest
+over the catalog, evidence tests, runner, fixture provenance and bytes,
+reference lock and artifacts, generated offering projections, and decoder
+build identity. Publication requires that digest to match its inputs and the
+decoder artifact being published, every active claim pair to appear in the
+receipt, and the canonical `analysis_offerings` projection and published
+support-table bytes to match the catalog. Adding or widening a claim fails
+until the missing evidence passes. Runtime does not compare submitted data
+with fixture rows and cannot make a broader qualification claim merely because
+a variant was admitted.
 
 Reference artifacts are regenerated only through an explicit, pinned, offline
 update lane and reviewed as source changes. Ordinary tests never rewrite them.
-For an upstream decoder update, run every recorded claim, regenerate only
-affected reference artifacts, and publish the dependency revision with those
-reviewed changes.
+A derived artifact's provenance cites the reference-lock identity and its own
+origin; it does not copy the lock's revision or source hashes as peer
+authority. A reference-lock update regenerates only affected oracle artifacts.
+A production-decoder update runs every claim against the unchanged oracle and
+cannot rewrite its own evidence.
 
 
 Tests and fixtures
@@ -290,12 +321,12 @@ contract:
   stale claims, misleading metadata, corrupt data, duplicate names, resource
   limits, decoder failures and cancellation.
 
-Format cases are data in the qualification ledger, not copied test methods or a
-generic scenario language. Keep direct behavioral tests for semantics that are
-not derivable from the ledger. Scripted interpreter replies prove transport and
-orchestration; real-model evaluations prove selection judgment and useful
-failure explanations. A small number of deployed API/GUI flows prove the full
-handoff.
+Keep format behavior in direct tests rather than transcribing it into the
+support catalog or a generic scenario language. Use data tables only where
+variants share identical mechanics. Scripted interpreter replies prove
+transport and orchestration; real-model evaluations prove selection judgment
+and useful failure explanations. A small number of deployed API/GUI flows
+prove the full handoff.
 
 Every committed fixture and derived artifact requires recorded provenance,
 licence, exact hash and derivation. Synthetic data records its generator and
@@ -306,8 +337,8 @@ rights establish that it can enter the shared corpus.
 The pinned reference lock records several decoding dependencies under
 CC-BY-NC-SA-4.0, and the pinned frontend tree has no root licence file. Their
 use in fixture generation does not establish permission to redistribute or run
-them in production. The decoder spike cannot pass until authoritative terms,
-attribution and the intended service use have been reviewed.
+them in production. Production adoption remains blocked until authoritative
+terms, attribution and the intended service use have been reviewed.
 
 
 Migration and deletion
@@ -315,18 +346,21 @@ Migration and deletion
 
 Migration slices change one authority at a time and end without dual ownership:
 
-1. Add the qualification ledger, freeze the migration floor and make the
-   existing corpus claims pass without changing runtime policy. Correct
-   overstated documentation.
+1. Consolidate the reference lock, structure the provider support catalog and
+   bind its migration-floor claims to existing direct-test evidence. Generate
+   offering projections and a build qualification receipt without changing
+   runtime admission policy. Correct overstated documentation.
 2. Decide the localized-issue selection rule with red acceptance cases, then
    replace interpreter-directed per-source inspection with owned Job-wide
    acquisition and inventory. Prove membership fencing, classification of every
    linked Upload, and refusal when count, byte or inventory-size limits prevent
    complete Job inspection.
-3. Complete the decoder and licensing spike. Reject the proposed implementation
-   if enumeration, containment, deployment or licence gates fail.
+3. The pinned reference stack did not qualify for production use at the
+   evaluated revision. Retain its fixtures, expected outputs and observations;
+   do not retain its project-owned inventory projection as a second parser.
 4. Establish the production protocol, reproducible dependency build and
-   process-tree supervision. This slice claims no new format support.
+   process-tree supervision around qualified decoder components under reviewed
+   production-compatible licence terms. This slice claims no new format support.
 5. Move the complete JCAMP-DX family through the decoder boundary, including
    processed spectra, multiple blocks, peak tables, unsuitable dimensions and
    FIDs. Introduce advertised preparation-option identities in that slice and
@@ -353,7 +387,8 @@ replacement path or removed by a separate offering decision, and every
 representation returned by the adopted decoder is projected through the
 canonical contract or rejected with an attributed reason. SECS admission
 remains explicit, the interpreter selects an exact executable choice or reports
-the evidenced blocker, every published compatibility claim is ledger-backed,
-and the superseded Python format stack is absent. A gap in the migration floor
-or an advertised category does not satisfy completion; other reference-target
-gaps remain explicit qualification work.
+the evidenced blocker, every published compatibility claim is backed by a
+qualification receipt for the released build, and the superseded Python format
+stack is absent. A gap in the migration floor or an advertised category does
+not satisfy completion; other reference-target gaps remain explicit
+qualification work.
