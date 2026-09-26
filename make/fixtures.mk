@@ -1,5 +1,4 @@
-override FRONTEND_REFERENCE_NODE_IMAGE := docker.io/library/node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf
-override FRONTEND_REFERENCE_REVISION := 5ab78f61e9fb679f3f0b9823be5217ae250e213f
+override FRONTEND_REFERENCE_LOCK := $(REPOSITORY_ROOT)/contracts/upstream/frontend_reference.json
 FRONTEND_REFERENCE_REPOSITORY ?= $(abspath ../fork-of-elucidation.cheminfo.org)
 override FRONTEND_BRUKER_REFERENCE_INPUT := tests/fixtures/bruker/F3697/1
 override FRONTEND_BRUKER_REFERENCE_OUTPUT := tests/fixtures/frontend/F3697-1.json
@@ -27,34 +26,46 @@ fixtures/input/write:
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 64 --cpus 2 --memory 2g --memory-swap 2g \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
-		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/generate_input_fixtures.mjs,dst=/tools/generate_input_fixtures.mjs,readonly" \
-		--mount "type=bind,src=$(REPOSITORY_ROOT)/tools/generate_nmrium_fixtures.mjs,dst=/tools/generate_nmrium_fixtures.mjs,readonly" \
 		--mount "type=bind,src=$$stage,dst=/output" \
-		--entrypoint node "$$image" /tools/generate_input_fixtures.mjs
+		--entrypoint node "$$image" /opt/reference/generate_input_fixtures.mjs
 	# A failed reference read must not publish a partly generated corpus.
 	for artifact in "$$stage"/*; do mv -f -- "$$artifact" "$$output_directory/"; done
 
 fixtures/frontend-reference/base-image/pull:
-	$(DOCKER) pull "$(FRONTEND_REFERENCE_NODE_IMAGE)"
+	reference_output=$$(python3 tools/frontend_reference_lock.py values "$(FRONTEND_REFERENCE_LOCK)")
+	mapfile -t reference_values <<< "$$reference_output"
+	$(DOCKER) pull "$${reference_values[0]}"
 
 fixtures/frontend-reference/image:
-	@frontend_context=$$(mktemp -d)
-	trap 'rm -rf "$$frontend_context"' EXIT
+	@build_context=$$(mktemp -d)
+	frontend_context=$$(mktemp -d)
+	trap 'rm -rf "$$build_context" "$$frontend_context"' EXIT
+	install -D -m 0644 "$(FRONTEND_REFERENCE_LOCK)" "$$build_context/contracts/upstream/frontend_reference.json"
+	install -D -m 0644 containers/frontend-reference/Dockerfile "$$build_context/containers/frontend-reference/Dockerfile"
+	install -D -m 0644 containers/frontend-reference/Dockerfile.dockerignore "$$build_context/containers/frontend-reference/Dockerfile.dockerignore"
+	install -D -m 0644 tools/generate_frontend_reference.ts "$$build_context/tools/generate_frontend_reference.ts"
+	install -D -m 0644 tools/generate_input_fixtures.mjs "$$build_context/tools/generate_input_fixtures.mjs"
+	install -D -m 0644 tools/generate_nmrium_fixtures.mjs "$$build_context/tools/generate_nmrium_fixtures.mjs"
+	reference_output=$$(python3 tools/frontend_reference_lock.py values "$$build_context/contracts/upstream/frontend_reference.json")
+	mapfile -t reference_values <<< "$$reference_output"
+	node_image=$${reference_values[0]}
+	revision=$${reference_values[1]}
+	reference_lock_id=$$(python3 tools/frontend_reference_lock.py id "$$build_context/contracts/upstream/frontend_reference.json")
 	git -C "$(FRONTEND_REFERENCE_REPOSITORY)" archive \
-		"$(FRONTEND_REFERENCE_REVISION)" package.json package-lock.json src \
+		"$$revision" package.json package-lock.json src \
 		| tar -x -C "$$frontend_context"
-	input_id=$$( {
-		printf '%s\n' "$(FRONTEND_REFERENCE_NODE_IMAGE)" "$(FRONTEND_REFERENCE_REVISION)"
-		cat containers/frontend-reference/Dockerfile \
-			containers/frontend-reference/Dockerfile.dockerignore \
-			tools/generate_frontend_reference.ts
-	} | sha256sum | cut -d' ' -f1 )
+	frontend_reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id frontend "$$build_context")
+	input_reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id input "$$build_context")
+	image_id=$$(python3 tools/frontend_reference_lock.py image-id "$$build_context")
 	$(DOCKER) build --quiet --network default --pull=false \
-		--build-arg NODE_IMAGE="$(FRONTEND_REFERENCE_NODE_IMAGE)" \
+		--build-arg NODE_IMAGE="$$node_image" \
+		--build-arg REFERENCE_BUILD_ID="$$frontend_reference_build_id" \
+		--build-arg REFERENCE_LOCK_ID="$$reference_lock_id" \
+		--build-arg INPUT_REFERENCE_BUILD_ID="$$input_reference_build_id" \
 		--build-context "frontend=$$frontend_context" \
-		--file containers/frontend-reference/Dockerfile \
-		--tag "$(FRONTEND_REFERENCE_IMAGE_TAG):inputs-$$input_id" \
-		.
+		--file "$$build_context/containers/frontend-reference/Dockerfile" \
+		--tag "$(FRONTEND_REFERENCE_IMAGE_TAG):inputs-$${image_id#sha256:}" \
+		"$$build_context"
 
 fixtures/frontend-reference/write:
 	@if test "$(HOST_UID)" -eq 0; then
@@ -77,22 +88,19 @@ fixtures/frontend-reference/write:
 		"$$image" \
 		--input /input \
 		--output "/output/$(notdir $(FRONTEND_BRUKER_REFERENCE_OUTPUT))" \
-		--path-prefix F3697/1 \
-		--frontend-revision "$(FRONTEND_REFERENCE_REVISION)"
+		--path-prefix F3697/1
 	$(DOCKER) run "$${reference_container[@]}" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(FRONTEND_JCAMP_REFERENCE_INPUT),dst=/input,readonly" \
 		"$$image" \
 		--input /input \
 		--output "/output/$(notdir $(FRONTEND_JCAMP_REFERENCE_OUTPUT))" \
-		--path-prefix 4-chlorobenzylamine \
-		--frontend-revision "$(FRONTEND_REFERENCE_REVISION)"
+		--path-prefix 4-chlorobenzylamine
 	$(DOCKER) run "$${reference_container[@]}" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(FRONTEND_NTUPLES_REFERENCE_INPUT),dst=/input,readonly" \
 		"$$image" \
 		--input /input \
 		--output "/output/$(notdir $(FRONTEND_NTUPLES_REFERENCE_OUTPUT))" \
-		--path-prefix ethylvinylether \
-		--frontend-revision "$(FRONTEND_REFERENCE_REVISION)"
+		--path-prefix ethylvinylether
 	# Every conversion must succeed before any pinned reference is published.
 	mv -f "$$stage/$(notdir $(FRONTEND_BRUKER_REFERENCE_OUTPUT))" "$(FRONTEND_BRUKER_REFERENCE_OUTPUT)"
 	mv -f "$$stage/$(notdir $(FRONTEND_JCAMP_REFERENCE_OUTPUT))" "$(FRONTEND_JCAMP_REFERENCE_OUTPUT)"

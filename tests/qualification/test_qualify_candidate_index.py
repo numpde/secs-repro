@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -14,12 +15,37 @@ from qualify_candidate_index import (
     gpu_summary,
     progress_summary,
     qualification_projection,
+    read_frontend_reference,
+    require_matching_frontend_reference,
     sample_source,
     selected_row_count,
     sha256,
     verified_artifact,
     write_receipt_command,
 )
+
+
+class FrontendReferenceTest(unittest.TestCase):
+    def test_rejects_stale_lock_and_producer_before_using_the_spectrum(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            lock = root / "lock.json"
+            lock.write_text("pinned lock\n")
+            lock_id = f"sha256:{sha256(lock)}"
+            build_id = f"sha256:{'1' * 64}"
+            fixture = root / "spectrum.json"
+            for field in ("reference_lock", "reference_build"):
+                document = {
+                    "reference_lock": lock_id,
+                    "reference_build": build_id,
+                    "intensities": [0, 1],
+                }
+                document[field] = f"sha256:{'0' * 64}"
+                fixture.write_text(json.dumps(document))
+                with self.subTest(field=field), self.assertRaisesRegex(
+                    ValueError, "different frontend reference"
+                ):
+                    read_frontend_reference(fixture, lock, build_id)
 
 
 class SamplingPlanTest(unittest.TestCase):
@@ -147,6 +173,21 @@ class ProjectionTest(unittest.TestCase):
 
 
 class ReceiptCompositionTest(unittest.TestCase):
+    def test_rejects_profiles_that_used_different_frontend_references(self):
+        identity = {
+            "fixture_sha256": "1" * 64,
+            "reference_lock": f"sha256:{'2' * 64}",
+            "reference_build": f"sha256:{'3' * 64}",
+        }
+        for field in identity:
+            functional = {"search": dict(identity)}
+            scale = {"search": dict(identity)}
+            scale["search"][field] = "different"
+            with self.subTest(field=field), self.assertRaisesRegex(
+                ValueError, "different frontend references"
+            ):
+                require_matching_frontend_reference(functional, scale)
+
     def test_rejects_a_retained_log_changed_after_profile_verification(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             evidence = Path(temporary_directory)

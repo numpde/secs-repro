@@ -10,20 +10,16 @@ import * as plugins from '/opt/frontend/node_modules/@zakodium/nmrium-core-plugi
 import { FileCollection } from '/opt/frontend/node_modules/file-collection/lib/index.js';
 import { generateNmriumFixtures } from './generate_nmrium_fixtures.mjs';
 
-const revision = '5ab78f61e9fb679f3f0b9823be5217ae250e213f';
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const referenceSources = {
-  'src/spectrum/__tests__/data/4-chlorobenzylamine.jdx': '9852cd6b851f83ab0c7e372ec9d800b72b0cd5aa54bec32e4e91fc92efcd11ff',
-  'package-lock.json': '33f75513877322a49681aaacfc3609ffee3e616e4e085d1c3c9d31ecb915409b',
-  'src/spectrum/readSpectrum.ts': 'be754221bd152bd92cdf1f5762eda4cce566b0ac622817f5b57a3cc865aa3623',
-  'src/spectrum/normalize.ts': '9a127bfd29bfea840ec93ae6132222ddbdf1f8e1c300f1f72f000a64c82676aa',
-  'src/spectrum/phaseSpectrum.ts': '4d485bc4aee0759ae9c41fbbe407b3d85b24f29483b36b68cff9a5851edd2427',
-  'src/spectrum/grid.ts': 'f157c4855a8c2e56332c3105d3b3c098ec02d80a17cca7093078299a78407c98',
-  'src/spectrum/phaseSearch.ts': 'f661b4b89800eec5083b6e2a789a297b8f3b29f615fdfe0fa0c2affe541ea792',
-  'src/spectrum/integral.ts': '14f998d63e16417a3daad245251c9e30b4858169cb95257fd2c60704d4e9c042',
-};
-for (const [path, expected] of Object.entries(referenceSources)) {
-  if (hash(await readFile(`/opt/frontend/${path}`)) !== expected) throw Error(`Reference input differs from ${revision}: ${path}`);
+const referenceLockBytes = await readFile('/opt/reference/frontend_reference.json');
+const referenceLock = JSON.parse(referenceLockBytes);
+const referenceLockId = process.env.SECS_FRONTEND_REFERENCE_LOCK_ID;
+if (!referenceLockId?.match(/^sha256:[0-9a-f]{64}$/)) {
+  throw Error('The frontend reference image does not identify its reference lock');
+}
+const referenceBuildId = process.env.SECS_INPUT_REFERENCE_BUILD_ID;
+if (!referenceBuildId?.match(/^sha256:[0-9a-f]{64}$/)) {
+  throw Error('The frontend reference image does not identify the input reference producer');
 }
 const exporter = JSON.parse(await readFile('/opt/frontend/node_modules/convert-to-jcamp/package.json'));
 if (exporter.version !== '7.0.1') throw Error('Fixture exporter must be convert-to-jcamp 7.0.1');
@@ -44,7 +40,7 @@ await save('upstream-4-chlorobenzylamine.jdx',
   await readFile('/opt/frontend/src/spectrum/__tests__/data/4-chlorobenzylamine.jdx'),
   'Unchanged upstream synthetic 1H fixture; retains its embedded public-domain declaration', {
     generator: 'tools/generate_input_fixtures.mjs', author: null,
-    source_repository: 'numpde/fork-of-elucidation.cheminfo.org', source_revision: revision,
+    source_repository: referenceLock.repository, source_revision: referenceLock.revision,
     source_path: 'src/spectrum/__tests__/data/4-chlorobenzylamine.jdx',
     origin_declaration: 'elucidation.cheminfo.org test fixture',
     licence: 'Public domain, as declared in the fixture',
@@ -219,7 +215,10 @@ const loadedState = await core.read(collection, { onLoadProcessing: { autoProces
 loadedState.state.data.spectra.forEach((item, index) => { item.id = `synthetic-${index}`; });
 await save('mixed.nmrium', JSON.stringify(core.serializeNmriumState(loadedState.state)) + '\n',
   'NMRium serialization of authored proton/carbon spectra; data and processing preserved by reference core');
-await generateNmriumFixtures({ protonBytes: Buffer.from(spectrum), revision, save });
+await generateNmriumFixtures({
+  protonBytes: Buffer.from(spectrum), referenceLock: referenceLockId,
+  referenceBuild: referenceBuildId, save,
+});
 
 const direct = Array.from({ length: 8 }, (_, i) => i);
 const indirect = Array.from({ length: 4 }, (_, i) => 2 * i);
@@ -364,7 +363,8 @@ for (const record of [...files].filter((item) => item.path.endsWith('.jdx')
     throw Error(`Cannot admit the magnitude FID fixture: expected conversion from FID with magnitude output; observed fromFid=${loaded.fromFid}, magnitude=${loaded.magnitude}`);
   }
   const normalized = normalizeSpectrum(loaded.data);
-  const reference = { frontend_revision: revision, input_sha256: record.sha256,
+  const reference = { reference_lock: referenceLockId, reference_build: referenceBuildId,
+    input_sha256: record.sha256,
     nucleus: loaded.meta.nucleus, dimension: loaded.dimension, points: loaded.data.y.length,
     from_fid: loaded.fromFid, magnitude: loaded.magnitude,
     first_ppm: loaded.data.x[0], last_ppm: loaded.data.x.at(-1),
@@ -374,8 +374,8 @@ for (const record of [...files].filter((item) => item.path.endsWith('.jdx')
     `Pinned reference normalization of ${record.path}`,
     { ...record.origin, basis: `Derived by pinned reference normalization of ${record.path}` }, record.path);
 }
-await writeFile('/output/provenance.json', JSON.stringify({ frontend_revision: revision,
-  reference_sources: referenceSources,
+await writeFile('/output/provenance.json', JSON.stringify({ reference_lock: referenceLockId,
+  reference_build: referenceBuildId,
   generator_sources: {
     'tools/generate_input_fixtures.mjs': hash(await readFile(new URL(import.meta.url))),
     'tools/generate_nmrium_fixtures.mjs': hash(await readFile(new URL('./generate_nmrium_fixtures.mjs', import.meta.url))),

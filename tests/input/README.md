@@ -117,13 +117,14 @@ Reference vectors retain their parents' recorded rights declarations. Their
 per-file provenance, hashes, derivations and reference settings are recorded in
 `tests/fixtures/input/provenance.json`. Runtime archive wrappers and mutations
 retain their parent fixture's licence; the test describes the transformation.
-The generator verifies its reference source hashes before writing.
 `make fixtures/input/write` builds the pinned reference image, generates into
 private staging without runtime network, and publishes only after generation
 succeeds. It requires the pinned commit in `FRONTEND_REFERENCE_REPOSITORY`
-(default `../fork-of-elucidation.cheminfo.org`); dependency preparation does not
-create that checkout. Building the image may need dependency access; ordinary tests and
-generation runtime are offline. Review regenerated differences explicitly.
+(default `../fork-of-elucidation.cheminfo.org`), with the repository, revision
+and runtime image owned by `contracts/upstream/frontend_reference.json`;
+dependency preparation does not create that checkout. Building the image may need
+dependency access; ordinary tests and generation runtime are offline. Review
+regenerated differences explicitly.
 Ordinary tests never update goldens and check recorded artifact integrity.
 Native NMRium archives also record every member's provenance and hash. Their
 UUIDs and ZIP timestamps are canonicalized; stored processing and embedded

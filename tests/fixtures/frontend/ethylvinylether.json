@@ -1,6 +1,7 @@
 {
   "schema": "secs.frontend-spectrum-reference.v1",
-  "frontend_revision": "5ab78f61e9fb679f3f0b9823be5217ae250e213f",
+  "reference_lock": "sha256:085b45042918fa94cd8ecba26688f5113e3f2f16a8338d5b2cf5be2867286b28",
+  "reference_build": "sha256:ec77450fc1a777e45ee8d5d97ccc836fd1eb17cce57c530ae167d5c2003c040a",
   "upload_path": "ethylvinylether",
   "grid": {
     "from_ppm": -2,

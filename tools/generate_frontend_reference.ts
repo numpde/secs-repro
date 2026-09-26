@@ -4,7 +4,6 @@ import path from 'node:path';
 import { parseDroppedFiles } from '/opt/frontend/src/spectrum/parseFiles.ts';
 
 interface Arguments {
-  frontendRevision: string;
   input: string;
   output: string;
   pathPrefix: string;
@@ -12,6 +11,14 @@ interface Arguments {
 
 async function main(): Promise<void> {
   const args = parseArguments(process.argv.slice(2));
+  const referenceLock = process.env.SECS_FRONTEND_REFERENCE_LOCK_ID;
+  if (!referenceLock?.match(/^sha256:[0-9a-f]{64}$/)) {
+    throw new Error('The frontend reference image does not identify its reference lock.');
+  }
+  const referenceBuild = process.env.SECS_FRONTEND_REFERENCE_BUILD_ID;
+  if (!referenceBuild?.match(/^sha256:[0-9a-f]{64}$/)) {
+    throw new Error('The frontend reference image does not identify its build inputs.');
+  }
   const files = await readUpload(args.input, args.pathPrefix);
   const parsed = await parseDroppedFiles(files);
 
@@ -23,7 +30,8 @@ async function main(): Promise<void> {
 
   const reference = {
     schema: 'secs.frontend-spectrum-reference.v1',
-    frontend_revision: args.frontendRevision,
+    reference_lock: referenceLock,
+    reference_build: referenceBuild,
     upload_path: args.pathPrefix,
     grid: {
       from_ppm: -2,
@@ -87,7 +95,6 @@ function parseArguments(argv: string[]): Arguments {
   }
 
   return {
-    frontendRevision: required(values, '--frontend-revision'),
     input: required(values, '--input'),
     output: required(values, '--output'),
     pathPrefix: required(values, '--path-prefix'),

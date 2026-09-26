@@ -72,6 +72,10 @@ candidates/qualification: checkpoint/image packages/gpu/image
 	cache_directory=$$(realpath -e -- "$(MOLFORMER_CACHE)")
 	molformer_lock=$$(realpath -e -- "$(MOLFORMER_LOCK)")
 	frontend_spectrum=$$(realpath -e -- "$(QUALIFICATION_FRONTEND_SPECTRUM)")
+	frontend_reference_lock=$$(realpath -e -- "$(FRONTEND_REFERENCE_LOCK)")
+	frontend_reference_build=$$(python3 tools/frontend_reference_lock.py producer-id frontend "$(REPOSITORY_ROOT)")
+	python3 tools/frontend_reference_lock.py verify-oracle \
+		"$$frontend_reference_lock" "$$frontend_reference_build" "$$frontend_spectrum"
 	builder=$$(realpath -e -- tools/build_candidate_index.py)
 	qualifier=$$(realpath -e -- tools/qualify_candidate_index.py)
 	package_image=$$($(DOCKER) image inspect --format '{{.Id}}' "$(call packages_image_tag,gpu)")
@@ -334,6 +338,7 @@ candidates/qualification: checkpoint/image packages/gpu/image
 			--mount type=bind,src="$$molformer_lock",dst=/input/molformer.lock.toml,readonly \
 			--mount type=bind,src="$$cache_directory",dst=/cache,readonly \
 			--mount type=bind,src="$$frontend_spectrum",dst=/input/frontend-spectrum.json,readonly \
+			--mount type=bind,src="$$frontend_reference_lock",dst=/input/frontend-reference-lock.json,readonly \
 			--mount type=bind,src="$(CURDIR)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
 			--mount type=bind,src="$$builder",dst=/opt/build.py,readonly \
 			--mount type=bind,src="$$qualifier",dst=/opt/qualify.py,readonly \
@@ -345,13 +350,15 @@ candidates/qualification: checkpoint/image packages/gpu/image
 					--candidate-spec /input/candidates.toml --checkpoint-manifest /checkpoint/manifest.json \
 					--molformer-lock /input/molformer.lock.toml --builder /opt/build.py \
 					--bundle "/stage/$$1-bundle" --frontend-spectrum /input/frontend-spectrum.json \
+					--frontend-reference-lock /input/frontend-reference-lock.json \
+					--frontend-reference-build "$$6" \
 					--metrics "/stage/$$1-bundle/run-metrics.json" \
 					--builder-log "/stage/evidence/$$1-builder.log" \
 					--gpu-log "/stage/evidence/$$1-gpu.csv" --compute-dtype "$$4" --threads "$$5" \
 					--package-image-id "$$2" --run-id "$$3" \
 					--output "/stage/$$1-report.json"' \
 			qualification-verifier "$$profile" "$$package_image" "$$run_id" \
-			"$${QUALIFICATION_DTYPE_INPUT}" "$${QUALIFICATION_CPUS_INPUT}"
+			"$${QUALIFICATION_DTYPE_INPUT}" "$${QUALIFICATION_CPUS_INPUT}" "$$frontend_reference_build"
 		# The final composer re-hashes these retained files. Make accidental
 		# mutation fail at its source as well as at that final proof boundary.
 		chmod a=r "$$builder_log" "$$gpu_log"

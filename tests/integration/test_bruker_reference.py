@@ -1,4 +1,3 @@
-import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -7,6 +6,7 @@ import numpy as np
 
 from secs_inference.spectra.bruker import read_bruker_pdata
 from secs_inference.spectra.secs import prepare_secs_spectrum
+from frontend_reference import load_frontend_reference
 
 
 FIXTURES = Path("/fixtures")
@@ -30,7 +30,7 @@ class BrukerFrontendReferenceTest(unittest.TestCase):
                 self.assertIn(fact, str(caught.exception))
 
     def test_bruker_pdata_matches_frontend_float32_input(self):
-        reference = json.loads(FRONTEND_REFERENCE.read_text())
+        reference = load_frontend_reference(FRONTEND_REFERENCE)
         source = read_bruker_pdata(BRUKER_PDATA)
         actual = prepare_secs_spectrum(source)
         expected = np.asarray(reference["intensities"], dtype=np.float32)

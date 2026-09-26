@@ -242,7 +242,9 @@ owners:
 * fixture provenance owns byte hashes, origin, licence and derivation;
 * direct contract tests own case-specific expected inventory, failure and
   preparation observations;
-* a reference lock owns the pinned comparison revision and source hashes;
+* a reference lock owns the upstream repository, revision and runtime image;
+* a reference-producer identity binds that lock to the local build recipe and
+  oracle generator;
 * a versioned extracted reference-target inventory, when available, owns
   upstream capability keys and applicability decisions;
 * a structured support catalog owns stable public claim identities, wording,
@@ -299,9 +301,10 @@ a variant was admitted.
 
 Reference artifacts are regenerated only through an explicit, pinned, offline
 update lane and reviewed as source changes. Ordinary tests never rewrite them.
-A derived artifact's provenance cites the reference-lock identity and its own
-origin; it does not copy the lock's revision or source hashes as peer
-authority. A reference-lock update regenerates only affected oracle artifacts.
+A derived oracle cites both the reference-lock and reference-producer
+identities. Imported fixture provenance records its immutable source revision
+and origin. A reference-lock or producer update regenerates the affected oracle
+artifacts.
 A production-decoder update runs every claim against the unchanged oracle and
 cannot rewrite its own evidence.
 
@@ -334,11 +337,12 @@ scientific construction. Upstream data retains notices and revision. A local
 customer or user file remains a private regression probe until redistribution
 rights establish that it can enter the shared corpus.
 
-The pinned reference lock records several decoding dependencies under
-CC-BY-NC-SA-4.0, and the pinned frontend tree has no root licence file. Their
-use in fixture generation does not establish permission to redistribute or run
-them in production. Production adoption remains blocked until authoritative
-terms, attribution and the intended service use have been reviewed.
+The pinned frontend dependency tree records several decoding dependencies
+under CC-BY-NC-SA-4.0, and the pinned frontend tree has no root licence file.
+Their use in fixture generation does not establish permission to redistribute
+or run them in production. Production adoption remains blocked until
+authoritative terms, attribution and the intended service use have been
+reviewed.
 
 
 Migration and deletion

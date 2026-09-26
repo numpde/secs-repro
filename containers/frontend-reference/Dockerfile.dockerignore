@@ -2,3 +2,9 @@
 !tools/
 tools/**
 !tools/generate_frontend_reference.ts
+!tools/generate_input_fixtures.mjs
+!tools/generate_nmrium_fixtures.mjs
+!contracts/
+contracts/**
+!contracts/upstream/
+!contracts/upstream/frontend_reference.json

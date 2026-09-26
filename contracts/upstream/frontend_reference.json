@@ -1,0 +1,6 @@
+{
+  "schema_id": "secs.frontend-reference-lock.v1",
+  "repository": "https://github.com/numpde/fork-of-elucidation.cheminfo.org",
+  "revision": "5ab78f61e9fb679f3f0b9823be5217ae250e213f",
+  "node_image": "docker.io/library/node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf"
+}
