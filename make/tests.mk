@@ -3,6 +3,7 @@
 .PHONY: test/integration/bruker-reference test/provider test/provider/diagnostics
 .PHONY: test/integration/jcamp-reference test/qualification-tools
 .PHONY: test/input test/input/normative test/input/adversarial test/input/scenarios
+.PHONY: test/reference-decoder-spike
 
 test/input: private INPUT_TEST_START := /tests/input
 test/input/normative: private INPUT_TEST_START := /tests/input/normative
@@ -28,6 +29,17 @@ test/input test/input/normative test/input/adversarial test/input/scenarios:
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/generate_nmrium_fixtures.mjs",dst=/tools/generate_nmrium_fixtures.mjs,readonly \
 		--entrypoint /bin/sh "$$cpu_packages_image" \
 		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && python -m unittest discover -v -t /tests -s "$(INPUT_TEST_START)" -p "test_*.py"'
+
+test/reference-decoder-spike:
+	image=$$($(MAKE) --no-print-directory fixtures/frontend-reference/image)
+	timeout --signal=TERM --kill-after=5s 30s $(DOCKER) run --rm --init --pull never --network none --read-only \
+		--cap-drop ALL --security-opt no-new-privileges:true \
+		--pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
+		--env FRONTEND_REFERENCE_REVISION="$(FRONTEND_REFERENCE_REVISION)" \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/reference_decoder",dst=/tests,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/fixtures/input",dst=/fixtures,readonly \
+		--entrypoint node "$$image" --test /tests/test_reference_probe.mjs
 
 test/integration:
 	@if test "$(HOST_UID)" -eq 0; then
