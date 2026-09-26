@@ -114,6 +114,27 @@ class SelectedInputTests(WorkerCase):
         # The authored Bruker trace stores Float64 while Varian stores Float32.
         np.testing.assert_allclose(observed['bruker'], observed['varian'], rtol=5e-7, atol=1e-7)
 
+    def test_selected_processed_bruker_reaches_inference(self):
+        self.archive([
+            ('sample/1/pdata/1/1r', (FIXTURES / 'bruker-1r.bin').read_bytes()),
+            ('sample/1/pdata/1/procs', (FIXTURES / 'bruker-procs.txt').read_bytes()),
+        ])
+        selected = self.one(self.discover())
+
+        response = self.analyse(selected)
+
+        self.assertEqual(response['outcome'], 'no_starting_candidates')
+        preparation = response['analysis']['preparation']
+        self.assertEqual(preparation['representation_id'], selected['id'])
+        self.assertIs(preparation['from_fid'], False)
+        self.inference.embed_spectrum.assert_called_once()
+        spectrum = self.inference.embed_spectrum.call_args.args[0]
+        self.assertEqual(spectrum.shape, (10000,))
+        self.assertEqual(spectrum.dtype, np.float32)
+        self.assertTrue(np.isfinite(spectrum).all())
+        peak_ppm = -2 + int(np.argmax(spectrum)) * 12 / 9999
+        self.assertAlmostEqual(peak_ppm, 10 - 20 * 10 / 63, delta=.002)
+
     def test_fid_references_shift_the_prepared_chemical_axis(self):
         original = (FIXTURES / 'fid.jdx').read_text()
         peaks = []
