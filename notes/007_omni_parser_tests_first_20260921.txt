@@ -285,19 +285,24 @@ qualification and deployed Job flow are separate evidence dimensions. A
 shared fixture recognized by two implementations proves only admission unless
 the stronger comparison runs.
 
-The qualification command verifies the reference lock and decoder artifact
-manifest, runs the direct tests named by active claims, and emits a receipt
-containing the passed dimension/evidence pairs and exact build identities. It
-also records one digest
-over the catalog, evidence tests, runner, fixture provenance and bytes,
-reference lock and artifacts, generated offering projections, and decoder
-build identity. Publication requires that digest to match its inputs and the
-decoder artifact being published, every active claim pair to appear in the
-receipt, and the canonical `analysis_offerings` projection and published
-support-table bytes to match the catalog. Adding or widening a claim fails
-until the missing evidence passes. Runtime does not compare submitted data
-with fixture rows and cannot make a broader qualification claim merely because
-a variant was admitted.
+The first catalog check runs the maintained suites and resolves stable semantic
+evidence identities recorded beside their direct assertions. It verifies that
+every migration-floor requirement passed and that the provider Hello and the
+bounded public support table are current catalog projections. This is
+source-tree coverage, not a release qualification receipt.
+
+Release preparation first binds exact provider and worker images as one
+candidate pair. The qualification command tests worker behavior and the provider
+projection from those artifacts, then emits a receipt containing the passed
+dimension/evidence pairs and both image identities. It records one digest over
+the catalog, evidence tests, runner, fixture provenance and bytes, reference
+lock and artifacts, generated offering projections, and both build identities.
+Deployment admits only that receipt-bound pair before Hello publication. Every
+active claim pair must appear in the receipt, and the canonical
+`analysis_offerings` projection and published support-table bytes must match the
+catalog. Adding or widening a claim fails until the missing evidence passes.
+Runtime does not compare submitted data with fixture rows and cannot make a
+broader qualification claim merely because a variant was admitted.
 
 Reference artifacts are regenerated only through an explicit, pinned, offline
 update lane and reviewed as source changes. Ordinary tests never rewrite them.
@@ -352,8 +357,9 @@ Migration slices change one authority at a time and end without dual ownership:
 
 1. Consolidate the reference lock, structure the provider support catalog and
    bind its migration-floor claims to existing direct-test evidence. Generate
-   offering projections and a build qualification receipt without changing
-   runtime admission policy. Correct overstated documentation.
+   and check the offering projections without changing runtime admission
+   policy. Correct overstated documentation. Treat the resulting check as
+   source-tree coverage rather than artifact qualification.
 2. Decide the localized-issue selection rule with red acceptance cases, then
    replace interpreter-directed per-source inspection with owned Job-wide
    acquisition and inventory. Prove membership fencing, classification of every
@@ -364,7 +370,10 @@ Migration slices change one authority at a time and end without dual ownership:
    do not retain its project-owned inventory projection as a second parser.
 4. Establish the production protocol, reproducible dependency build and
    process-tree supervision around qualified decoder components under reviewed
-   production-compatible licence terms. This slice claims no new format support.
+   production-compatible licence terms. Form an exact provider/worker candidate
+   pair, qualify its worker behavior and provider projection, bind both image
+   identities in the receipt, and require that receipt before deployment or
+   Hello publication. This slice claims no new format support.
 5. Move the complete JCAMP-DX family through the decoder boundary, including
    processed spectra, multiple blocks, peak tables, unsuitable dimensions and
    FIDs. Introduce advertised preparation-option identities in that slice and
