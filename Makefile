@@ -71,6 +71,12 @@ help:
 	'      Archive a reviewed held record only after a fresh API read proves closure; see notes/005_closed_attempt_archival.txt.' \
 	'  make test/provider' \
 	'      Verify input selection, signed API transport, recovery and cancellation offline.' \
+	'  make provider/support/check' \
+	'      Verify that public support documentation matches the code-owned support catalog.' \
+	'  make provider/support/write' \
+	'      Update only the bounded public support section, then review the result.' \
+	'  make test/support' \
+	'      Check public support projections and every declared semantic evidence requirement.' \
 	'  make test/deployment' \
 	'      Test configuration publication, saved-state ownership and container lifecycle rules.' \
 	'  make test/deployment/e2e' \

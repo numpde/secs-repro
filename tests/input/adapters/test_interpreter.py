@@ -12,6 +12,7 @@ from secs_inference.provider.input_operations import CannotAnalyse
 from secs_inference.provider.interpreter import InterpretationSession
 from secs_inference.provider.job_input import JobSpecification
 from secs_inference.provider.job_upload import JobUpload
+from support_evidence import qualification_evidence
 
 
 def tool(name, arguments, identity='call-1'):
@@ -108,6 +109,7 @@ class InterpreterContextTests(unittest.TestCase):
         self.assertEqual(asdict(decision), choice)
         self.inspect.assert_not_called()
 
+    @qualification_evidence("input.job-formula.exact-quote.v1")
     def test_job_formula_quote_must_match_both_selection_and_specification(self):
         cases = (
             ({'formula': 'C22H36O7', 'quote': 'C2H6O'}, 'quote the selected formula exactly'),

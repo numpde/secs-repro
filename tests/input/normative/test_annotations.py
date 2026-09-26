@@ -1,6 +1,7 @@
 """Structures and supplied annotations retain their evidence and exact relationships."""
 
 from input.helpers import FIXTURES, WorkerCase
+from support_evidence import qualification_evidence
 
 
 class AnnotationTests(WorkerCase):
@@ -16,6 +17,7 @@ class AnnotationTests(WorkerCase):
             self.assertEqual(item['kind'], 'structure')
             self.assertEqual(item['sources'], [{'upload_ref': 'upload:sample', 'member': 'sample/structures.smi'}])
 
+    @qualification_evidence("input.nmredata.relationships.v1")
     def test_nmredata_preserves_declared_counts_assignments_and_relationships(self):
         self.archive([(f'sample/{name}', (FIXTURES / name).read_bytes())
                       for name in ('annotations.sdf', 'proton.jdx', 'ethanol.mol')])

@@ -3,6 +3,7 @@
 import struct
 
 from input.helpers import FIXTURES, WorkerCase
+from support_evidence import qualification_evidence
 
 
 class VendorCompanionTests(WorkerCase):
@@ -26,6 +27,7 @@ class VendorCompanionTests(WorkerCase):
                 self.assert_issue_mentions(
                     facts, {'upload_ref': 'upload:sample', 'member': None}, evidence)
 
+    @qualification_evidence("input.vendor-fids.profile-limits.v1")
     def test_unqualified_vendor_fid_processing_profiles_are_reported(self):
         cases = (
             ('acqus', (FIXTURES / 'bruker-acqus.txt').read_text().replace('##$GRPDLY= 0', '##$GRPDLY= 44.75'),

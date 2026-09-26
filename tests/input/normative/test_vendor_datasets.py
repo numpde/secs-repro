@@ -1,6 +1,7 @@
 """Vendor companions retain their experiment paths and processing alternatives."""
 
 from input.helpers import FIXTURES, WorkerCase
+from support_evidence import qualification_evidence
 
 
 class VendorDatasetTests(WorkerCase):
@@ -18,6 +19,7 @@ class VendorDatasetTests(WorkerCase):
         return [(f'{prefix}/1r', (FIXTURES / 'bruker-1r.bin').read_bytes()),
                 (f'{prefix}/procs', (FIXTURES / 'bruker-procs.txt').read_bytes())]
 
+    @qualification_evidence("input.bruker.processed.companion-relationships.v1")
     def test_processed_bruker_pair_remains_supported_without_acqus(self):
         self.archive(self.processed())
         facts = self.discover()
@@ -50,6 +52,7 @@ class VendorDatasetTests(WorkerCase):
         self.assertTrue({'sample/1/pdata/1/1r', 'sample/1/pdata/1/procs'} <= sources)
         self.assertTrue(sources <= {name for name, _ in members})
 
+    @qualification_evidence("input.vendor-fids.companion-relationships.v1")
     def test_raw_bruker_and_varian_are_discovered_before_processing(self):
         for vendor, parameter in (('bruker', 'acqus'), ('varian', 'procpar')):
             with self.subTest(vendor=vendor):
