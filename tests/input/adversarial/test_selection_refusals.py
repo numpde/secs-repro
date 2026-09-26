@@ -2,9 +2,11 @@
 
 from input.helpers import FIXTURES, OTHER_ATTEMPT_REF, WorkerCase
 from pathlib import Path
+from support_evidence import qualification_evidence
 
 
 class SelectionRefusalTests(WorkerCase):
+    @qualification_evidence("input.nmredata.resource-limits.v1")
     def test_annotation_evidence_cannot_execute_without_its_dense_resource(self):
         self.upload('annotations.sdf')
         facts = self.discover()
@@ -50,6 +52,7 @@ class SelectionRefusalTests(WorkerCase):
         del selection['representation_id']
         self.rejected(selection, 'representation')
 
+    @qualification_evidence("input.peak-tables.non-executable.v1")
     def test_peak_table_and_carbon_cannot_be_substituted_with_proton_data(self):
         self.upload('proton.jdx', 'upload:alternative')
         for fixture, kind, nucleus, evidence in (
@@ -112,6 +115,7 @@ class SelectionRefusalTests(WorkerCase):
             'kind': 'representations', 'representation_ids': ['unissued-structure']}
         self.rejected(selection, 'formula', 'evidence', 'representation')
 
+    @qualification_evidence("input.structure-formula.rejections.v1")
     def test_structure_formula_evidence_must_match_the_selected_formula(self):
         self.upload('proton.jdx', 'upload:spectrum')
         self.upload('ethanol.mol', 'upload:structure')

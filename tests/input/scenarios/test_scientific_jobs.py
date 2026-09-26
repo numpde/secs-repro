@@ -4,6 +4,7 @@ import numpy as np
 from unittest.mock import Mock
 
 from secs.elucidation import StaticCandidateSource
+from support_evidence import qualification_evidence
 
 from input.helpers import FIXTURES, WorkerCase
 
@@ -15,6 +16,7 @@ class ScientificJobScenarios(WorkerCase):
         self.candidates = Mock(wraps=StaticCandidateSource([]))
         self.worker.candidates = self.candidates
 
+    @qualification_evidence("input.job-formula.execution.v1")
     def test_explicit_job_formula_survives_unrelated_structure_evidence(self):
         self.upload('proton.jdx', 'upload:proton')
         self.upload('carbon.jdx', 'upload:carbon')
@@ -33,6 +35,7 @@ class ScientificJobScenarios(WorkerCase):
         self.candidates.propose.assert_called_once()
         self.assertEqual(self.candidates.propose.call_args.args[1], 'C22H36O7')
 
+    @qualification_evidence("input.structure-formula.execution.v1")
     def test_discovered_structure_can_supply_the_executed_formula(self):
         for index, name in enumerate(('ethanol.mol', 'ethanol.sdf', 'structures.smi')):
             with self.subTest(fixture=name):

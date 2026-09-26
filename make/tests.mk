@@ -1,4 +1,4 @@
-.PHONY: test/integration test/integration/challenges
+.PHONY: test/integration test/integration/challenges test/support
 .PHONY: test/integration/challenges/bruker
 .PHONY: test/integration/bruker-reference test/provider test/provider/diagnostics
 .PHONY: test/integration/jcamp-reference test/qualification-tools
@@ -19,6 +19,7 @@ test/input test/input/normative test/input/adversarial test/input/scenarios:
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=128m,mode=1777 \
 		--tmpfs /modules:rw,nosuid,nodev,noexec,size=16m,mode=1777 \
 		--env PYTHONDONTWRITEBYTECODE=1 \
+		--env PYTHONPATH=/tools \
 		--env INPUT_REFERENCE_BUILD_ID="$$input_reference_build_id" \
 		--env HF_HUB_CACHE=/cache/hub --env HF_HUB_OFFLINE=1 \
 		--env TRANSFORMERS_OFFLINE=1 --env HF_MODULES_CACHE=/modules \
@@ -30,8 +31,10 @@ test/input test/input/normative test/input/adversarial test/input/scenarios:
 		--mount type=bind,src="$(FRONTEND_REFERENCE_LOCK)",dst=/contracts/upstream/frontend_reference.json,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/generate_input_fixtures.mjs",dst=/tools/generate_input_fixtures.mjs,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/generate_nmrium_fixtures.mjs",dst=/tools/generate_nmrium_fixtures.mjs,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/support_evidence.py",dst=/tools/support_evidence.py,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/support_coverage.py",dst=/tools/support_coverage.py,readonly \
 		--entrypoint /bin/sh "$$cpu_packages_image" \
-		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && python -m unittest discover -v -t /tests -s "$(INPUT_TEST_START)" -p "test_*.py"'
+		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && $(if $(filter test/input,$@),python -P /tools/support_coverage.py --tests /tests --start /tests/input,python -m unittest discover -v -t /tests -s "$(INPUT_TEST_START)" -p "test_*.py")'
 
 test/reference-decoder-spike:
 	image=$$($(MAKE) --no-print-directory fixtures/frontend-reference/image)
@@ -171,6 +174,8 @@ test/qualification-tools:
 		--mount type=bind,src="$$tests_dir",dst=/tests,readonly \
 		--entrypoint python "$$cpu_packages_image" \
 		-P -m unittest discover -v -s /tests -p 'test_*.py'
+
+test/support: provider/support/check test/qualification-tools test/input
 
 .PHONY: interpreter/model-behavior
 interpreter/model-behavior: private export LIVE_CONFIG_DIR_INPUT := $(value CONFIG_DIR)

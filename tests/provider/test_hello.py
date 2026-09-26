@@ -2,10 +2,7 @@ from pathlib import Path
 from unittest.mock import patch
 import unittest
 
-from secs_inference.provider.analysis import (
-    ADMISSIBLE_SPECTRUM_FORMATS,
-    analysis_offering_description,
-)
+from secs_inference.provider.analysis import analysis_offering_description
 from secs_inference.provider.canonical_json import parse_canonical_json_bytes
 from secs_inference.provider.config import decode_provider_config
 from secs_inference.provider.hello import (
@@ -22,17 +19,6 @@ CONFIG = Path(__file__).parents[2] / "config/provider.toml.example"
 
 
 class ProviderHelloTests(unittest.TestCase):
-    def test_offering_description_is_rendered_from_the_format_inventory(self):
-        description = analysis_offering_description()
-
-        self.assertTrue(ADMISSIBLE_SPECTRUM_FORMATS)
-        for spectrum_format in ADMISSIBLE_SPECTRUM_FORMATS:
-            self.assertIn(spectrum_format, description)
-        for concept in ("molecular formula", "experiment folder", "multiple uploads",
-                        "MOL", "SDF", "SMILES", "result"):
-            self.assertIn(concept, description)
-        self.assertLessEqual(len(description.encode("utf-8")), 1024)
-
     def test_configured_hello_contains_the_new_analysis_kind_and_format_text(self):
         config = decode_provider_config(CONFIG.read_bytes())
 

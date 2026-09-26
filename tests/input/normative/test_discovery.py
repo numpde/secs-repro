@@ -1,6 +1,7 @@
 """Every representation remains visible before an analysis-specific choice."""
 
 from input.helpers import FIXTURES, WorkerCase
+from support_evidence import qualification_evidence
 
 
 class DiscoveryTests(WorkerCase):
@@ -42,6 +43,7 @@ class DiscoveryTests(WorkerCase):
         self.assertNotIn('integral', peaks['metadata']['columns'])
         self.assertNotIn('assignment', peaks['metadata']['columns'])
 
+    @qualification_evidence("input.peak-tables.discovery.v1")
     def test_peak_table_is_discoverable_without_a_dense_spectrum(self):
         self.upload('peaks.jdx')
         facts = self.discover()

@@ -63,6 +63,14 @@ provider/client/check provider/client/write:
 		--manifest "$(REPOSITORY_ROOT)/contracts/upstream/provider_client.json"
 
 .PHONY: provider/lock/write provider/wheelhouse provider/image
+.PHONY: provider/support/check provider/support/write
+
+provider/support/check:
+	@python3 -B tools/project_support_catalog.py check docs/index.html
+	@python3 -B tools/check_support_catalog_boundary.py src/secs_inference
+
+provider/support/write:
+	@python3 -B tools/project_support_catalog.py write docs/index.html
 
 provider/lock/write:
 	@if test "$(HOST_UID)" -eq 0; then

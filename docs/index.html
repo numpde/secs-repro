@@ -54,36 +54,46 @@
     check with the operator before submitting confidential information.</p>
 
   <h2>Supported uploads</h2>
-  <ul>
-    <li><strong>Bruker:</strong> upload a ZIP containing a processed
-      <code>pdata</code> directory. Keep <code>1r</code> and <code>procs</code>
-      together in the same directory; include <code>title</code> if available.
-      That directory can be at the ZIP root or inside preserved experiment folders.
-      <code>1r</code> alone is insufficient: <code>procs</code> supplies the
-      spectrum metadata and ppm axis. A raw one-dimensional <code>fid</code>
-      can instead be paired with its <code>acqus</code> parameters for automatic
-      processing when it has the qualified zero group-delay profile. Other raw
-      Bruker processing profiles are reported as unsupported.</li>
-    <li><strong>Varian:</strong> upload a ZIP containing a one-dimensional
-      <code>fid</code> and its <code>procpar</code> file for automatic processing.
-      The qualified profile has a stored reference centred at zero; other
-      reference profiles are reported rather than guessed.</li>
-    <li><strong>JCAMP-DX:</strong> upload a file directly or inside a ZIP.
-      Supported representations include processed XYDATA and NTUPLES spectra,
-      compressed numeric encodings, and complex one-dimensional FIDs with the
-      parameters needed for automatic processing.</li>
-    <li><strong>NMRium and JEOL:</strong> NMRium v21 saved states can contain
-      dense spectra or declared JCAMP-DX resources. Processed one-dimensional
-      JEOL JDF data are accepted for the reference-compatible profile with an
-      explicit ppm axis.</li>
-    <li><strong>Formula and annotations:</strong> MOL, SDF, and SMILES records
-      can provide formula evidence. The admitted NMReDATA subset can link a
-      structure, its JCAMP-DX resource, and proton assignments.</li>
-  </ul>
-  <p>Spectrum images and peak tables cannot replace dense one-dimensional data
-    for SECS. Peak tables may be reported during discovery so the interpreter can
-    explain the limitation. Upload the original data rather than a screenshot.</p>
-
+<!-- support-catalog:start -->
+  <h3>Preparing a submission</h3>
+  <dl>
+    <dt>Multiple uploads</dt>
+    <dd>Multiple uploads are accepted. In the job input, name the intended upload or experiment path and formula source.</dd>
+    <dt>Vendor experiment folders</dt>
+    <dd>Keep Bruker and Varian files in their experiment folders.</dd>
+    <dt>Dense spectrum required</dt>
+    <dd>Provide dense 1D proton data. Peak tables may be reported but cannot replace a spectrum.</dd>
+  </dl>
+  <h3>Spectrum data</h3>
+  <dl>
+    <dt>Processed JCAMP-DX</dt>
+    <dd>Supported input: JCAMP-DX XYDATA or NTUPLES. Supported cases include LINK blocks and AFFN, FIX, SQZ, DIF, DIFDUP, and PAC numeric encodings.</dd>
+    <dt>Processed Bruker</dt>
+    <dd>Supported input: Bruker 1r with its procs file. Keep 1r and procs together in the same pdata directory. The processed pair does not require acqus; include title when it is available.</dd>
+    <dt>JCAMP-DX FID</dt>
+    <dd>Supported input: complex JCAMP-DX FIDs with acquisition parameters.</dd>
+    <dt>Bruker FID</dt>
+    <dd>Supported input: Bruker fid with acqus and zero group delay. Keep fid and acqus together in one experiment directory. Other group-delay profiles are reported as unsupported.</dd>
+    <dt>Varian FID</dt>
+    <dd>Supported input: Varian fid with procpar where reffrq=sfrq and rfl-rfp=sw/2. Keep fid and procpar together in one experiment directory. Other reference profiles are reported as unsupported.</dd>
+    <dt>Processed JEOL JDF</dt>
+    <dd>Supported input: processed JEOL JDF with a ppm axis (synthetic qualification only).</dd>
+    <dt>NMRium v21</dt>
+    <dd>Supported input: NMRium v21 states with dense proton data or attached JCAMP-DX resources. Keep embedded resources with the state; stored spectrum shifts are applied once.</dd>
+  </dl>
+  <h3>Formula evidence</h3>
+  <dl>
+    <dt>Formula in the job input</dt>
+    <dd>Supported input: a formula written verbatim in the job input.</dd>
+    <dt>Formula from a structure</dt>
+    <dd>Supported input: a formula calculated from a selected MOL, SDF or SMILES attachment.</dd>
+  </dl>
+  <h3>Supplied annotations</h3>
+  <dl>
+    <dt>NMReDATA relationships</dt>
+    <dd>Supported input: NMReDATA links between a structure, its JCAMP-DX resource and proton assignments. The linked spectrum resource must be attached and readable. Assignments are preserved as supplied context; they do not change the spectrum sent to SECS.</dd>
+  </dl>
+<!-- support-catalog:end -->
   <h2>Example: a Bruker experiment</h2>
   <p>For the <a href="https://github.com/numpde/secs-repro/tree/main/tests/fixtures/bruker/F3697/1/pdata/1">strychnine example files</a>
     used by our Bruker regression test, ZIP
@@ -91,10 +101,6 @@
     and <code>title</code>. Attach that ZIP and write:</p>
   <pre>Analyse the sole processed 1H spectrum in the attached ZIP.
 Molecular formula: C21H22N2O2.</pre>
-  <p>If you upload several files or experiments, explain which sample and
-    experiment you intend. The interpreter explains its selection in the result;
-    check that it chose the experiment and formula you intended.</p>
-
   <h2>What the result means</h2>
   <p>SECS retrieves candidates from a molecular index and refines them with a
     genetic algorithm. The result includes ranked candidate SMILES (text

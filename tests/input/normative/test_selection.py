@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 from secs.elucidation import StaticCandidateSource
 from secs_inference.model import SecsInference
+from support_evidence import qualification_evidence
 
 from input.helpers import FIXTURES, WorkerCase
 
@@ -44,6 +45,7 @@ class SelectedInputTests(WorkerCase):
         # ULPs at one of 10,000 points for the magnitude-FID vector.
         np.testing.assert_array_max_ulp(spectrum, reference, maxulp=2)
 
+    @qualification_evidence("input.multiple-uploads.selection.v1")
     def test_upload_order_cannot_replace_the_selected_proton_spectrum(self):
         references = {name: self.reference(name) for name in ('proton.jdx', 'alternate.jdx')}
         self.assertGreater(float(np.max(np.abs(references['proton.jdx'] - references['alternate.jdx']))), .9)
@@ -60,6 +62,7 @@ class SelectedInputTests(WorkerCase):
                     self.assert_prepared_spectrum(references[name])
             self.files.clear()
 
+    @qualification_evidence("input.jcamp.link.inference-input.v1")
     def test_selected_link_block_reaches_inference(self):
         self.upload('linked.jdx')
         facts = self.discover()
@@ -68,6 +71,7 @@ class SelectedInputTests(WorkerCase):
         self.assertEqual(response['outcome'], 'no_starting_candidates')
         self.assert_prepared_spectrum(self.reference('linked.jdx'))
 
+    @qualification_evidence("input.jcamp.processed.inference-input.v1")
     def test_reference_encodings_reach_inference(self):
         names = ['ascending.jdx', 'complex.jdx', 'mixed.nmrium', 'upstream-4-chlorobenzylamine.jdx']
         names += [f'encoded-{encoding}.jdx' for encoding in ('fix', 'sqz', 'dif', 'difdup', 'pac')]
@@ -79,6 +83,7 @@ class SelectedInputTests(WorkerCase):
                 self.assertEqual(response['outcome'], 'no_starting_candidates')
                 self.assert_prepared_spectrum(self.reference('proton.jdx' if name == 'mixed.nmrium' else name))
 
+    @qualification_evidence("input.jcamp.fid.inference-input.v1")
     def test_explicit_fid_processing_matches_reference(self):
         for name, magnitude in (('fid.jdx', False), ('fid-magnitude.jdx', True)):
             with self.subTest(fixture=name):
@@ -96,6 +101,7 @@ class SelectedInputTests(WorkerCase):
                 self.assertIs(preparation['from_fid'], True)
                 self.assertIs(preparation['magnitude'], magnitude)
 
+    @qualification_evidence("input.vendor-fids.inference-input.v1")
     def test_raw_vendor_fids_decode_to_the_same_automatic_result(self):
         observed = {}
         for vendor, parameter in (('bruker', 'acqus'), ('varian', 'procpar')):
@@ -114,6 +120,7 @@ class SelectedInputTests(WorkerCase):
         # The authored Bruker trace stores Float64 while Varian stores Float32.
         np.testing.assert_allclose(observed['bruker'], observed['varian'], rtol=5e-7, atol=1e-7)
 
+    @qualification_evidence("input.bruker.processed.inference-input.v1")
     def test_selected_processed_bruker_reaches_inference(self):
         self.archive([
             ('sample/1/pdata/1/1r', (FIXTURES / 'bruker-1r.bin').read_bytes()),
@@ -163,6 +170,7 @@ class SelectedInputTests(WorkerCase):
                 self.files.clear()
         self.assertAlmostEqual(peaks[1] - peaks[0], 2 * 9999 / 12, delta=2)
 
+    @qualification_evidence("input.jeol.processed.inference-input.v1")
     def test_jeol_preparation_uses_the_stored_axis(self):
         self.upload('synthetic.jdf')
         facts = self.discover()
@@ -175,6 +183,7 @@ class SelectedInputTests(WorkerCase):
         peak_ppm = -2 + int(np.argmax(spectrum)) * 12 / 9999
         self.assertAlmostEqual(peak_ppm, 10 - 20 * 10 / 63, delta=.002)
 
+    @qualification_evidence("input.nmrium.v21.inference-input.v1")
     def test_nmrium_stored_shift_is_applied_exactly_once(self):
         for name in ('stored-shift.nmrium', 'resource-embedded.nmrium.zip'):
             with self.subTest(fixture=name):
@@ -203,6 +212,7 @@ class SelectedInputTests(WorkerCase):
                 peak_ppm = -2 + int(np.argmax(spectrum)) * 12 / 9999
                 self.assertAlmostEqual(peak_ppm, 3.03125, delta=.002)
 
+    @qualification_evidence("input.nmredata.annotations-no-spectrum-change.v1")
     def test_annotations_do_not_change_the_selected_prepared_spectrum(self):
         self.archive([(f'sample/{name}', (FIXTURES / name).read_bytes())
                       for name in ('annotations.sdf', 'proton.jdx')])

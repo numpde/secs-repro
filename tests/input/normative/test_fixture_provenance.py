@@ -7,6 +7,8 @@ from pathlib import Path
 import unittest
 from zipfile import ZipFile
 
+from support_evidence import qualification_evidence
+
 
 ROOT = Path('/fixtures/input')
 REFERENCE_LOCK = Path('/contracts/upstream/frontend_reference.json')
@@ -35,6 +37,7 @@ class FixtureProvenanceTests(unittest.TestCase):
         self.assertEqual(len(recorded), len(set(recorded)), 'Fixture records repeat a path')
         self.assertEqual(set(recorded), actual)
 
+    @qualification_evidence("input.fixtures.provenance.v1")
     def test_bytes_and_attribution_match_the_record(self):
         records = {item['path']: item for item in self.records}
         for item in self.records:
