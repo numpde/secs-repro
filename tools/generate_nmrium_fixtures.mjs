@@ -57,9 +57,9 @@ function shiftedSpectrum(result, originalValues, label) {
   return spectra[0];
 }
 
-async function saveReference(save, revision, name, bytes, spectrum, entrypoint) {
+async function saveReference(save, referenceLock, referenceBuild, name, bytes, spectrum, entrypoint) {
   const normalized = normalizeSpectrum({ x: spectrum.data.x, y: spectrum.data.re });
-  const reference = { frontend_revision: revision,
+  const reference = { reference_lock: referenceLock, reference_build: referenceBuild,
     input_sha256: hash(bytes), nucleus: spectrum.info.nucleus, dimension: spectrum.info.dimension,
     points: spectrum.data.re.length, first_ppm: spectrum.data.x[0], last_ppm: spectrum.data.x.at(-1),
     entrypoint, auto_processing: false, normalization: 'normalizeSpectrum', float32_cast: false,
@@ -72,7 +72,7 @@ async function saveReference(save, revision, name, bytes, spectrum, entrypoint) 
 /** Emit states and reference artifacts through save. Run serially: this replaces
  * process-global fetch while constructing the authored resource, then restores
  * it in finally, including when decoding or publication to staging fails. */
-export async function generateNmriumFixtures({ protonBytes, revision, save }) {
+export async function generateNmriumFixtures({ protonBytes, referenceLock, referenceBuild, save }) {
   const core = new NMRiumCore();
   core.registerPlugins(plugins.recommended(core, [plugins.spectrum1DProcessings(),
     plugins.filtersToProcessingsMigrator(), plugins.autoProcessingsPipeline()]));
@@ -111,14 +111,16 @@ export async function generateNmriumFixtures({ protonBytes, revision, save }) {
     globalThis.fetch = async () => { throw Error('NMRium fixture admission attempted a network fetch'); };
     const restored = shiftedSpectrum(await core.readNMRiumObject(JSON.parse(stored),
       { onLoadProcessing: { autoProcessing: false } }), originalValues, 'stored-shift.nmrium');
-    await saveReference(save, revision, 'stored-shift.nmrium', stored, restored, 'readNMRiumObject');
+    await saveReference(save, referenceLock, referenceBuild,
+      'stored-shift.nmrium', stored, restored, 'readNMRiumObject');
     const embedded = shiftedSpectrum(await core.readNMRiumArchive(archive.bytes,
       { onLoadProcessing: { autoProcessing: false } }), originalValues, 'resource-embedded.nmrium.zip');
     if (embedded.selector?.root !== 'authored-proton'
         || JSON.stringify(embedded.selector?.files) !== JSON.stringify(['proton.jdx'])) {
       throw Error(`Cannot admit the NMRium archive: embedded resource identity changed; observed ${JSON.stringify(embedded.selector)}`);
     }
-    await saveReference(save, revision, 'resource-embedded.nmrium.zip', archive.bytes, embedded, 'readNMRiumArchive');
+    await saveReference(save, referenceLock, referenceBuild,
+      'resource-embedded.nmrium.zip', archive.bytes, embedded, 'readNMRiumArchive');
   } finally {
     globalThis.fetch = previousFetch;
   }

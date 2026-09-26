@@ -2,12 +2,14 @@
 
 from hashlib import sha256
 import json
+import os
 from pathlib import Path
 import unittest
 from zipfile import ZipFile
 
 
 ROOT = Path('/fixtures/input')
+REFERENCE_LOCK = Path('/contracts/upstream/frontend_reference.json')
 
 
 class FixtureProvenanceTests(unittest.TestCase):
@@ -21,6 +23,10 @@ class FixtureProvenanceTests(unittest.TestCase):
     def setUp(self):
         self.document = json.loads((ROOT / 'provenance.json').read_text())
         self.records = self.document['files']
+
+    def reference_lock(self):
+        contents = REFERENCE_LOCK.read_bytes()
+        return json.loads(contents), f"sha256:{sha256(contents).hexdigest()}"
 
     def test_every_corpus_file_has_one_record(self):
         recorded = [item['path'] for item in self.records]
@@ -60,13 +66,20 @@ class FixtureProvenanceTests(unittest.TestCase):
                     self.assertIn(member['parent'], records)
                     self.assert_origin(member['origin'])
 
-    def test_imported_specimens_retain_the_pinned_source_bytes(self):
+    def test_imported_specimens_retain_the_pinned_source_origin(self):
+        reference_lock, _ = self.reference_lock()
         imported = [item for item in self.records if 'source_path' in item['origin'] and 'parent' not in item]
         self.assertTrue(imported, 'The admitted upstream specimen must remain in the corpus')
         for item in imported:
-            self.assertEqual(item['sha256'], self.document['reference_sources'][item['origin']['source_path']])
+            self.assertEqual(item['origin']['source_repository'], reference_lock['repository'])
+            self.assertEqual(item['origin']['source_revision'], reference_lock['revision'])
 
     def test_reference_vectors_name_their_exact_parent(self):
+        _, reference_lock_id = self.reference_lock()
+        self.assertEqual(self.document['reference_lock'], reference_lock_id)
+        self.assertEqual(self.document['reference_build'], os.environ['INPUT_REFERENCE_BUILD_ID'])
+        self.assertNotIn('frontend_revision', self.document)
+        self.assertNotIn('reference_sources', self.document)
         records = {item['path']: item for item in self.records}
         references = [item for item in self.records if item['path'].endswith('.reference.json')]
         self.assertTrue(references, 'No scientific references were recorded')
@@ -74,5 +87,7 @@ class FixtureProvenanceTests(unittest.TestCase):
             with self.subTest(reference=item['path']):
                 reference = json.loads((ROOT / item['path']).read_text())
                 self.assertEqual(reference['input_sha256'], records[item['parent']]['sha256'])
-                self.assertEqual(reference['frontend_revision'], self.document['frontend_revision'])
+                self.assertEqual(reference['reference_lock'], reference_lock_id)
+                self.assertEqual(reference['reference_build'], os.environ['INPUT_REFERENCE_BUILD_ID'])
+                self.assertNotIn('frontend_revision', reference)
                 self.assertEqual(len(reference['intensities']), 10000)

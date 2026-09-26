@@ -12,12 +12,14 @@ test/input/scenarios: private INPUT_TEST_START := /tests/input/scenarios
 test/input test/input/normative test/input/adversarial test/input/scenarios:
 	cpu_packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
 	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")
+	input_reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id input "$(REPOSITORY_ROOT)")
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 64 --cpus 2 --memory 2g --memory-swap 2g \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=128m,mode=1777 \
 		--tmpfs /modules:rw,nosuid,nodev,noexec,size=16m,mode=1777 \
 		--env PYTHONDONTWRITEBYTECODE=1 \
+		--env INPUT_REFERENCE_BUILD_ID="$$input_reference_build_id" \
 		--env HF_HUB_CACHE=/cache/hub --env HF_HUB_OFFLINE=1 \
 		--env TRANSFORMERS_OFFLINE=1 --env HF_MODULES_CACHE=/modules \
 		--mount type=bind,src="$$cache_dir",dst=/cache,readonly \
@@ -25,6 +27,7 @@ test/input test/input/normative test/input/adversarial test/input/scenarios:
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/input",dst=/tests/input,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/fixtures/input",dst=/fixtures/input,readonly \
+		--mount type=bind,src="$(FRONTEND_REFERENCE_LOCK)",dst=/contracts/upstream/frontend_reference.json,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/generate_input_fixtures.mjs",dst=/tools/generate_input_fixtures.mjs,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/generate_nmrium_fixtures.mjs",dst=/tools/generate_nmrium_fixtures.mjs,readonly \
 		--entrypoint /bin/sh "$$cpu_packages_image" \
@@ -32,11 +35,14 @@ test/input test/input/normative test/input/adversarial test/input/scenarios:
 
 test/reference-decoder-spike:
 	image=$$($(MAKE) --no-print-directory fixtures/frontend-reference/image)
+	reference_lock_id=$$(python3 tools/frontend_reference_lock.py id "$(FRONTEND_REFERENCE_LOCK)")
+	input_reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id input "$(REPOSITORY_ROOT)")
 	timeout --signal=TERM --kill-after=5s 30s $(DOCKER) run --rm --init --pull never --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
-		--env FRONTEND_REFERENCE_REVISION="$(FRONTEND_REFERENCE_REVISION)" \
+		--env FRONTEND_REFERENCE_LOCK_ID="$$reference_lock_id" \
+		--env INPUT_REFERENCE_BUILD_ID="$$input_reference_build_id" \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/reference_decoder",dst=/tests,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/fixtures/input",dst=/fixtures,readonly \
 		--entrypoint node "$$image" --test /tests/test_reference_probe.mjs
@@ -50,6 +56,8 @@ test/integration:
 	checkpoint_dir=$$(realpath -e "$(CHECKPOINT_DIRECTORY)")
 	tests_dir=$$(realpath -e tests/integration)
 	fixtures_dir=$$(realpath -e tests/fixtures)
+	reference_lock=$$(realpath -e "$(FRONTEND_REFERENCE_LOCK)")
+	reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id frontend "$(REPOSITORY_ROOT)")
 	cpu_packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
 	# Hash verification gates cached Python imports.
 	# Docker owns network denial; Transformers offline mode only makes cache misses fail promptly.
@@ -62,11 +70,13 @@ test/integration:
 		--env TRANSFORMERS_OFFLINE=1 \
 		--env HF_MODULES_CACHE=/modules \
 		--env PYTHONDONTWRITEBYTECODE=1 \
+		--env FRONTEND_REFERENCE_BUILD_ID="$$reference_build_id" \
 		--mount type=bind,src="$(MOLFORMER_LOCK)",dst=/input/molformer.lock.toml,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
 		--mount type=bind,src="$$cache_dir",dst=/cache,readonly \
 		--mount type=bind,src="$$checkpoint_dir",dst=/checkpoint,readonly \
 		--mount type=bind,src="$$fixtures_dir",dst=/fixtures,readonly \
+		--mount type=bind,src="$$reference_lock",dst=/contracts/upstream/frontend_reference.json,readonly \
 		--mount type=bind,src="$$tests_dir",dst=/tests,readonly \
 		--entrypoint /bin/sh "$$cpu_packages_image" \
 		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && python -m unittest discover -v -s /tests -p "test_*.py"'
@@ -80,12 +90,16 @@ test/integration/bruker-reference test/integration/jcamp-reference:
 	fi
 	tests_dir=$$(realpath -e tests/integration)
 	fixtures_dir=$$(realpath -e tests/fixtures)
+	reference_lock=$$(realpath -e "$(FRONTEND_REFERENCE_LOCK)")
+	reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id frontend "$(REPOSITORY_ROOT)")
 	cpu_packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777 \
 		--env PYTHONDONTWRITEBYTECODE=1 \
+		--env FRONTEND_REFERENCE_BUILD_ID="$$reference_build_id" \
+		--mount type=bind,src="$$reference_lock",dst=/contracts/upstream/frontend_reference.json,readonly \
 		--mount type=bind,src="$$fixtures_dir",dst=/fixtures,readonly \
 		--mount type=bind,src="$$tests_dir",dst=/tests,readonly \
 		--entrypoint python "$$cpu_packages_image" \

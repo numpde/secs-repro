@@ -428,14 +428,39 @@ def verify_index(index, index_config: dict, expected_dimension: int, expected_ro
     }
 
 
+def read_frontend_reference(
+    frontend_spectrum: Path,
+    frontend_reference_lock: Path,
+    frontend_reference_build: str,
+) -> dict:
+    reference = read_json(frontend_spectrum)
+    reference_lock_id = f"sha256:{sha256(frontend_reference_lock)}"
+    require_equal(
+        "use a real-spectrum fixture from a different frontend reference lock",
+        reference.get("reference_lock"),
+        reference_lock_id,
+    )
+    require_equal(
+        "use a real-spectrum fixture from a different frontend reference producer",
+        reference.get("reference_build"),
+        frontend_reference_build,
+    )
+    return reference
+
+
 def verify_search(
     index,
     checkpoint_manifest: Path,
     molformer_lock: Path,
     frontend_spectrum: Path,
+    frontend_reference_lock: Path,
+    frontend_reference_build: str,
     compute_dtype: str,
     smiles_batch_size: int,
 ) -> dict:
+    reference = read_frontend_reference(
+        frontend_spectrum, frontend_reference_lock, frontend_reference_build
+    )
     inference = SecsInference.load(
         checkpoint_manifest,
         molformer_lock=molformer_lock,
@@ -443,7 +468,7 @@ def verify_search(
         compute_dtype={"float32": torch.float32, "bfloat16": torch.bfloat16}[compute_dtype],
         smiles_batch_size=smiles_batch_size,
     )
-    spectrum = read_json(frontend_spectrum)["intensities"]
+    spectrum = reference["intensities"]
     query = np.asarray(inference.embed_spectrum(spectrum), dtype=np.float32).reshape(1, -1)
     norm = np.linalg.norm(query, axis=1, keepdims=True)
     if not np.isfinite(query).all() or np.any(norm == 0):
@@ -465,6 +490,8 @@ def verify_search(
     return {
         "fixture": frontend_spectrum.name,
         "fixture_sha256": sha256(frontend_spectrum),
+        "reference_lock": reference["reference_lock"],
+        "reference_build": frontend_reference_build,
         "results": result_count,
         "top_identifier": int(result_identifiers[0]),
         "top_score": float(result_scores[0]),
@@ -565,6 +592,8 @@ def verify_profile(args: argparse.Namespace) -> None:
         args.checkpoint_manifest,
         args.molformer_lock,
         args.frontend_spectrum,
+        args.frontend_reference_lock,
+        args.frontend_reference_build,
         args.compute_dtype,
         candidate_spec["embedding"]["batch_size"],
     )
@@ -719,6 +748,7 @@ def write_receipt_command(args: argparse.Namespace) -> None:
     require_equal("combine reports after the checkpoint manifest changed", functional["checkpoint_manifest_sha256"], sha256(args.checkpoint_manifest))
     require_equal("combine reports from different MolFormer locks", functional["molformer_lock_sha256"], scale["molformer_lock_sha256"])
     require_equal("combine reports after the MolFormer lock changed", functional["molformer_lock_sha256"], sha256(args.molformer_lock))
+    require_matching_frontend_reference(functional, scale)
     require_equal("combine reports from different GPUs", functional["gpu"]["uuid"], scale["gpu"]["uuid"])
     require_equal(
         "combine reports from different qualification runs",
@@ -782,6 +812,15 @@ def write_receipt_command(args: argparse.Namespace) -> None:
     write_json(args.output, receipt)
 
 
+def require_matching_frontend_reference(functional: dict, scale: dict) -> None:
+    for field in ("fixture_sha256", "reference_lock", "reference_build"):
+        require_equal(
+            f"combine reports from different frontend references ({field})",
+            functional["search"][field],
+            scale["search"][field],
+        )
+
+
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -803,6 +842,8 @@ def arguments() -> argparse.Namespace:
     verify.add_argument("--builder", type=Path, required=True)
     verify.add_argument("--bundle", type=Path, required=True)
     verify.add_argument("--frontend-spectrum", type=Path, required=True)
+    verify.add_argument("--frontend-reference-lock", type=Path, required=True)
+    verify.add_argument("--frontend-reference-build", required=True)
     verify.add_argument("--metrics", type=Path, required=True)
     verify.add_argument("--builder-log", type=Path, required=True)
     verify.add_argument("--gpu-log", type=Path, required=True)

@@ -7,6 +7,7 @@ import numpy as np
 
 from secs_inference.spectra.jcamp import read_jcamp_spectrum
 from secs_inference.spectra.secs import prepare_secs_spectrum
+from frontend_reference import load_frontend_reference
 
 
 FIXTURES = Path("/fixtures")
@@ -20,6 +21,22 @@ HZ_XYDATA_SPECTRUM = FIXTURES / "input/encoded-fix.jdx"
 
 
 class JcampFrontendReferenceTest(unittest.TestCase):
+    def test_stale_frontend_reference_is_rejected_before_comparison(self):
+        reference = json.loads(FRONTEND_REFERENCE.read_text())
+        for field in ("reference_lock", "reference_build"):
+            with self.subTest(field=field), tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False
+            ) as temporary:
+                stale = dict(reference)
+                stale[field] = f"sha256:{'0' * 64}"
+                json.dump(stale, temporary)
+                path = Path(temporary.name)
+            try:
+                with self.assertRaisesRegex(ValueError, "different reference"):
+                    load_frontend_reference(path)
+            finally:
+                path.unlink()
+
     def test_unknown_data_class_names_supported_formats_without_echoing_file_text(self):
         contents = JCAMP_SPECTRUM.read_text()
         self.assertIn("##DATA CLASS=XYDATA", contents)
@@ -30,7 +47,7 @@ class JcampFrontendReferenceTest(unittest.TestCase):
         self.assertNotIn("private-source-marker", str(caught.exception).lower())
 
     def test_processed_xydata_matches_frontend_float32_input(self):
-        reference = json.loads(FRONTEND_REFERENCE.read_text())
+        reference = load_frontend_reference(FRONTEND_REFERENCE)
         source = read_jcamp_spectrum(JCAMP_SPECTRUM)
         actual = prepare_secs_spectrum(source)
         expected = np.asarray(reference["intensities"], dtype=np.float32)
@@ -40,7 +57,7 @@ class JcampFrontendReferenceTest(unittest.TestCase):
         np.testing.assert_array_max_ulp(actual, expected, maxulp=1)
 
     def test_processed_ntuples_matches_frontend_float32_input(self):
-        reference = json.loads(NTUPLES_FRONTEND_REFERENCE.read_text())
+        reference = load_frontend_reference(NTUPLES_FRONTEND_REFERENCE)
         source = read_jcamp_spectrum(NTUPLES_SPECTRUM)
         actual = prepare_secs_spectrum(source)
         expected = np.asarray(reference["intensities"], dtype=np.float32)

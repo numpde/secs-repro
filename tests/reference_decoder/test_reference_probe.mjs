@@ -8,9 +8,11 @@ import { normalizeSpectrum } from '/opt/frontend/src/spectrum/normalize.ts';
 
 const probe = '/tests/reference_probe.mjs';
 const fixtures = '/fixtures';
-const frontendRevision = process.env.FRONTEND_REFERENCE_REVISION;
+const referenceLock = process.env.FRONTEND_REFERENCE_LOCK_ID;
+const referenceBuild = process.env.INPUT_REFERENCE_BUILD_ID;
 
-assert.match(frontendRevision, /^[0-9a-f]{40}$/);
+assert.match(referenceLock, /^sha256:[0-9a-f]{64}$/);
+assert.match(referenceBuild, /^sha256:[0-9a-f]{64}$/);
 
 function runProbe(request) {
   return spawnSync(process.execPath, [probe], {
@@ -44,7 +46,8 @@ async function loadReference(name) {
     readFile(`${fixtures}/${name}`),
   ]);
   assert.equal(createHash('sha256').update(bytes).digest('hex'), document.input_sha256);
-  assert.equal(document.frontend_revision, frontendRevision);
+  assert.equal(document.reference_lock, referenceLock);
+  assert.equal(document.reference_build, referenceBuild);
   return document;
 }
 
