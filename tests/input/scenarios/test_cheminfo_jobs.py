@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 from secs.elucidation import StaticCandidateSource
 
-from input.cheminfo import COFFEE, CheminfoCase
+from input.cheminfo import COFFEE, PROCESSED, CheminfoCase
 
 
 class CheminfoJobScenarios(CheminfoCase):
@@ -16,12 +16,14 @@ class CheminfoJobScenarios(CheminfoCase):
         self.worker.candidates = self.candidates
 
     def test_processed_proton_examples_reach_inference_despite_unusable_raw_alternatives(self):
-        for path in ('aspirin-1h-processed.zip', 'cyclosporin/cyclosporin_1h.zip',
-                     'ibuprofen/processed/proton.zip', 'strychnine-1h.zip', 'topspin365.zip'):
+        for path, expected in PROCESSED:
+            expected_protons = sum(nucleus == '1H' for _, nucleus, _ in expected)
+            if not expected_protons:
+                continue
             self.fixture('zipped/' + path)
             facts = self.discover()
             protons = [item for item in facts['representations'] if item['metadata']['nucleus'] == '1H']
-            self.assertTrue(protons)
+            self.assertEqual(len(protons), expected_protons)
             for item in protons:
                 with self.subTest(archive=path, sources=item['sources']):
                     response = self.request('analyse', selection=self.selection(item))
@@ -30,8 +32,7 @@ class CheminfoJobScenarios(CheminfoCase):
                     self.candidates.reset_mock()
 
     def test_whole_coffee_folders_keep_supported_1d_experiments_and_choices(self):
-        for name, experiments in zip(COFFEE, (('20', '21', '22', '99999'),
-                                              ('10', '11', '12', '99999'))):
+        for name, experiments in COFFEE:
             with self.subTest(sample=name):
                 self.coffee(name)
                 facts = self.discover()
@@ -41,7 +42,7 @@ class CheminfoJobScenarios(CheminfoCase):
                 self.assertEqual({tuple(source['member'] for source in item['sources'])
                                   for item in processed}, expected)
                 self.assertEqual(len(processed), len(expected))
-                self.assertEqual(len({item['id'] for item in facts['representations']}), 5)
+                self.assertEqual(len({item['id'] for item in facts['representations']}), len(expected) + 1)
                 fid = self.one(facts, 'fid')
                 self.assertEqual(fid['sources'], [{'upload_ref': 'upload:sample',
                                  'member': f'{name}/99999/{member}'} for member in ('fid', 'acqus')])

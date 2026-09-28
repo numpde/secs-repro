@@ -6,20 +6,7 @@ import json
 import unittest
 from zipfile import ZipFile
 
-from input.cheminfo import CORPUS, DATA, CheminfoCase
-
-
-# Reviewed acquisition/processing declarations, independent of runtime decoding.
-PROCESSED = (
-    ('aspirin-1h-processed.zip', (('1/pdata/1', '1H', 32768),)),
-    ('cyclosporin/cyclosporin_1h.zip', (('cyclosporin_1h/1/pdata/1', '1H', 32768),)),
-    ('ibuprofen/processed/carbon.zip', (('2/pdata/1', '13C', 32768),)),
-    ('ibuprofen/processed/proton.zip', (('1/pdata/1', '1H', 65536), ('1/pdata/700', '1H', 512))),
-    ('rb87.zip', (('rb87/13/pdata/1', '87Rb', 32768),)),
-    ('strychnine-1h.zip', (('strychnine/10/pdata/1', '1H', 131072),)),
-    ('topspin365.zip', (('topspin365/10/pdata/1', '1H', 65536),
-                        ('topspin365/11/pdata/1', '13C', 131072))),
-)
+from input.cheminfo import CORPUS, DATA, PROCESSED, CheminfoCase
 
 
 class CheminfoDiscoveryTests(CheminfoCase):
