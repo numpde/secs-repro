@@ -32,11 +32,13 @@ class CheminfoCase(WorkerCase):
                     for name in ('1r', 'procs')]
 
     def selection(self, item, *, processing='as_stored', formula='C22H36O7'):
+        """Build a selection; the default formula is arbitrary test Job input."""
         return {'representation_id': item['id'], 'formula': formula,
                 'formula_evidence': {'kind': 'job_specification', 'quote': formula},
                 'processing': processing, 'explanation': 'Use the explicitly selected uploaded data.'}
 
     def assert_prepared(self, response, item, *, from_fid=False):
+        """Check executable input and provenance with empty retrieval, without a numerical reference."""
         self.assertEqual(response['outcome'], 'no_starting_candidates')
         preparation = response['analysis']['preparation']
         self.assertEqual(preparation['representation_id'], item['id'])
