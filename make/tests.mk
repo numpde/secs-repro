@@ -28,6 +28,7 @@ test/input test/input/normative test/input/adversarial test/input/scenarios:
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/input",dst=/tests/input,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/fixtures/input",dst=/fixtures/input,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/fixtures/bruker/cheminfo",dst=/fixtures/bruker/cheminfo,readonly \
 		--mount type=bind,src="$(FRONTEND_REFERENCE_LOCK)",dst=/contracts/upstream/frontend_reference.json,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/generate_input_fixtures.mjs",dst=/tools/generate_input_fixtures.mjs,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/generate_nmrium_fixtures.mjs",dst=/tools/generate_nmrium_fixtures.mjs,readonly \

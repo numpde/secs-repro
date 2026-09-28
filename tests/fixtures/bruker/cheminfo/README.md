@@ -18,8 +18,20 @@ preserved under `data/`:
 | `data/flat/coffee/` | Two sample groups with multiple experiments and processing directories |
 
 Names describe upstream examples; they do not establish molecular identity or
-supported analysis behavior. This import provides data for future tests. It
-does not add parser qualification or numerical reference results.
+supported analysis behavior. `make test/input` checks every retained file and
+archive member against its recorded bytes and provenance. Tests under
+`tests/input/{normative,scenarios,adversarial}` exercise real processed 1D
+choices, both whole coffee folders, qualified zero-delay coffee FIDs, multiple
+uploads, nonproton refusal, broken companions and changed selections.
+Preparation checks reach the inference boundary with model calls mocked; they
+are not numerical comparisons with an independent reference or molecular
+identity validation.
+
+The 2D examples (including NUS, relaxation and incomplete acquisition) remain
+integrity fixtures, not qualified parser examples: discovery currently ignores
+`ser`/`2rr`. Legacy raw examples lacking `GRPDLY` also remain unqualified; the
+current generic incomplete-parameter diagnostic does not establish damaged
+acquisition data. Tests must not bless either gap as successful parsing.
 
 ## License and omissions
 
