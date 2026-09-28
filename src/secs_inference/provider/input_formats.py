@@ -741,7 +741,7 @@ def _discover_structures(read: ReadSource) -> list[DiscoveredRepresentation]:
     records: list[tuple[str, object]] = []
     with rdBase.BlockLogs():
         if "M  END" in text:
-            blocks = re.split(r"\$\$\$\$(?:\r\n|\n|\r)?", text) if "$$$$" in text else [text]
+            blocks = re.split(r"^\$\$\$\$(?:\r\n|\n|\r|$)", text, flags=re.MULTILINE)
             for index, block in enumerate(blocks):
                 if not block.strip():
                     continue

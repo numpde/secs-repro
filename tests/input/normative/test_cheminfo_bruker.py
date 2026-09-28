@@ -1,6 +1,7 @@
 """Real 1D instrument datasets retain their scientific choices and provenance."""
 
 from hashlib import sha256
+from itertools import product
 import json
 import unittest
 from zipfile import ZipFile
@@ -22,12 +23,13 @@ PROCESSED = (
 
 
 class CheminfoDiscoveryTests(CheminfoCase):
-    def test_empty_mol_titles_survive_standalone_and_sdf_record_boundaries(self):
+    def test_mol_titles_survive_standalone_and_sdf_record_boundaries(self):
         contents = (DATA / 'zipped/ibuprofen/ibuprofen.mol').read_bytes()
         self.assertTrue(contents.startswith(b'\n'))
-        for separator in (None, b'$$$$\n', b'$$$$\r\n'):
-            with self.subTest(separator=separator):
-                wrapped = contents if separator is None else (contents + separator) * 2
+        for title, separator in product((b'', b'Price $$$$ sample'), (None, b'$$$$\n', b'$$$$\r\n')):
+            with self.subTest(title=title, separator=separator):
+                molecule = title + contents
+                wrapped = molecule if separator is None else (molecule + separator) * 2
                 self.upload('structures', contents=wrapped)
                 facts = self.discover()
                 self.assertTrue(facts['complete'])
@@ -84,7 +86,7 @@ class CheminfoIntegrityTests(unittest.TestCase):
                 contents = (CORPUS / item['path']).read_bytes()
                 self.assertEqual(len(contents), item['byte_length'])
                 self.assertEqual(sha256(contents).hexdigest(), item['sha256'])
-                if 'members' not in item:
+                if not item['path'].endswith('.zip'):
                     continue
                 with ZipFile(CORPUS / item['path']) as archive:
                     members = item['members']
