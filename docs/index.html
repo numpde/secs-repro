@@ -89,11 +89,10 @@
   </dl>
 <!-- support-catalog:end -->
   <h2>Example: a Bruker experiment</h2>
-  <p>For the <a href="https://github.com/numpde/secs-repro/tree/main/tests/fixtures/bruker/F3697/1/pdata/1">strychnine example files</a>
-    used by our Bruker regression test, ZIP
-    <code>F3697/1/pdata/1/</code>, including <code>1r</code>, <code>procs</code>,
-    and <code>title</code>. Attach that ZIP and write:</p>
-  <pre>Analyse the sole processed 1H spectrum in the attached ZIP.
+  <p>Upload the whole <a href="https://github.com/numpde/secs-repro/tree/main/tests/fixtures/bruker/F3697/1">strychnine experiment folder</a>.
+    We inspect its contents to choose a suitable proton spectrum.
+    In the job input, write:</p>
+  <pre>Infer the molecular structure from the attached experiment.
 Molecular formula: C21H22N2O2.</pre>
   <h2>What the result means</h2>
   <p>SECS retrieves candidates from a molecular index and refines them with a
