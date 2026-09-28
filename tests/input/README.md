@@ -163,6 +163,15 @@ transport replaces that adapter contract rather than redefining scientific
 selection. Scripted interpreter replies prove transport/orchestration, not judgment.
 Real-LLM and deployed GUI/API qualification remain separate roadmap obligations.
 
+The separate MIT-licensed Cheminfo corpus in
+`tests/fixtures/bruker/cheminfo` is mounted read-only in this lane. Its own
+manifest supplies source revision, attribution, exclusions and hashes for all
+retained files and ZIP members. Real 1D discovery, stored preparation, zero-delay
+coffee FIDs, multi-upload structure evidence and adverse companion/selection
+cases supplement the synthetic numerical references. These preparation checks
+establish executable inputs, not additional numerical parity. The corpus README
+records the remaining 2D and legacy raw-profile gaps.
+
 ## Coverage map and qualification status
 
 This map names the behavior exercised by the current suite.

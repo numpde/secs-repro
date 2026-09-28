@@ -741,11 +741,12 @@ def _discover_structures(read: ReadSource) -> list[DiscoveredRepresentation]:
     records: list[tuple[str, object]] = []
     with rdBase.BlockLogs():
         if "M  END" in text:
-            blocks = text.split("$$$$") if "$$$$" in text else [text]
+            blocks = re.split(r"\$\$\$\$(?:\r\n|\n|\r)?", text) if "$$$$" in text else [text]
             for index, block in enumerate(blocks):
                 if not block.strip():
                     continue
-                molecule = Chem.MolFromMolBlock(block.strip("\r\n") + "\n", sanitize=True, removeHs=False)
+                # An empty title is a header line; stripping it shifts the counts line.
+                molecule = Chem.MolFromMolBlock(block, sanitize=True, removeHs=False)
                 if molecule is None:
                     return []
                 records.append((f"mol:{index}", molecule))
