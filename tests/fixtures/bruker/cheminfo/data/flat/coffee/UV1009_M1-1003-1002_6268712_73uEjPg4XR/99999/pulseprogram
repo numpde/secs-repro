@@ -1,0 +1,281 @@
+# 1 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/pulsecal"
+;pulsecal
+;avance-version (07/12/04)
+;for single scan pulse calibration
+;requires analog mode
+;
+;P.S.C.Wu & G. Otting, J. Magn. Reson. 176, 115-119 (2005)
+;
+;$CLASS=HighRes HWT
+;$DIM=1D
+;$TYPE=
+;$SUBTYPE=
+;$COMMENT=
+;$HIDE=y
+
+
+# 1 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/Avance.incl" 1
+;Avance2.incl
+;   for 1
+;
+;avance-version (09/07/02)
+;
+;$CLASS=HighRes Incl
+;$COMMENT=
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+;$Id: Avance2.incl,v 1.17.2.2 2009/11/18 11:19:58 ber Exp $
+# 16 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/pulsecal" 2
+
+# 1 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/De.incl" 1
+;De.incl
+;
+;avance-version (06/03/10)
+;
+;$CLASS=HighRes Incl
+;$COMMENT=
+
+
+define delay rde1
+define delay rderx
+define delay rdeadc
+define delay rdepa
+
+
+"rde1=de-de1"
+"rderx=de-derx"
+"rdeadc=de-deadc"
+"rdepa=de-depa"
+
+
+
+
+
+
+
+
+
+
+
+
+
+;$Id: De1.incl,v 1.4 2006/03/10 18:17:18 ber Exp $
+# 17 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/pulsecal" 2
+
+
+
+define delay dwdel1
+define delay dwdel2
+define delay dwdel3
+
+define pulse dwpul
+
+define loopcounter tdcount
+
+
+"cnst31=10"
+
+
+"d12=20u"
+
+
+"dwdel1=2u"
+"dwdel3=40u"
+"dwpul=dw*2*cnst31/100"
+
+"dwdel2=dw*2-dwdel1*9-dwpul-dwdel3"
+
+
+"tdcount = td/2+2"
+
+
+"anavpt=256"
+
+
+# 1 "mc_line 48 file C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/pulsecal dc-measurement inserted automatically"
+    dccorr
+# 48 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/pulsecal"
+1 ze
+  d12 pl29:f1
+2 30m
+  d1
+  (rde1 de1 adc ph31 syrec) (1u 1u ph30:r):f1 (rderx  derx  setrtp1|1) (rdeadc deadc setrtp1|0|8) (rdepa  depa  setrtp1|2) (de)
+
+4 dwdel1 sytra
+  dwdel1 setrtp1^0^1^2
+  dwdel3 setfrtp1|1
+  dwdel1
+  (dwpul ph1):f1
+  dwdel1
+  dwdel1 setfrtp1^1
+  dwdel1
+  dwdel1 setrtp1|0|1|2
+  dwdel2 syrec
+  dwdel1 setrtp1|7
+  dwdel1 setrtp1^7
+  lo to 4 times tdcount
+
+  rcyc = 2
+  wr #0
+exit
+
+
+ph1=0
+ph30=0
+ph31=0 
+
+
+;pl1 : f1 channel - power level for pulse (default)
+;pl24: f2 channel - power level for hd/hc decoupling
+;p1 : f1 channel -  high power pulse
+;d1 : relaxation delay; 1-5 * T1
+;d12: delay for power switching                      [20 usec]
+;NS: 1 * n, total number of scans: NS * TD0
+
+
+
+;$Id: pulsecal,v 1.2.6.1 2007/12/14 18:14:35 ber Exp $

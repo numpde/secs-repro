@@ -1,0 +1,228 @@
+# 1 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/user/zgpsd0"
+;zgps
+;avance-version (06/11/09)
+;1D sequence with presaturation
+;using shaped pulse for off-resonance presaturation
+;
+;$CLASS=HighRes
+;$DIM=1D
+;$TYPE=
+;$SUBTYPE=
+;$COMMENT=
+
+
+# 1 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/Avance.incl" 1
+;Avance2.incl
+;   for 1
+;
+;avance-version (09/07/02)
+;
+;$CLASS=HighRes Incl
+;$COMMENT=
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+;$Id: Avance2.incl,v 1.17.2.2 2009/11/18 11:19:58 ber Exp $
+# 13 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/user/zgpsd0" 2
+
+
+
+"d12=20u"
+
+
+"acqt0=-p1*2/3.1416"
+
+
+# 1 "mc_line 22 file C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/user/zgpsd0 expanding definition part of mc command before ze"
+define delay MCWRK
+define delay MCREST
+"MCWRK = 0.333333*30m"
+"MCREST = 30m - 30m"
+    dccorr
+# 22 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/user/zgpsd0"
+1 ze
+# 1 "mc_line 22 file C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/user/zgpsd0 expanding definition of mc command after ze"
+# 23 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/user/zgpsd0"
+# 1 "mc_line 23 file C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/user/zgpsd0 expanding start label for mc command"
+2 MCWRK  * 2
+LBLF0, MCWRK
+  MCREST
+# 24 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/user/zgpsd0"
+3 p18:sp6:f1 ph29
+  4u
+  lo to 3 times l6
+  d12 pl1:f1
+  d0 
+  p1 ph1
+  go=2 ph31
+# 1 "mc_line 31 file C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/user/zgpsd0 expanding mc command in line"
+  MCWRK wr #0
+  MCWRK zd 
+  lo to LBLF0 times td0
+
+  MCWRK
+# 32 "C:/Bruker/TOPSPIN/exp/stan/nmr/lists/pp/user/zgpsd0"
+exit
+
+
+ph1=0 2 1 3
+ph29=0
+ph31=0 2 1 3
+
+
+;pl1 : f1 channel - power level for pulse (default)
+;sp6: f1 channel - shaped pulse for presaturation
+;p1 : f1 channel -  90 degree high power pulse
+;p18: f1 channel - presaturation using shaped pulse
+;d12: delay for power switching                      [20 usec]
+;l6: p18 * l6 = total duration of presaturation
+;NS: 1 * n, total number of scans: NS * TD0
+
+;use 100msec pulse of square shape defined by 1000 points
+
+
+
+;$Id: zgps,v 1.10 2006/11/10 10:56:44 ber Exp $

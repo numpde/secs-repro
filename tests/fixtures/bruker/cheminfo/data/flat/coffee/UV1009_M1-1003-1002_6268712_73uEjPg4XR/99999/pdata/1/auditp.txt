@@ -1,0 +1,35 @@
+##TITLE= Audit trail, TOPSPIN		Version 2.1
+##JCAMPDX= 5.01
+##ORIGIN= Bruker BioSpin GmbH
+##OWNER= Administrator
+$$ C:\Bruker\TOPSPIN/data/COFFEE/nmr/UV1009_M1-1003-1002_6268712_73uEjPg4XR/99999/pdata/1/auditp.txt
+##AUDIT TRAIL=  $$ (NUMBER, WHEN, WHO, WHERE, PROCESS, VERSION, WHAT)
+(   1,<2012-06-02 05:47:03.234 -0500>,<Administrator>,<TOPSPIN>,<go>,<TOPSPIN 2.1>,
+      <created by zg
+	started at 2012-06-02 05:46:57.062 -0500,
+	POWCHK enabled, PULCHK disabled,
+       configuration hash MD5:
+       D5 CA 7A 23 FE 6B EE E2 50 67 74 61 24 F7 5E 3B
+       data hash MD5: 4K
+       11 E0 26 95 D8 40 71 32 B3 34 A1 A1 95 C3 42 7F>)
+(   2,<2012-06-02 05:47:05.140 -0500>,<Administrator>,<TOPSPIN>,<proc1d>,<TOPSPIN 2.1>,
+      <Start of raw data processing
+       gm BC_mod = 6 BCFW = 0.199935 LB = -10 GB = 0.1 SI = 16K 
+       data hash MD5: 16K
+       B5 24 DB B0 3F E3 D4 DB 84 ED 66 0F 6F 71 65 01>)
+(   3,<2012-06-02 05:47:05.156 -0500>,<Administrator>,<TOPSPIN>,<proc1d>,<TOPSPIN 2.1>,
+      <ft FT_mod = 6 PKNL = 1 SI = 16K 
+       data hash MD5: 16K
+       AE D3 C2 C9 F2 7C C6 4E 43 AA 9E F3 28 B5 42 7E>)
+(   4,<2012-06-02 05:47:05.171 -0500>,<Administrator>,<TOPSPIN>,<proc1d>,<TOPSPIN 2.1>,
+      <mc 
+       data hash MD5: 16K
+       C2 BE 0D DF 9B C4 32 C7 01 9B 27 5C 8B A7 21 7A>)
+(   5,<2012-06-02 05:47:05.203 -0500>,<Administrator>,<TOPSPIN>,<pulsecal>,<TOPSPIN 2.1>,
+      <pulsecal quiet, symmetrised
+       data hash MD5: 16K
+       7A 6C 1C 19 8B 15 65 07 C2 50 2C 6E A1 CD CE 92>)
+##END=
+
+$$ hash MD5
+$$ D5 43 A8 A4 26 6D 56 21 3C 8A 70 0A 51 83 50 D2

@@ -1,0 +1,44 @@
+##TITLE= Audit trail, TOPSPIN		Version 2.1
+##JCAMPDX= 5.01
+##ORIGIN= Bruker BioSpin GmbH
+##OWNER= Administrator
+$$ C:\Bruker\TOPSPIN/data/COFFEE/nmr/UV1009_M1-1003-1002_6268712_73uEjPg4XR/23/pdata/1/auditp.txt
+##AUDIT TRAIL=  $$ (NUMBER, WHEN, WHO, WHERE, PROCESS, VERSION, WHAT)
+(   1,<2012-06-02 06:15:52.625 -0500>,<Administrator>,<TOPSPIN>,<go>,<TOPSPIN 2.1>,
+      <created by zg
+	started at 2012-06-02 06:01:29.468 -0500,
+	POWCHK enabled, PULCHK disabled,
+       configuration hash MD5:
+       D5 CA 7A 23 FE 6B EE E2 50 67 74 61 24 F7 5E 3B
+       data hash MD5: 8K * 40
+       DE 1A 0D C4 22 88 92 CF 7E 86 5D EA C8 8F 94 4F>)
+(   2,<2012-06-02 06:15:57.890 -0500>,<Administrator>,<TOPSPIN>,<proc2d>,<TOPSPIN 2.1>,
+      <Start of raw data processing
+       xfb same F2: SI = 16K WDW = 3 SSB = 0 FT_mod = 6 PKNL = 1 F1: SI = 512 WDW = 3 SSB = 0 FT_mod = 6 PH_mod = 2
+       data hash MD5: 16K * 512
+       93 82 35 A9 69 BD 48 14 29 48 46 FB 1E BA 80 4B>)
+(   3,<2012-06-02 06:16:00.546 -0500>,<Administrator>,<TOPSPIN>,<proc2d>,<TOPSPIN 2.1>,
+      <abs2 F2: ABSG = 5 ABSF1 = 10.00072 ABSF2 = 0.000432413
+       data hash MD5: 16K * 512
+       D2 D6 AF 33 EE F4 70 EA E3 0D 65 BF 01 1D 2B EF>)
+(   4,<2012-06-02 06:16:02.625 -0500>,<Administrator>,<TOPSPIN>,<proc2d>,<TOPSPIN 2.1>,
+      <tilt
+       data hash MD5: 16K * 512
+       5D 86 9E 7D 72 B6 35 34 6A 83 1C D6 61 4C B6 E8>)
+(   5,<2012-06-02 06:16:06.421 -0500>,<Administrator>,<TOPSPIN>,<proc2d>,<TOPSPIN 2.1>,
+      <abs1 F1: ABSG = 5 ABSF1 = 0.06497862 ABSF2 = -0.06497851
+       data hash MD5: 16K * 512
+       96 A5 3B BA C3 9E 6C 18 B9 73 00 EC 92 A6 11 69>)
+(   6,<2012-06-02 06:16:08.562 -0500>,<Administrator>,<TOPSPIN>,<proc2d>,<TOPSPIN 2.1>,
+      <symj
+       data hash MD5: 16K * 512
+       D0 32 E3 3D 3F ED 83 8A 48 66 64 47 5B BA B4 F5>)
+(   7,<2012-06-02 06:16:09.484 -0500>,<Administrator>,<TOPSPIN>,<audit>,<TOPSPIN 2.1>,
+      <user comment:
+       ICON-NMR User ID: COFFEE
+       data hash MD5: 16K * 512
+       D0 32 E3 3D 3F ED 83 8A 48 66 64 47 5B BA B4 F5>)
+##END=
+
+$$ hash MD5
+$$ 71 6B E3 8A CE C2 1B 7E 19 95 94 0E E7 29 13 B5
