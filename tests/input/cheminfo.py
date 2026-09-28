@@ -1,4 +1,7 @@
-"""Upload retained Cheminfo bytes; runtime wrappers inherit the corpus license."""
+"""Reviewed Cheminfo fixture facts and uploaded-byte arrangements.
+
+Runtime wrappers inherit the corpus license.
+"""
 
 from pathlib import Path
 from zipfile import ZipFile
@@ -11,8 +14,20 @@ from input.helpers import WorkerCase
 CORPUS = Path('/fixtures/bruker/cheminfo')
 DATA = CORPUS / 'data'
 COFFEE = (
-    'UV1009_M1-1003-1002_6268712_73uEjPg4XR',
-    'UV1010_M1-1003-1002_6268756_ErISKLIoeB',
+    ('UV1009_M1-1003-1002_6268712_73uEjPg4XR', ('20', '21', '22', '99999')),
+    ('UV1010_M1-1003-1002_6268756_ErISKLIoeB', ('10', '11', '12', '99999')),
+)
+
+# Reviewed acquisition/processing declarations, independent of runtime decoding.
+PROCESSED = (
+    ('aspirin-1h-processed.zip', (('1/pdata/1', '1H', 32768),)),
+    ('cyclosporin/cyclosporin_1h.zip', (('cyclosporin_1h/1/pdata/1', '1H', 32768),)),
+    ('ibuprofen/processed/carbon.zip', (('2/pdata/1', '13C', 32768),)),
+    ('ibuprofen/processed/proton.zip', (('1/pdata/1', '1H', 65536), ('1/pdata/700', '1H', 512))),
+    ('rb87.zip', (('rb87/13/pdata/1', '87Rb', 32768),)),
+    ('strychnine-1h.zip', (('strychnine/10/pdata/1', '1H', 131072),)),
+    ('topspin365.zip', (('topspin365/10/pdata/1', '1H', 65536),
+                        ('topspin365/11/pdata/1', '13C', 131072))),
 )
 
 
