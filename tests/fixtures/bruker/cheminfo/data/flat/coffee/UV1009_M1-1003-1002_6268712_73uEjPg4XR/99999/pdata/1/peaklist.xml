@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PeakList>
+  <PeakList1D>
+    <PeakList1DHeader creator="COFFEE" date="2012-06-02T05:47:05.234-05:00" expNo="99999" name="UV1009_M1-1003-1002_6268712_73uEjPg4XR" owner="" procNo="1" source="C:\Bruker\TOPSPIN">
+      <PeakPickDetails>F1=4.165ppm, F2=-4.165ppm, MI=25.00cm, MAXI=110.00cm, PC=1.000
+      </PeakPickDetails>
+    </PeakList1DHeader>
+    <Peak1D F1="1.5653" intensity="100.00" type="0"/>
+    <Peak1D F1="-1.5653" intensity="100.00" type="0"/>
+  </PeakList1D>
+</PeakList>

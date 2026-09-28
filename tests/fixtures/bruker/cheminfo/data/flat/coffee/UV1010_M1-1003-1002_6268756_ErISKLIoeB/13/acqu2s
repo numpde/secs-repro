@@ -1,0 +1,18 @@
+##TITLE= Parameter file, TOPSPIN		Version 2.1
+##JCAMPDX= 5.0
+##DATATYPE= Parameter Values
+##NPOINTS= 41	$$ modification sequence number
+##ORIGIN= Bruker BioSpin GmbH
+##OWNER= Administrator
+$$ 2012-06-02 08:09:36.953 -0500  Administrator@TOPSPIN
+$$ C:\Bruker\TOPSPIN/data/COFFEE/nmr/UV1010_M1-1003-1002_6268756_ErISKLIoeB/13/acqu2s
+$$ process C:\Bruker\TOPSPIN\prog\mod\go.exe
+##$BF1= 400.13
+##$FnMODE= 1
+##$NUC1= <1H>
+##$O1= 1882.35
+##$SFO1= 400.13188235
+##$SW= 0.129957130391612
+##$SW_h= 51.9999912084001
+##$TD= 40
+##END=
