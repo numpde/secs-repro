@@ -107,6 +107,24 @@ class SelectionRefusalTests(WorkerCase):
         del selection['formula_evidence']
         self.rejected(selection, 'formula', 'evidence')
 
+    def test_typography_handling_cannot_repair_invalid_chemical_syntax(self):
+        self.upload('proton.jdx')
+        item = self.one(self.discover())
+        for formula in ('C2 2H36O7', 'C l2H6O', 'C²²H³⁶O⁷', 'C２２H３６O７',
+                        'C22H36O7+', 'C22H36O7 followed by prose', 'C0H2', 'C22\nH36O7'):
+            with self.subTest(formula=formula):
+                selection = self.selection(item['id'])
+                selection['formula'] = formula
+                selection['formula_evidence']['quote'] = formula
+                self.rejected(selection, 'formula', 'parse')
+
+    def test_worker_rejects_a_changed_formula_despite_equivalent_typography_support(self):
+        self.upload('proton.jdx')
+        item = self.one(self.discover())
+        selection = self.selection(item['id'])
+        selection['formula_evidence']['quote'] = 'C₂₂ H₃₆ O₈'
+        self.rejected(selection, 'formula', 'evidence')
+
     def test_unknown_formula_evidence_representation_is_rejected(self):
         self.upload('proton.jdx')
         item = self.one(self.discover())

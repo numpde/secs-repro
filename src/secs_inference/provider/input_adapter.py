@@ -23,6 +23,7 @@ from secs_inference.provider.input_operations import (
     source_document,
 )
 from secs_inference.provider.source_access import InputReadError, ReadSource, ScopeLimitError, SourceAccess
+from secs_inference.provider.formula_notation import normalize_formula_notation
 
 _TOKEN_PREFIX = "secs-input-v1."
 _MAX_INVENTORY_BYTES = 256 * 1024
@@ -203,9 +204,11 @@ class InputAdapter:
         return current
 
     def _verify_formula_evidence(self, access, attempt_ref, formula, evidence):
+        formula = normalize_formula_notation(formula)
         if (type(evidence) is dict and set(evidence) == {"kind", "quote"}
                 and evidence.get("kind") == "job_specification"
-                and evidence.get("quote") == formula):
+                and type(evidence.get("quote")) is str
+                and normalize_formula_notation(evidence["quote"]) == formula):
             return
         if (type(evidence) is not dict or set(evidence) != {"kind", "representation_ids"}
                 or evidence.get("kind") != "representations"

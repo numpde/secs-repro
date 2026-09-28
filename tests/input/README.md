@@ -65,11 +65,16 @@ set; its spelling is not prescribed. These are internal discovery requirements,
 not the reference frontend's response schema. The execution
 request uses
 `selection={representation_id, formula, formula_evidence, processing, explanation}`.
-Formula evidence either quotes the selected formula exactly from the admitted
+Formula evidence either quotes the complete formula verbatim from the admitted
 Job specification or names one or more discovered structure representations.
+Formula comparisons and execution accept Unicode subscript digits and Unicode
+space separators between elements and their counts, including outer spaces.
+The original quote and selection spelling remain in the decision. Split element symbols or
+counts, superscripts and charges are not repaired into supported formulas.
 The controller verifies a Job quote against the exact specification text. This
 makes the interpreter's source auditable; explanation prose cannot substitute
-for it.
+for it. Literal citation and contiguous-token boundaries do not interpret the
+surrounding prose; choosing the intended complete formula belongs to the interpreter.
 There is no format-specific reader discriminator. The opaque identity must
 survive separate inspect/analyse calls for unchanged acquired sources; removed
 or changed sources invalidate it, and it is valid only in the Attempt that

@@ -81,8 +81,10 @@ INPUT_OPERATIONS = (
     InputOperation(
         "select_representation",
         "Select one discovered representation for this analysis. Use its opaque identity exactly, "
-        "state the evidenced molecular formula, cite it either by quoting that exact formula from the Job specification "
-        "or by naming discovered structure representations, choose stored data or automatic FID processing, and explain the choice.",
+        "state the evidenced molecular formula, cite it either by quoting the complete formula verbatim from the Job specification "
+        "or by naming discovered structure representations. Subscript digits and spaces between elements and counts "
+        "may differ between formula and quote; preserve the original quote. "
+        "Choose stored data or automatic FID processing, and explain the choice.",
         _arguments({
             "representation_id": _TEXT,
             "formula": _TEXT,

@@ -9,6 +9,7 @@ import tomllib
 from secs_inference.provider.configuration_error import ConfigurationError
 from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.outcomes import AnalysisOutcome, NO_STARTING_CANDIDATES_MESSAGE
+from secs_inference.provider.formula_notation import normalize_formula_notation
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +111,7 @@ class ScientificHandler:
         )
         elucidator = SecsElucidator(self.inference, self.candidates, optimizer,
                                   initial_population_size=self.config.initial_population_size)
-        result = elucidator.elucidate(prepared.values, selection["formula"])
+        result = elucidator.elucidate(prepared.values, normalize_formula_notation(selection["formula"]))
         # This provider's canonical JSON excludes floating-point numbers. Scientific
         # decimal values travel as text; counts and discrete settings stay integers.
         if result.optimization is None:
