@@ -1,10 +1,16 @@
 """Recognizable multi-input Jobs at the scientific-worker boundary."""
 
+from dataclasses import asdict
+import json
+from time import monotonic
+
 import numpy as np
 from unittest.mock import Mock
 
 from secs.elucidation import StaticCandidateSource
 from support_evidence import qualification_evidence
+from secs_inference.provider.interpreter import InterpretationSession
+from secs_inference.provider.job_input import JobSpecification
 
 from input.helpers import FIXTURES, WorkerCase
 
@@ -15,6 +21,45 @@ class ScientificJobScenarios(WorkerCase):
         self.inference.embed_spectrum.return_value = np.array([1., 0.], dtype=np.float32)
         self.candidates = Mock(wraps=StaticCandidateSource([]))
         self.worker.candidates = self.candidates
+
+    def test_formatted_job_formula_reaches_retrieval_with_its_original_evidence(self):
+        self.upload('proton.jdx')
+        spectrum = self.one(self.discover())
+        for formula, quote in (
+            ('C22H36O7', 'C₂₂H₃₆O₇'),
+            (' C₂₂ H₃₆ O₇ ', 'C 22 H 36 O 7'),
+            ('C\u00a022 H\u200936 O7', 'C₂₂H₃₆O₇'),
+        ):
+            with self.subTest(formula=formula, quote=quote):
+                self.inference.reset_mock()
+                self.candidates.reset_mock()
+                choice = {'representation_id': spectrum['id'], 'formula': formula,
+                          'formula_evidence': {'kind': 'job_specification', 'quote': quote},
+                          'processing': 'as_stored', 'explanation': 'Use the supplied proton spectrum and formula.'}
+                chat = Mock()
+                chat.complete.return_value = {'tool_calls': [{'id': 'selection', 'type': 'function',
+                    'function': {'name': 'select_representation', 'arguments': json.dumps(choice)}}]}
+                session = InterpretationSession(chat,
+                    JobSpecification('job:sample', f'Molecular formula: {quote}.'), [], Mock(),
+                    deadline=monotonic() + 10, max_turns=1)
+                decision = asdict(session.select())
+                self.assertEqual(decision, choice)
+                response = self.request('analyse', selection=decision)
+                self.assertEqual(response['outcome'], 'no_starting_candidates')
+                self.inference.embed_spectrum.assert_called_once()
+                self.assertEqual(self.candidates.propose.call_args.args[1], 'C22H36O7')
+
+    def test_worker_accepts_formatted_formula_from_discovered_structure_evidence(self):
+        self.upload('proton.jdx', 'upload:spectrum')
+        self.upload('ethanol.mol', 'upload:structure')
+        spectrum = self.one(self.discover('upload:spectrum'))
+        structure = self.one(self.discover('upload:structure'), 'structure', nucleus=None)
+        response = self.request('analyse', selection={
+            'representation_id': spectrum['id'], 'formula': ' C₂ H 6 O ',
+            'formula_evidence': {'kind': 'representations', 'representation_ids': [structure['id']]},
+            'processing': 'as_stored', 'explanation': 'Use the attached structure formula.'})
+        self.assertEqual(response['outcome'], 'no_starting_candidates')
+        self.assertEqual(self.candidates.propose.call_args.args[1], 'C2H6O')
 
     @qualification_evidence("input.job-formula.execution.v1")
     def test_explicit_job_formula_survives_unrelated_structure_evidence(self):

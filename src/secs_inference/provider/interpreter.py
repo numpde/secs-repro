@@ -16,6 +16,7 @@ from secs_inference.provider.input_operations import (
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.response_json import response_object
 from secs_inference.provider.source_access import InputReadError
+from secs_inference.provider.formula_notation import is_formula_space, normalize_formula_notation
 
 
 _INSTRUCTIONS = """Choose the inputs for the supplied analysis kind from the
@@ -102,8 +103,8 @@ class InterpretationSession:
                 evidence = action.formula_evidence
                 if evidence.get("kind") == "job_specification":
                     quote = evidence["quote"]
-                    if quote != action.formula:
-                        reason = "Job-specification formula evidence must quote the selected formula exactly"
+                    if normalize_formula_notation(quote) != normalize_formula_notation(action.formula):
+                        reason = "The Job-specification quote and selected formula must express the same formula"
                         self.rejections.append({"stage": "tool_call", "reason": reason})
                         self._feedback(call["id"], reason + ". Correct this call.")
                         continue
@@ -160,7 +161,7 @@ def _decode_call(call: dict):
             schema = operation.parameters["properties"][key]
             if type(value) is not str:
                 raise _InvalidArguments(f"The {key} field must be text")
-            if not value.isprintable():
+            if not (normalize_formula_notation(value) if key == "formula" else value).isprintable():
                 raise _InvalidArguments(f"The {key} field contains control characters")
             maximum = schema.get("maxLength", 65536)
             if len(value) > maximum:
@@ -181,7 +182,7 @@ def _decode_call(call: dict):
                 and evidence.get("kind") == "job_specification"
                 and type(evidence.get("quote")) is str
                 and 0 < len(evidence["quote"]) <= 512
-                and evidence["quote"].isprintable()):
+                and normalize_formula_notation(evidence["quote"]).isprintable()):
             pass
         elif (type(evidence) is not dict or set(evidence) != {"kind", "representation_ids"}
               or evidence.get("kind") != "representations"
@@ -199,11 +200,20 @@ def _decode_call(call: dict):
 
 
 def _contains_formula_quote(specification: str, quote: str) -> bool:
-    """Require the exact quote as a formula-sized token, not inside a larger formula."""
+    """Verify literal citation without matching inside a larger contiguous token.
+
+    The interpreter owns choosing the intended formula from prose. Looking past
+    spaces here would guess whether words such as "In" are prose or elements.
+    """
     offset = 0
     while (index := specification.find(quote, offset)) >= 0:
-        before = specification[index - 1] if index else None
+        start = index
         end = index + len(quote)
+        while start < end and is_formula_space(specification[start]):
+            start += 1
+        while end > start and is_formula_space(specification[end - 1]):
+            end -= 1
+        before = specification[start - 1] if start else None
         after = specification[end] if end < len(specification) else None
         if (before is None or not before.isalnum()) and (after is None or not after.isalnum()):
             return True

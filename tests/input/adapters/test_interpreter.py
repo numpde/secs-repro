@@ -112,7 +112,7 @@ class InterpreterContextTests(unittest.TestCase):
     @qualification_evidence("input.job-formula.exact-quote.v1")
     def test_job_formula_quote_must_match_both_selection_and_specification(self):
         cases = (
-            ({'formula': 'C22H36O7', 'quote': 'C2H6O'}, 'quote the selected formula exactly'),
+            ({'formula': 'C22H36O7', 'quote': 'C2H6O'}, 'same formula'),
             ({'formula': 'C2H6O', 'quote': 'C2H6O'}, 'does not occur in the Job specification'),
         )
         for values, evidence in cases:
@@ -127,6 +127,50 @@ class InterpreterContextTests(unittest.TestCase):
                     tool('report_input_problem', {'explanation': 'Formula evidence is unavailable.'}, 'call-2')])
                 self.assertIsInstance(session.select(), CannotAnalyse)
                 self.assertIn(evidence, self.requests[1][0][-1]['content'])
+
+    def test_formula_typography_can_differ_while_the_original_quote_survives(self):
+        for formula, quote in (
+            ('C22H36O7', 'C₂₂H₃₆O₇'),
+            ('C₂₂H₃₆O₇', 'C22H36O7'),
+            ('C 22 H 36 O 7', ' C₂₂ H₃₆ O₇ '),
+            ('C22H36O7', 'C\u00a022\u2009H\u202f36 O7'),
+        ):
+            with self.subTest(formula=formula, quote=quote):
+                self.specification = JobSpecification('job:sample', f'Molecular formula: {quote}.')
+                choice = {'representation_id': 'opaque-choice', 'formula': formula,
+                          'formula_evidence': {'kind': 'job_specification', 'quote': quote},
+                          'processing': 'as_stored', 'explanation': 'Use the supplied formula.'}
+                session = self.session([tool('select_representation', choice),
+                    tool('report_input_problem', {'explanation': 'Selection was rejected.'}, 'call-2')])
+                self.assertEqual(asdict(session.select()), choice)
+
+    def test_notation_flexibility_does_not_allow_fabricated_or_contiguous_fragment_quotes(self):
+        for specification, quote in (
+            ('Use C₂₂H₃₆O₇.', 'C22H36O7'),
+            ('Use C₂₂H₃₆O₇₀.', 'C₂₂H₃₆O₇'),
+        ):
+            with self.subTest(specification=specification, quote=quote):
+                self.requests.clear()
+                self.specification = JobSpecification('job:sample', specification)
+                choice = {'representation_id': 'opaque-choice', 'formula': quote,
+                          'formula_evidence': {'kind': 'job_specification', 'quote': quote},
+                          'processing': 'as_stored', 'explanation': 'Explicit choice.'}
+                session = self.session([tool('select_representation', choice),
+                    tool('report_input_problem', {'explanation': 'Formula evidence is unavailable.'}, 'call-2')])
+                self.assertIsInstance(session.select(), CannotAnalyse)
+                self.assertIn('Job specification', self.requests[1][0][-1]['content'])
+
+    def test_formula_citation_does_not_reinterpret_adjacent_prose_as_elements(self):
+        for specification in ('A C₂₂H₃₆O₇ sample.', 'In C₂₂H₃₆O₇, oxygen is present.',
+                              'C₂₂H₃₆O₇ I think.', 'C₂₂H₃₆O₇ NMR spectrum.'):
+            with self.subTest(specification=specification):
+                self.specification = JobSpecification('job:sample', specification)
+                choice = {'representation_id': 'opaque-choice', 'formula': 'C22H36O7',
+                          'formula_evidence': {'kind': 'job_specification', 'quote': 'C₂₂H₃₆O₇'},
+                          'processing': 'as_stored', 'explanation': 'Use the supplied formula.'}
+                session = self.session([tool('select_representation', choice),
+                    tool('report_input_problem', {'explanation': 'Selection was rejected.'}, 'call-2')])
+                self.assertEqual(asdict(session.select()), choice)
 
     def test_job_formula_quote_cannot_be_a_prefix_of_a_different_formula(self):
         self.specification = JobSpecification('job:sample', 'Use C22H36O70.')
