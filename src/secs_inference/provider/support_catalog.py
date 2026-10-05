@@ -31,8 +31,8 @@ SUPPORT_CLAIMS = (
         SupportCategory.SUBMISSION,
         True,
         "Multiple uploads",
-        "A Job may contain multiple uploads",
-        ("In the job input, name the intended upload or experiment path and formula source.",),
+        "A job may contain multiple uploads",
+        ("In the job instructions, name the intended upload or experiment path and formula source.",),
         (
             "input.multiple-uploads.selection.v1",
         ),
@@ -41,8 +41,10 @@ SUPPORT_CLAIMS = (
         SupportCategory.SUBMISSION,
         True,
         "Vendor experiment folders",
-        "Keep Bruker and Varian files in their experiment folders",
-        (),
+        "Keep each Bruker or Varian experiment in one upload",
+        (
+            "For a folder, use one ZIP with relative paths intact; separate uploads are not joined.",
+        ),
         (
             "input.bruker.processed.companion-relationships.v1",
             "input.vendor-fids.companion-relationships.v1",
@@ -133,7 +135,7 @@ SUPPORT_CLAIMS = (
         True,
         "Processed JEOL JDF",
         "Processed JEOL JDF with a ppm axis",
-        ("Exercised with synthetic data only; no instrument dataset is claimed.",),
+        ("Tested only with synthetic files, not instrument output.",),
         (
             "input.jeol.processed.inference-input.v1",
             _FIXTURE_PROVENANCE,
@@ -143,9 +145,9 @@ SUPPORT_CLAIMS = (
         SupportCategory.SPECTRUM,
         True,
         "NMRium v21",
-        "NMRium v21 states with dense proton data or attached JCAMP-DX resources",
+        "NMRium v21 states with dense proton data or a referenced JCAMP-DX resource",
         (
-            "Keep embedded resources with the state; stored spectrum shifts are applied once.",
+            "Keep the referenced resource at its expected relative path in the same ZIP; stored spectrum shifts are applied once.",
         ),
         (
             "input.nmrium.v21.inference-input.v1",
@@ -155,8 +157,8 @@ SUPPORT_CLAIMS = (
     SupportClaim(
         SupportCategory.FORMULA,
         True,
-        "Formula in the job input",
-        "A formula written verbatim in the job input",
+        "Formula in the job instructions",
+        "A formula written verbatim in the job instructions",
         (),
         (
             "input.job-formula.execution.v1",
