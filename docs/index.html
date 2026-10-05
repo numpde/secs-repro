@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Using the repackaged SECS methods to propose molecular structures from a formula and a processed proton NMR spectrum.">
+  <meta name="description" content="Using the repackaged SECS methods to propose molecular structures from a formula and supported one-dimensional proton NMR data.">
   <title>SECS, repackaged — user guide</title>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.6; }
@@ -20,8 +20,8 @@
 <body>
 <main>
   <h1>SECS, repackaged</h1>
-  <p>Propose molecular structures from a molecular formula and one processed
-    one-dimensional proton (<sup>1</sup>H) NMR spectrum.</p>
+  <p>Propose molecular structures from a molecular formula and
+    supported one-dimensional proton (<sup>1</sup>H) NMR data.</p>
   <p>This service repackages <a href="https://github.com/lamalab-org/secs">SECS</a>,
     the work of Adrian Mirza, Luc Patiny, Kevin Maik Jablonka, and upstream contributors.
     We did not develop the scientific methods or train the supplied model.
@@ -161,24 +161,26 @@ Molecular formula: C21H22N2O2.</pre>
       Exact package versions are recorded in the
       <a href="https://github.com/numpde/secs-repro/tree/main/requirements">dependency locks</a>.</dd>
     <dt>NMR API</dt>
-    <dd>The NMR API project supplies the provider HTTP contract and shared
-      failure-client code.
-      Their origins are recorded in the
+    <dd>The NMR API integration uses a pinned provider HTTP contract and
+      shared failure-client code. The
       <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/nmr_api_v1/manifest.json">contract manifest</a>
-      and <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/provider_client.json">client provenance</a>.</dd>
+      and <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/provider_client.json">client provenance</a>
+      record the imported artifacts' source revisions, source paths and content identifiers.</dd>
   </dl>
   <h3>Reference software and test fixtures</h3>
   <dl>
     <dt>Cheminfo elucidation frontend</dt>
-    <dd>We use <a href="https://elucidation.cheminfo.org/">elucidation.cheminfo.org</a>
-      (<a href="https://github.com/cheminfo/elucidation.cheminfo.org">source</a>)
-      to generate spectrum-conversion reference outputs, and import its published
-      challenge spectra and JCAMP-DX examples. The pinned frontend revision is recorded in
+    <dd>We use a
+      <a href="https://github.com/numpde/fork-of-elucidation.cheminfo.org/tree/5ab78f61e9fb679f3f0b9823be5217ae250e213f">pinned fork revision</a>
+      of the
+      <a href="https://github.com/cheminfo/elucidation.cheminfo.org">elucidation.cheminfo.org frontend source</a>
+      to generate spectrum-conversion reference outputs and import challenge
+      spectra and JCAMP-DX test examples from that fork. The repository, revision and runtime image are recorded in
       <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/frontend_reference.json">the reference lock</a>.
       Fixture origins are described in the
       <a href="https://github.com/numpde/secs-repro/blob/main/tests/fixtures/challenges/README.md">challenge notes</a>
       and <a href="https://github.com/numpde/secs-repro/blob/main/tests/fixtures/jcamp/README.md">JCAMP-DX notes</a>.
-      The GUI is a separate application, not this provider's interface;
+      The deployed <a href="https://elucidation.cheminfo.org/">GUI</a> is a separate application, not this provider's interface;
       its supported inputs and results may differ.</dd>
     <dt>Cheminfo Bruker test collection</dt>
     <dd><a href="https://github.com/cheminfo/bruker-data-test">bruker-data-test</a>
