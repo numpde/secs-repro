@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Using the repackaged SECS methods to propose molecular structures from a formula and supported one-dimensional proton NMR data.">
+  <meta name="description" content="Propose molecular structures from a formula and one-dimensional proton NMR data in the input forms listed on this page.">
   <title>SECS, repackaged — user guide</title>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.6; }
@@ -21,12 +21,13 @@
 <main>
   <h1>SECS, repackaged</h1>
   <p>Propose molecular structures from a molecular formula and
-    supported one-dimensional proton (<sup>1</sup>H) NMR data.</p>
+    one-dimensional proton (<sup>1</sup>H) NMR data in the input forms listed below.</p>
   <p>This service repackages <a href="https://github.com/lamalab-org/secs">SECS</a>,
     the work of Adrian Mirza, Luc Patiny, Kevin Maik Jablonka, and upstream contributors.
     We did not develop the scientific methods or train the supplied model.
-    Our work connects them to the NMR API, handles uploaded spectra, and supports
-    reproducible deployment, with adaptations maintained in pinned forks.</p>
+    Our code connects them to the NMR API: it identifies a spectrum and formula
+    in job attachments, prepares the model input, runs retrieval and Graph GA,
+    and packages the provider and model worker as separate containers.</p>
 
 
   <h2>Submit a job</h2>
@@ -34,25 +35,26 @@
     supplied by its operator; ask the operator for the client address and access
     if you do not have them. This page is documentation, not an upload form.</p>
   <p>Choose the SECS provider and the analysis kind
-    <code>mol_from_1h_spectrum_formula</code>. Attach a supported spectrum and
+    <code>mol_from_1h_spectrum_formula</code>. Attach one of the spectrum datasets
+    listed under <a href="#input-forms">Input forms and limits</a> and
     put its molecular formula in the job instructions. If SECS is not listed,
-    ask the deployment operator whether it is available.</p>
+    ask whether that deployment runs this provider.</p>
   <p>For every job, a language-model interpreter receives the job instructions
     and attachment descriptions to choose one discovered spectrum representation,
     its processing, and the formula evidence. A formula taken from the job
     instructions must be quoted exactly; a formula taken from an attached
     structure must cite that discovered representation. The interpreter can
-    inspect recognized data and relationships across every attachment linked to
+    inspect the listed data forms and their relationships across every attachment linked to
     the job.
     These are sent to the deployment's configured language-model service;
     check with the operator before submitting confidential information.</p>
 
-  <h2>Supported uploads</h2>
+  <h2 id="input-forms">Input forms and limits</h2>
 <!-- support-catalog:start -->
   <h3>Preparing a submission</h3>
   <dl>
     <dt>Multiple uploads</dt>
-    <dd>Multiple uploads are accepted. In the job input, name the intended upload or experiment path and formula source.</dd>
+    <dd>A Job may contain multiple uploads. In the job input, name the intended upload or experiment path and formula source.</dd>
     <dt>Vendor experiment folders</dt>
     <dd>Keep Bruker and Varian files in their experiment folders.</dd>
     <dt>Dense spectrum required</dt>
@@ -61,31 +63,31 @@
   <h3>Spectrum data</h3>
   <dl>
     <dt>Processed JCAMP-DX</dt>
-    <dd>Supported input: JCAMP-DX XYDATA or NTUPLES. Supported cases include LINK blocks and AFFN, FIX, SQZ, DIF, DIFDUP, and PAC numeric encodings.</dd>
+    <dd>JCAMP-DX XYDATA or NTUPLES. Reads LINK blocks and AFFN, FIX, SQZ, DIF, DIFDUP, and PAC numeric encodings.</dd>
     <dt>Processed Bruker</dt>
-    <dd>Supported input: Bruker 1r with its procs file. Keep 1r and procs together in the same pdata directory. The processed pair does not require acqus; include title when it is available.</dd>
+    <dd>Bruker 1r with its procs file. Keep 1r and procs together in the same pdata directory. The processed pair does not require acqus; include title when present.</dd>
     <dt>JCAMP-DX FID</dt>
-    <dd>Supported input: complex JCAMP-DX FIDs with acquisition parameters.</dd>
+    <dd>Complex JCAMP-DX FIDs with acquisition parameters.</dd>
     <dt>Bruker FID</dt>
-    <dd>Supported input: Bruker fid with acqus and zero group delay. Keep fid and acqus together in one experiment directory. Other group-delay profiles are reported as unsupported.</dd>
+    <dd>Bruker fid with acqus and zero group delay. Keep fid and acqus together in one experiment directory. Rejects other group-delay profiles.</dd>
     <dt>Varian FID</dt>
-    <dd>Supported input: Varian fid with procpar where reffrq=sfrq and rfl-rfp=sw/2. Keep fid and procpar together in one experiment directory. Other reference profiles are reported as unsupported.</dd>
+    <dd>Varian fid with procpar where reffrq=sfrq and rfl-rfp=sw/2. Keep fid and procpar together in one experiment directory. Rejects other reference profiles.</dd>
     <dt>Processed JEOL JDF</dt>
-    <dd>Supported input: processed JEOL JDF with a ppm axis (synthetic qualification only).</dd>
+    <dd>Processed JEOL JDF with a ppm axis. Exercised with synthetic data only; no instrument dataset is claimed.</dd>
     <dt>NMRium v21</dt>
-    <dd>Supported input: NMRium v21 states with dense proton data or attached JCAMP-DX resources. Keep embedded resources with the state; stored spectrum shifts are applied once.</dd>
+    <dd>NMRium v21 states with dense proton data or attached JCAMP-DX resources. Keep embedded resources with the state; stored spectrum shifts are applied once.</dd>
   </dl>
   <h3>Formula evidence</h3>
   <dl>
     <dt>Formula in the job input</dt>
-    <dd>Supported input: a formula written verbatim in the job input.</dd>
+    <dd>A formula written verbatim in the job input.</dd>
     <dt>Formula from a structure</dt>
-    <dd>Supported input: a formula calculated from a selected MOL, SDF or SMILES attachment.</dd>
+    <dd>A formula calculated from a selected MOL, SDF or SMILES attachment.</dd>
   </dl>
   <h3>Supplied annotations</h3>
   <dl>
     <dt>NMReDATA relationships</dt>
-    <dd>Supported input: NMReDATA links between a structure, its JCAMP-DX resource and proton assignments. The linked spectrum resource must be attached and readable. Assignments are preserved as supplied context; they do not change the spectrum sent to SECS.</dd>
+    <dd>NMReDATA links between a structure, its JCAMP-DX resource and proton assignments. The linked spectrum resource must be attached and readable. Assignments are preserved as supplied context; they do not change the spectrum sent to SECS.</dd>
   </dl>
 <!-- support-catalog:end -->
   <h2>Example: a Bruker experiment</h2>
@@ -101,8 +103,8 @@ Molecular formula: C21H22N2O2.</pre>
     representations of molecular structures), scores, the selected input and
     formula, selection explanations, and search settings.</p>
   <p>Higher scores rank better within a search; they are not probabilities that a structure is
-    correct. These are candidates for chemical review, not validated structure
-    assignments. The example above demonstrates input preparation, not a
+    correct. A chemist must assess the candidates; the service does not validate
+    a structure assignment. The example above demonstrates input preparation, not a
     guarantee of recovering strychnine.</p>
   <p>If retrieval finds no starting molecules, no elucidation is produced.
     The attempt fails with <code>no_starting_candidates</code>:
@@ -121,7 +123,7 @@ Molecular formula: C21H22N2O2.</pre>
   <p>A successful attempt produced ranked candidate proposals. It does not
     establish a validated structure assignment. Earlier attempts may show
     <code>no_starting_candidates</code> as successful; those records are not rewritten.</p>
-  <p>If the interpreter cannot select usable input, the attempt fails with
+  <p>If the interpreter cannot select a spectrum and formula that pass the input checks, the attempt fails with
     <code>cannot_analyse</code>: no analysis was produced. Its failure message
     includes the interpreter's explanation. That explanation is the model's
     account, not proof that a reader ran or that your spectrum is invalid.
@@ -132,15 +134,16 @@ Molecular formula: C21H22N2O2.</pre>
     or an interpretation limit. Failure status alone does not establish whether computation finished.
     Read its failure message and share the job and attempt identifiers with the
     deployment operator if you need help. Do not assume that it means the spectrum
-    is invalid, or that selection history will be available.</p>
+    is invalid, or that selection history was retained.</p>
 
   <h2>Upstream sources</h2>
   <h3>Scientific software and model artifacts</h3>
   <dl>
     <dt>SECS</dt>
     <dd><a href="https://github.com/lamalab-org/secs">The original SECS project</a>
-      supplies the scientific methods and model architecture. Our adaptations are
-      maintained in the <a href="https://github.com/numpde/fork-of-secs/tree/0414b5f9d65e61a6ba00aa046e24b8e48ce230b1">pinned SECS fork revision</a>.</dd>
+      supplies the scientific methods and model architecture. Changes made for this service live in the
+      <a href="https://github.com/numpde/fork-of-secs">adapted SECS source</a>;
+      this repository selects its revision through the <code>secs</code> Git submodule.</dd>
     <dt>Published checkpoint and candidate molecules</dt>
     <dd>The trained checkpoint and filtered PubChem molecule table come from the
       <a href="https://zenodo.org/records/14638782">published SECS archive</a>.
@@ -161,27 +164,25 @@ Molecular formula: C21H22N2O2.</pre>
       Exact package versions are recorded in the
       <a href="https://github.com/numpde/secs-repro/tree/main/requirements">dependency locks</a>.</dd>
     <dt>NMR API</dt>
-    <dd>The NMR API integration uses a pinned provider HTTP contract and
-      shared failure-client code. The
+    <dd>The NMR API integration uses the provider HTTP contract identified by the
       <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/nmr_api_v1/manifest.json">contract manifest</a>
-      and <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/provider_client.json">client provenance</a>
-      record the imported artifacts' source revisions, source paths and content identifiers.</dd>
+      and the shared failure-client artifacts identified by
+      <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/provider_client.json">client provenance</a>.
+      Those files record source revisions, source paths and content identifiers.</dd>
   </dl>
   <h3>Reference software and test fixtures</h3>
   <dl>
     <dt>Cheminfo elucidation frontend</dt>
-    <dd>We use a
-      <a href="https://github.com/numpde/fork-of-elucidation.cheminfo.org/tree/5ab78f61e9fb679f3f0b9823be5217ae250e213f">pinned fork revision</a>
-      of the
+    <dd>We use the frontend fork and revision named in
+      <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/frontend_reference.json">the reference lock</a>, based on the
       <a href="https://github.com/cheminfo/elucidation.cheminfo.org">elucidation.cheminfo.org frontend source</a>
       to generate spectrum-conversion reference outputs and import challenge
-      spectra and JCAMP-DX test examples from that fork. The repository, revision and runtime image are recorded in
-      <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/frontend_reference.json">the reference lock</a>.
+      spectra and JCAMP-DX test examples. The lock also names the container runtime image.
       Fixture origins are described in the
       <a href="https://github.com/numpde/secs-repro/blob/main/tests/fixtures/challenges/README.md">challenge notes</a>
       and <a href="https://github.com/numpde/secs-repro/blob/main/tests/fixtures/jcamp/README.md">JCAMP-DX notes</a>.
       The deployed <a href="https://elucidation.cheminfo.org/">GUI</a> is a separate application, not this provider's interface;
-      its supported inputs and results may differ.</dd>
+      it may accept different file forms or return different results.</dd>
     <dt>Cheminfo Bruker test collection</dt>
     <dd><a href="https://github.com/cheminfo/bruker-data-test">bruker-data-test</a>
       supplies the imported Bruker archives and coffee experiments used in our tests.
@@ -195,8 +196,8 @@ Molecular formula: C21H22N2O2.</pre>
   <p>We also generate synthetic input fixtures locally. Their authorship,
     licenses and reference-output derivations are recorded in the
     <a href="https://github.com/numpde/secs-repro/blob/main/tests/fixtures/input/provenance.json">input-fixture provenance</a>.
-    The supported-upload list above describes what the service accepts;
-    inclusion in a test collection does not establish support for every example.</p>
+    The <a href="#input-forms">Input forms and limits</a> section states what this provider reads and executes;
+    a file's presence in a test collection does not mean the provider can analyse it.</p>
 
   <h2>Credit the original work</h2>
   <p>Adrian Mirza, Luc Patiny, and Kevin Maik Jablonka (2026),
@@ -213,7 +214,7 @@ Molecular formula: C21H22N2O2.</pre>
     · <a href="https://github.com/numpde/secs-repro/blob/main/LICENSE">AGPLv3 license</a>
     · <a href="https://github.com/numpde/secs-repro/blob/main/open_source_licenses.txt">Third-party notice</a></p>
   <p>The AGPLv3 license and third-party notice are copied verbatim from the
-    <a href="https://github.com/numpde/fork-of-secs/tree/0414b5f9d65e61a6ba00aa046e24b8e48ce230b1">pinned SECS fork revision</a>.
+    <a href="https://github.com/numpde/fork-of-secs">adapted SECS source</a> selected by this repository's submodule.
     Its package metadata says MIT while its LICENSE contains AGPLv3; we preserve
     the LICENSE file unchanged rather than silently resolving that discrepancy.</p>
   <p>Dependencies and external
