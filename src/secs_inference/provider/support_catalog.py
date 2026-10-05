@@ -31,7 +31,7 @@ SUPPORT_CLAIMS = (
         SupportCategory.SUBMISSION,
         True,
         "Multiple uploads",
-        "Multiple uploads are accepted",
+        "A Job may contain multiple uploads",
         ("In the job input, name the intended upload or experiment path and formula source.",),
         (
             "input.multiple-uploads.selection.v1",
@@ -65,7 +65,7 @@ SUPPORT_CLAIMS = (
         "Processed JCAMP-DX",
         "JCAMP-DX XYDATA or NTUPLES",
         (
-            "Supported cases include LINK blocks and AFFN, FIX, SQZ, DIF, DIFDUP, and PAC numeric encodings.",
+            "Reads LINK blocks and AFFN, FIX, SQZ, DIF, DIFDUP, and PAC numeric encodings.",
         ),
         (
             "input.jcamp.processed.inference-input.v1",
@@ -80,7 +80,7 @@ SUPPORT_CLAIMS = (
         "Bruker 1r with its procs file",
         (
             "Keep 1r and procs together in the same pdata directory.",
-            "The processed pair does not require acqus; include title when it is available.",
+            "The processed pair does not require acqus; include title when present.",
         ),
         (
             "input.bruker.processed.inference-input.v1",
@@ -91,7 +91,7 @@ SUPPORT_CLAIMS = (
         SupportCategory.SPECTRUM,
         True,
         "JCAMP-DX FID",
-        "complex JCAMP-DX FIDs with acquisition parameters",
+        "Complex JCAMP-DX FIDs with acquisition parameters",
         (),
         (
             "input.jcamp.fid.inference-input.v1",
@@ -105,7 +105,7 @@ SUPPORT_CLAIMS = (
         "Bruker fid with acqus and zero group delay",
         (
             "Keep fid and acqus together in one experiment directory.",
-            "Other group-delay profiles are reported as unsupported.",
+            "Rejects other group-delay profiles.",
         ),
         (
             "input.vendor-fids.inference-input.v1",
@@ -120,7 +120,7 @@ SUPPORT_CLAIMS = (
         "Varian fid with procpar where reffrq=sfrq and rfl-rfp=sw/2",
         (
             "Keep fid and procpar together in one experiment directory.",
-            "Other reference profiles are reported as unsupported.",
+            "Rejects other reference profiles.",
         ),
         (
             "input.vendor-fids.inference-input.v1",
@@ -132,8 +132,8 @@ SUPPORT_CLAIMS = (
         SupportCategory.SPECTRUM,
         True,
         "Processed JEOL JDF",
-        "processed JEOL JDF with a ppm axis (synthetic qualification only)",
-        (),
+        "Processed JEOL JDF with a ppm axis",
+        ("Exercised with synthetic data only; no instrument dataset is claimed.",),
         (
             "input.jeol.processed.inference-input.v1",
             _FIXTURE_PROVENANCE,
@@ -156,7 +156,7 @@ SUPPORT_CLAIMS = (
         SupportCategory.FORMULA,
         True,
         "Formula in the job input",
-        "a formula written verbatim in the job input",
+        "A formula written verbatim in the job input",
         (),
         (
             "input.job-formula.execution.v1",
@@ -167,7 +167,7 @@ SUPPORT_CLAIMS = (
         SupportCategory.FORMULA,
         True,
         "Formula from a structure",
-        "a formula calculated from a selected MOL, SDF or SMILES attachment",
+        "A formula calculated from a selected MOL, SDF or SMILES attachment",
         (),
         (
             "input.structure-formula.execution.v1",

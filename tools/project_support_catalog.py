@@ -37,8 +37,6 @@ def render_support_region(claims=SUPPORT_CLAIMS) -> str:
         lines.extend((f"  <h3>{escape(_CATEGORY_TITLES[category])}</h3>", "  <dl>"))
         for claim in selected:
             lead = claim.public_summary + "."
-            if category is not SupportCategory.SUBMISSION:
-                lead = "Supported input: " + lead
             detail = " ".join((lead, *claim.limits))
             lines.append(f"    <dt>{escape(claim.title)}</dt>")
             lines.append(f"    <dd>{escape(detail)}</dd>")
