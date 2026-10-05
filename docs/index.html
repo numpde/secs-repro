@@ -151,6 +151,13 @@ Molecular formula: C21H22N2O2.</pre>
       to the deployment operator when requesting help.</dd>
   </dl>
   <h3>Scientific interpretation</h3>
+  <p>These observations are derived from the
+    <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/secs_source.json">adapted SECS revision selected by this repository</a>
+    and this service's
+    <a href="https://github.com/numpde/secs-repro/blob/main/src/secs_inference/elucidation.py">SECS integration</a>.
+    They describe the checkout used here;
+    upstream and adapted SECS can evolve, so other revisions may implement
+    retrieval or scoring differently.</p>
   <ul>
     <li>Each score combines model-embedding similarity with penalties for formula
       deviation and radical, charge, or valence problems. It orders candidates
