@@ -28,14 +28,13 @@
     This repository deploys those methods as an NMR API provider: it selects one
     uploaded spectrum, obtains a formula from the job instructions or an uploaded
     structure, prepares the spectrum, retrieves candidate molecules, refines them
-    with a graph genetic algorithm, and returns ranked SMILES. The candidates are
-    proposals, not validated structure assignments.</p>
+    with a graph genetic algorithm, and returns ranked SMILES for chemical review.</p>
 
 
   <h2>Submit a job</h2>
   <p>You need access to an NMR API deployment that offers SECS. Use the client
     supplied by its operator; ask the operator for the client address and access
-    if you do not have them. This page is documentation, not an upload form.</p>
+    if you do not have them.</p>
   <p>Choose the SECS provider and the analysis kind
     <code>mol_from_1h_spectrum_formula</code>. Attach one of the spectrum datasets
     listed under <a href="#input-forms">Input forms and limits</a>. Supply the
@@ -60,7 +59,9 @@
     <li>Processed spectra are decoded as stored; FIDs use the provider's automatic
       processing path. The selected spectrum is then resampled and normalized on
       the checkpoint's fixed grid, as defined by the
-      <a href="https://github.com/numpde/secs-repro/blob/main/src/secs_inference/spectra/secs.py">spectrum-preparation code</a>.</li>
+      <a href="https://github.com/numpde/secs-repro/blob/main/src/secs_inference/spectra/secs.py">spectrum-preparation code</a>.
+      The model input is limited to that grid, and normalization removes the
+      absolute intensity scale.</li>
     <li>SECS embeds the spectrum, searches the molecular index for nearby entries,
       keeps entries admitted by its
       <a href="https://github.com/numpde/fork-of-secs/blob/main/src/secs/elucidation/candidates.py">formula-neighborhood rule</a>,
@@ -133,43 +134,47 @@ Molecular formula: C21H22N2O2.</pre>
     <dt>Analysed</dt>
     <dd>The attempt produced ranked candidate SMILES, the score for each candidate,
       the selected spectrum and formula, the interpreter's stated reasons for
-      those choices, spectrum-preparation facts, and search settings. Each score
-      combines model-embedding similarity with penalties for formula deviation
-      and radical, charge, or valence problems. Higher scores rank better within
-      that run; they are not calibrated probabilities or identification
-      confidence.</dd>
+      those choices, spectrum-preparation facts, and search settings.</dd>
     <dt><code>no_starting_candidates</code></dt>
-    <dd>The index search supplied no molecules for genetic refinement, so the
-      refinement evaluated no structures. This does not establish that the
-      formula is invalid, that no matching structure exists, or that the whole
-      index was searched exhaustively.</dd>
+    <dd>The candidate source supplied no molecules for genetic refinement, so the
+      refinement evaluated no structures. With the indexed source, this means the
+      returned spectral neighborhood contained no entries admitted by SECS's
+      formula-neighborhood rule; it is not an exhaustive formula search.</dd>
     <dt><code>cannot_analyse</code></dt>
     <dd>The interpreter did not select a spectrum and formula that passed the
       provider's checks, so scientific analysis did not start. The failure message
-      contains the interpreter's explanation, which is a model-generated account,
-      not proof that the data are invalid.</dd>
+      contains the interpreter's model-generated explanation. The operator's full
+      report also records the provider's inspection and rejection reasons.</dd>
     <dt>Other failure codes</dt>
     <dd>The failure message describes an operational interruption, such as a
       service outage or interpretation limit. Give the job and attempt identifiers
       to the deployment operator when requesting help.</dd>
   </dl>
-  <p>The supplied molecular formula constrains ranking; it does not guarantee the
-    formula of every returned candidate. Retrieval's formula-neighborhood rule can
-    admit nearby formulas, and formula deviation lowers the genetic-search score
-    rather than rejecting a molecule. Verify every candidate's composition.
-    The result also does not establish a stereochemical assignment. A chemist must
-    assess the proposals; the service does not validate a structure assignment.
-    The example above demonstrates input preparation, not a guarantee of recovering
-    strychnine.</p>
+  <h3>Scientific interpretation</h3>
+  <ul>
+    <li>Each score combines model-embedding similarity with penalties for formula
+      deviation and radical, charge, or valence problems. It orders candidates
+      within that run; it is not a calibrated probability or identification
+      confidence.</li>
+    <li>Retrieval accepts molecules whose stored formulas fall within SECS's
+      generated neighborhood of the supplied formula. During genetic refinement,
+      formula deviation lowers a candidate's score instead of removing it.
+      Returned candidates can therefore have nearby compositions; compare each
+      candidate's formula with the supplied formula.</li>
+    <li>The approximate index search considers a bounded spectral neighborhood
+      before applying the formula rule. Candidate coverage therefore depends on
+      the configured index and search settings.</li>
+    <li>The workflow does not perform a separate stereochemical assignment.</li>
+  </ul>
   <h3>Retrieval details</h3>
   <p>The report's <code>analysis.retrieval</code> counts locate the stopping point:
     <code>neighbours_returned</code> is the number of molecules returned by the
     approximate index search; <code>formula_matches</code> is the number of those
-    neighbours admitted by SECS's formula-neighborhood rule, not the number with
-    the exact supplied formula; and <code>starting_candidates</code> is the number
-    retained after the population limit. The counts say nothing about suitable
-    molecules outside the returned neighborhood. The configured retrieval limit
-    is a maximum, not the observed number returned.</p>
+    neighbours admitted by SECS's generated formula neighborhood, which contains
+    the supplied formula and nearby compositions; and
+    <code>starting_candidates</code> is the number retained after the population
+    limit. The counts cover only the neighborhood returned by the approximate
+    search. The configured retrieval limit is its maximum size.</p>
   <p>The deployment operator retains the full report under the attempt identifier.
     Historical records may label <code>no_starting_candidates</code> or
     <code>cannot_analyse</code> as successful; those records are not rewritten,
