@@ -1,4 +1,4 @@
 [submodule "secs"]
 	path = secs
-	url = git@github.com:numpde/fork-of-secs.git
+	url = https://github.com/numpde/fork-of-secs
 	shallow = true

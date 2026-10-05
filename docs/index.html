@@ -25,9 +25,11 @@
   <p>This service repackages <a href="https://github.com/lamalab-org/secs">SECS</a>,
     the work of Adrian Mirza, Luc Patiny, Kevin Maik Jablonka, and upstream contributors.
     We did not develop the scientific methods or train the supplied model.
-    Our code connects them to the NMR API: it identifies a spectrum and formula
-    in job attachments, prepares the model input, runs retrieval and Graph GA,
-    and packages the provider and model worker as separate containers.</p>
+    This repository deploys those methods as an NMR API provider: it selects one
+    uploaded spectrum, obtains a formula from the job instructions or an uploaded
+    structure, prepares the spectrum, retrieves candidate molecules, refines them
+    with a graph genetic algorithm, and returns ranked SMILES. The candidates are
+    proposals, not validated structure assignments.</p>
 
 
   <h2>Submit a job</h2>
@@ -36,27 +38,49 @@
     if you do not have them. This page is documentation, not an upload form.</p>
   <p>Choose the SECS provider and the analysis kind
     <code>mol_from_1h_spectrum_formula</code>. Attach one of the spectrum datasets
-    listed under <a href="#input-forms">Input forms and limits</a> and
-    put its molecular formula in the job instructions. If SECS is not listed,
-    ask whether that deployment runs this provider.</p>
-  <p>For every job, a language-model interpreter receives the job instructions
-    and attachment descriptions to choose one discovered spectrum representation,
-    its processing, and the formula evidence. A formula taken from the job
-    instructions must be quoted exactly; a formula taken from an attached
-    structure must cite that discovered representation. The interpreter can
-    inspect the listed data forms and their relationships across every attachment linked to
-    the job.
-    These are sent to the deployment's configured language-model service;
-    check with the operator before submitting confidential information.</p>
+    listed under <a href="#input-forms">Input forms and limits</a>. Supply the
+    molecular formula either verbatim in the job instructions or with an attached
+    MOL, SDF, or SMILES structure from which it can be calculated. Identify the
+    intended spectrum, experiment path, and formula source when the choice could
+    be ambiguous. If SECS is not listed, ask whether that deployment runs this
+    provider.</p>
+
+  <h2>How a job runs</h2>
+  <ol>
+    <li>A language-model interpreter receives the job instructions and each
+      upload's name and description. It may request inspection of particular
+      uploads or ZIP members; discovered representation metadata, relationships,
+      annotations, and reading issues are then returned to the same model
+      conversation. The provider does not put raw uploaded files or dense spectrum
+      arrays in that conversation.</li>
+    <li>The provider verifies the interpreter's choice of one spectrum,
+      its processing mode, and formula evidence. A formula from the instructions
+      must be an exact quote; a formula calculated from an uploaded structure must
+      cite that discovered structure.</li>
+    <li>Processed spectra are decoded as stored; FIDs use the provider's automatic
+      processing path. The selected spectrum is then resampled and normalized on
+      the checkpoint's fixed grid, as defined by the
+      <a href="https://github.com/numpde/secs-repro/blob/main/src/secs_inference/spectra/secs.py">spectrum-preparation code</a>.</li>
+    <li>SECS embeds the spectrum, searches the molecular index for nearby entries,
+      keeps entries admitted by its
+      <a href="https://github.com/numpde/fork-of-secs/blob/main/src/secs/elucidation/candidates.py">formula-neighborhood rule</a>,
+      and uses a graph genetic algorithm to generate and rank candidates with its
+      <a href="https://github.com/numpde/fork-of-secs/blob/main/src/secs/elucidation/components.py">spectrum, formula, and molecular-validity objective</a>.</li>
+  </ol>
+  <p>The language-model service therefore receives job text and scientific
+    metadata that may be confidential, even though it does not receive the raw
+    uploads or dense spectrum arrays through this provider. Ask the deployment
+    operator where that service runs and what retention policy applies before
+    submitting confidential information.</p>
 
   <h2 id="input-forms">Input forms and limits</h2>
 <!-- support-catalog:start -->
   <h3>Preparing a submission</h3>
   <dl>
     <dt>Multiple uploads</dt>
-    <dd>A Job may contain multiple uploads. In the job input, name the intended upload or experiment path and formula source.</dd>
+    <dd>A job may contain multiple uploads. In the job instructions, name the intended upload or experiment path and formula source.</dd>
     <dt>Vendor experiment folders</dt>
-    <dd>Keep Bruker and Varian files in their experiment folders.</dd>
+    <dd>Keep each Bruker or Varian experiment in one upload. For a folder, use one ZIP with relative paths intact; separate uploads are not joined.</dd>
     <dt>Dense spectrum required</dt>
     <dd>Provide dense 1D proton data. Peak tables may be reported but cannot replace a spectrum.</dd>
   </dl>
@@ -73,14 +97,14 @@
     <dt>Varian FID</dt>
     <dd>Varian fid with procpar where reffrq=sfrq and rfl-rfp=sw/2. Keep fid and procpar together in one experiment directory. Rejects other reference profiles.</dd>
     <dt>Processed JEOL JDF</dt>
-    <dd>Processed JEOL JDF with a ppm axis. Exercised with synthetic data only; no instrument dataset is claimed.</dd>
+    <dd>Processed JEOL JDF with a ppm axis. Tested only with synthetic files, not instrument output.</dd>
     <dt>NMRium v21</dt>
-    <dd>NMRium v21 states with dense proton data or attached JCAMP-DX resources. Keep embedded resources with the state; stored spectrum shifts are applied once.</dd>
+    <dd>NMRium v21 states with dense proton data or a referenced JCAMP-DX resource. Keep the referenced resource at its expected relative path in the same ZIP; stored spectrum shifts are applied once.</dd>
   </dl>
   <h3>Formula evidence</h3>
   <dl>
-    <dt>Formula in the job input</dt>
-    <dd>A formula written verbatim in the job input.</dd>
+    <dt>Formula in the job instructions</dt>
+    <dd>A formula written verbatim in the job instructions.</dd>
     <dt>Formula from a structure</dt>
     <dd>A formula calculated from a selected MOL, SDF or SMILES attachment.</dd>
   </dl>
@@ -90,60 +114,77 @@
     <dd>NMReDATA links between a structure, its JCAMP-DX resource and proton assignments. The linked spectrum resource must be attached and readable. Assignments are preserved as supplied context; they do not change the spectrum sent to SECS.</dd>
   </dl>
 <!-- support-catalog:end -->
+  <p>Upload size, per-attempt download, ZIP-member, expanded-data, and inspection-result
+    limits also apply. Rejection messages report the limit that was reached. The
+    implementation-owned rules are in
+    <a href="https://github.com/numpde/secs-repro/blob/main/src/secs_inference/provider/source_access.py">source access</a>
+    and the
+    <a href="https://github.com/numpde/secs-repro/blob/main/src/secs_inference/provider/analysis_run.py">analysis runner</a>;
+    selecting one ZIP member still requires downloading its upload.</p>
   <h2>Example: a Bruker experiment</h2>
-  <p>For the <a href="https://github.com/numpde/secs-repro/tree/main/tests/fixtures/bruker/F3697/1/pdata/1">strychnine example files</a>
+  <p>Browse the <a href="https://github.com/numpde/secs-repro/tree/main/tests/fixtures/bruker/F3697/1/pdata/1">strychnine example files</a>
     used by our Bruker regression test, ZIP
     <code>F3697/1/pdata/1/</code>, including <code>1r</code>, <code>procs</code>,
     and <code>title</code>. Attach that ZIP and write:</p>
   <pre>Analyse the sole processed 1H spectrum in the attached ZIP.
 Molecular formula: C21H22N2O2.</pre>
   <h2>What the result means</h2>
-  <p>SECS retrieves candidates from a molecular index and refines them with a
-    genetic algorithm. The result includes ranked candidate SMILES (text
-    representations of molecular structures), scores, the selected input and
-    formula, selection explanations, and search settings.</p>
-  <p>Higher scores rank better within a search; they are not probabilities that a structure is
-    correct. A chemist must assess the candidates; the service does not validate
-    a structure assignment. The example above demonstrates input preparation, not a
-    guarantee of recovering strychnine.</p>
-  <p>If retrieval finds no starting molecules, no elucidation is produced.
-    The attempt fails with <code>no_starting_candidates</code>:
-    Graph GA refinement did not run and evaluated no structures. The deployment
-    operator retains the full report under the attempt identifier; ask the
-    operator for it using that identifier.
-    This search limitation does not establish that the formula is invalid or
-    that no matching structure exists.</p>
-  <p>The report's <code>analysis.retrieval</code> counts show where retrieval
-    stopped: <code>neighbours_returned</code> counts the molecules returned by
-    the index search; <code>formula_matches</code> counts those that passed its
-    formula filter; <code>starting_candidates</code> counts those selected for
-    refinement after the population limit. These counts do not show whether
-    suitable molecules exist elsewhere in the index. The configured retrieval
-    limit is not the number of molecules actually returned.</p>
-  <p>A successful attempt produced ranked candidate proposals. It does not
-    establish a validated structure assignment. Earlier attempts may show
-    <code>no_starting_candidates</code> as successful; those records are not rewritten.</p>
-  <p>If the interpreter cannot select a spectrum and formula that pass the input checks, the attempt fails with
-    <code>cannot_analyse</code>: no analysis was produced. Its failure message
-    includes the interpreter's explanation. That explanation is the model's
-    account, not proof that a reader ran or that your spectrum is invalid.
-    The deployment operator retains the full report and recorded rejection
-    reasons under the attempt identifier. Older attempts may show this outcome
-    as a successful result; that did not mean structures were found.</p>
-  <p>A failed attempt reports an error or interruption, for example an outage
-    or an interpretation limit. Failure status alone does not establish whether computation finished.
-    Read its failure message and share the job and attempt identifiers with the
-    deployment operator if you need help. Do not assume that it means the spectrum
-    is invalid, or that selection history was retained.</p>
+  <dl>
+    <dt>Analysed</dt>
+    <dd>The attempt produced ranked candidate SMILES, the score for each candidate,
+      the selected spectrum and formula, the interpreter's stated reasons for
+      those choices, spectrum-preparation facts, and search settings. Each score
+      combines model-embedding similarity with penalties for formula deviation
+      and radical, charge, or valence problems. Higher scores rank better within
+      that run; they are not calibrated probabilities or identification
+      confidence.</dd>
+    <dt><code>no_starting_candidates</code></dt>
+    <dd>The index search supplied no molecules for genetic refinement, so the
+      refinement evaluated no structures. This does not establish that the
+      formula is invalid, that no matching structure exists, or that the whole
+      index was searched exhaustively.</dd>
+    <dt><code>cannot_analyse</code></dt>
+    <dd>The interpreter did not select a spectrum and formula that passed the
+      provider's checks, so scientific analysis did not start. The failure message
+      contains the interpreter's explanation, which is a model-generated account,
+      not proof that the data are invalid.</dd>
+    <dt>Other failure codes</dt>
+    <dd>The failure message describes an operational interruption, such as a
+      service outage or interpretation limit. Give the job and attempt identifiers
+      to the deployment operator when requesting help.</dd>
+  </dl>
+  <p>The supplied molecular formula constrains ranking; it does not guarantee the
+    formula of every returned candidate. Retrieval's formula-neighborhood rule can
+    admit nearby formulas, and formula deviation lowers the genetic-search score
+    rather than rejecting a molecule. Verify every candidate's composition.
+    The result also does not establish a stereochemical assignment. A chemist must
+    assess the proposals; the service does not validate a structure assignment.
+    The example above demonstrates input preparation, not a guarantee of recovering
+    strychnine.</p>
+  <h3>Retrieval details</h3>
+  <p>The report's <code>analysis.retrieval</code> counts locate the stopping point:
+    <code>neighbours_returned</code> is the number of molecules returned by the
+    approximate index search; <code>formula_matches</code> is the number of those
+    neighbours admitted by SECS's formula-neighborhood rule, not the number with
+    the exact supplied formula; and <code>starting_candidates</code> is the number
+    retained after the population limit. The counts say nothing about suitable
+    molecules outside the returned neighborhood. The configured retrieval limit
+    is a maximum, not the observed number returned.</p>
+  <p>The deployment operator retains the full report under the attempt identifier.
+    Historical records may label <code>no_starting_candidates</code> or
+    <code>cannot_analyse</code> as successful; those records are not rewritten,
+    and neither label means that structures were found.</p>
 
-  <h2>Upstream sources</h2>
+  <h2>Sources and provenance</h2>
   <h3>Scientific software and model artifacts</h3>
   <dl>
     <dt>SECS</dt>
     <dd><a href="https://github.com/lamalab-org/secs">The original SECS project</a>
       supplies the scientific methods and model architecture. Changes made for this service live in the
       <a href="https://github.com/numpde/fork-of-secs">adapted SECS source</a>;
-      this repository selects its revision through the <code>secs</code> Git submodule.</dd>
+      the <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/secs_source.json">SECS source lock</a>
+      records the public repository and exact revision selected by this repository's
+      <code>secs</code> submodule.</dd>
     <dt>Published checkpoint and candidate molecules</dt>
     <dd>The trained checkpoint and filtered PubChem molecule table come from the
       <a href="https://zenodo.org/records/14638782">published SECS archive</a>.
@@ -173,7 +214,7 @@ Molecular formula: C21H22N2O2.</pre>
   <h3>Reference software and test fixtures</h3>
   <dl>
     <dt>Cheminfo elucidation frontend</dt>
-    <dd>We use the frontend fork and revision named in
+    <dd>For reference-output generation and fixtures only, we use the frontend fork and revision named in
       <a href="https://github.com/numpde/secs-repro/blob/main/contracts/upstream/frontend_reference.json">the reference lock</a>, based on the
       <a href="https://github.com/cheminfo/elucidation.cheminfo.org">elucidation.cheminfo.org frontend source</a>
       to generate spectrum-conversion reference outputs and import challenge
@@ -215,8 +256,9 @@ Molecular formula: C21H22N2O2.</pre>
     · <a href="https://github.com/numpde/secs-repro/blob/main/open_source_licenses.txt">Third-party notice</a></p>
   <p>The AGPLv3 license and third-party notice are copied verbatim from the
     <a href="https://github.com/numpde/fork-of-secs">adapted SECS source</a> selected by this repository's submodule.
-    Its package metadata says MIT while its LICENSE contains AGPLv3; we preserve
-    the LICENSE file unchanged rather than silently resolving that discrepancy.</p>
+    This repository's root <code>LICENSE</code> therefore contains AGPLv3. The
+    adapted package's metadata says MIT while its <code>LICENSE</code> contains
+    AGPLv3; this page records that discrepancy and does not claim to resolve it.</p>
   <p>Dependencies and external
     model/data artifacts retain their own licenses. Provided without warranty;
     see the license for terms.</p>
