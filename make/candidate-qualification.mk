@@ -41,8 +41,8 @@ candidates/qualification: checkpoint/image packages/gpu/image
 		printf '%s\n' 'Cannot qualify the candidate builder because timeout is unavailable for bounded phase execution.' >&2
 		exit 2
 	}
-	[[ "$${QUALIFICATION_GPU_INPUT}" =~ ^[0-9]+$$ ]] || {
-		printf '%s\n' 'CANDIDATE_GPU must name one GPU by its nonnegative integer index.' >&2
+	[[ "$${QUALIFICATION_GPU_INPUT}" =~ ^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$$ ]] || {
+		printf '%s\n' 'Cannot qualify candidates: set CANDIDATE_GPU=GPU-<uuid> to select one NVIDIA GPU explicitly.' >&2
 		exit 2
 	}
 	[[ "$${QUALIFICATION_CPUS_INPUT}" =~ ^[1-9][0-9]*$$ ]] || {

@@ -60,10 +60,10 @@ help:
 	'      Compare nmrglue decoding of F3697/1 with the pinned frontend vector.' \
 	'  make test/integration/jcamp-reference' \
 	'      Compare processed JCAMP-DX decoding with its pinned frontend vector.' \
-	'  make test/integration/challenges' \
+	'  make test/integration/challenges CANDIDATE_GPU=GPU-<uuid>' \
 	'      Check all 20 published ScoreOnly ranks and one Bruker GA generation.' \
 	'      One GPU model and full index load are shared across the cases.' \
-	'  make test/integration/challenges/bruker' \
+	'  make test/integration/challenges/bruker CANDIDATE_GPU=GPU-<uuid>' \
 	'      Run only the Bruker GA test; still loads the GPU model and full index.' \
 	'  make provider/deployment/journal/inspect DEPLOYMENT=<name>' \
 	'      Inspect retained work after stopping the deployment; no reports are sent.' \
@@ -102,17 +102,19 @@ help:
 	'5. Build the GPU candidate bundle' \
 	'  make packages/base-images/pull packages/gpu/wheelhouse' \
 	'      Refresh the pinned GPU package archives before building the candidate image.' \
-	'  make candidates' \
-	'      Stream the configured PubChem parquet, embed its SMILES on GPU 0, and publish' \
+	'  make candidates CANDIDATE_GPU=GPU-<uuid>' \
+	'      Stream the configured PubChem parquet, embed its SMILES on the selected GPU, and publish' \
 	'      a row-aligned table, FAISS index, and manifest under the checkpoint directory.' \
-	'  make candidates ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz' \
+	'  make candidates CANDIDATE_GPU=GPU-<uuid> ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz' \
 	'      Read the pinned archive locally without granting the extractor network access.' \
 	'      ARCHIVE_URL overrides the configured HTTPS source instead; do not set both.' \
-	'      CANDIDATE_GPU, CANDIDATE_CPUS, and CANDIDATE_MEMORY tune resources.' \
+	'      CANDIDATE_GPU requires one full NVIDIA GPU UUID; there is no default GPU.' \
+	'      Find UUIDs with: nvidia-smi --query-gpu=uuid,name --format=csv' \
+	'      CANDIDATE_CPUS and CANDIDATE_MEMORY tune resources.' \
 	'      CANDIDATE_DTYPE selects float32 or bfloat16 forward compute.' \
 	'' \
 	'6. Qualify the candidate builder without publishing a production bundle' \
-	'  make candidates/qualification ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz' \
+	'  make candidates/qualification CANDIDATE_GPU=GPU-<uuid> ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz' \
 	'      Build, reload, and search fixed nested real-data samples, then retain only' \
 	'      non-production evidence and a bounded full-build resource projection.' \
 	'' \

@@ -117,8 +117,8 @@ test/integration/challenges test/integration/challenges/bruker: packages/gpu/ima
 		printf '%s\n' 'Cannot run the published challenge tests as host UID 0.' >&2
 		exit 2
 	fi
-	[[ "$${CANDIDATE_GPU_INPUT}" =~ ^[0-9]+$$ ]] || {
-		printf '%s\n' 'CANDIDATE_GPU must name one GPU by its nonnegative integer index.' >&2
+	[[ "$${CANDIDATE_GPU_INPUT}" =~ ^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$$ ]] || {
+		printf '%s\n' 'Cannot run GPU challenge tests: set CANDIDATE_GPU=GPU-<uuid> to select one NVIDIA GPU explicitly.' >&2
 		exit 2
 	}
 	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")

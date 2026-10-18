@@ -298,3 +298,64 @@ and response to a forced reader rejection.
 Only fixture inputs are sent. Each case is bounded to at most eight turns and
 120 seconds, or the deployment's smaller limits. It does not create Jobs,
 publish hello, access a GPU, or prove scientific ranking quality.
+
+GPU selection and host software upgrades
+---------------------------------------
+
+Host administration owns the NVIDIA driver and NVIDIA Container Toolkit.
+The GPU package image owns its locked PyTorch and CUDA user-space libraries.
+Before changing the driver, Container Toolkit, or host kernel, stop every
+affected named deployment:
+
+  make provider/deployment/down DEPLOYMENT=<name>
+
+After the host upgrade and any required reboot, run the existing GPU inference
+check on that host before starting the provider again.
+
+List the host's devices:
+
+  nvidia-smi --query-gpu=uuid,name --format=csv
+
+Use one full GPU UUID for CANDIDATE_GPU in candidate builds, builder
+qualification, and GPU challenge tests. There is no default GPU or numeric
+index selection. This follows Magnet's explicit device selection and the SECS
+provider's existing host UUID contract. Candidate work selects its own device;
+it does not read or change config/host.toml.
+
+For a host upgrade, use the same UUID as worker_gpu_uuid in config/host.toml:
+
+  make test/integration/challenges/bruker CANDIDATE_GPU=GPU-<uuid>
+
+Replace GPU-<uuid> with the full identifier. Run from the repository root with
+the prepared checkpoint, MolFormer cache, pinned full candidate bundle and GPU
+wheelhouse already present. Use the checkout and artifacts intended for the
+deployment: CHECKPOINT_SPEC selects the checkpoint directory, and MOLFORMER_CACHE
+selects the cache. Their resolved paths must match CHECKPOINT_DIRECTORY and
+MOLFORMER_CACHE_DIRECTORY in config/deployments/<name>/deployment.env.
+This lane builds or reuses the locked GPU image offline, loads the
+model on cuda:0 (the selected UUID inside the container) and the full index,
+and scores new molecules in one GA generation. It requires the 64 GiB container
+memory budget declared by the existing challenge lane. Its fixture pins the
+candidate manifest;
+an intentionally different bundle needs its own reviewed acceptance cases.
+The check sends no API requests and does not start a provider deployment.
+
+Confirm that the tested image ID equals the immutable WORKER_IMAGE_REF saved in
+config/deployments/<name>/deployment.env. Inspect the challenge lane's image ID:
+
+  docker --context default image inspect --format '{{.Id}}' secs-repro/packages-gpu:local
+
+Repeat the check for each distinct image/checkpoint/cache/GPU combination being
+returned to service. Named SECS deployments share the host's one selected GPU.
+
+Only after the check passes, start the named deployment and inspect it:
+
+  make provider/deployment/up DEPLOYMENT=<name>
+  make provider/deployment/status DEPLOYMENT=<name>
+  make provider/logs DEPLOYMENT=<name>
+
+The offline check proves the exercised local inference path, not live API
+acceptance or scientific ranking quality. Verify fresh provider registration
+with the API separately. If the check fails, leave the provider stopped and
+resolve the failure before returning it to service. nvidia-smi visibility alone
+does not establish successful model execution.

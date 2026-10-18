@@ -1,6 +1,6 @@
 CANDIDATE_SPEC := $(CHECKPOINT_DIRECTORY)/candidates.toml
 CANDIDATE_DIRECTORY := $(CHECKPOINT_DIRECTORY)/candidates
-CANDIDATE_GPU ?= 0
+unexport CANDIDATE_GPU
 CANDIDATE_CPUS ?= 8
 # Qualification applies its reserve policy to this same production limit, so
 # the default must stay above the measured full-build projection.
@@ -10,7 +10,7 @@ CANDIDATE_DTYPE ?= bfloat16
 .PHONY: candidates
 candidates: export ARCHIVE_INPUT := $(if $(filter command line,$(origin ARCHIVE)),$(ARCHIVE))
 candidates: export ARCHIVE_URL_INPUT := $(if $(filter command line,$(origin ARCHIVE_URL)),$(ARCHIVE_URL))
-candidates: export CANDIDATE_GPU_INPUT := $(CANDIDATE_GPU)
+candidates: private export CANDIDATE_GPU_INPUT := $(value CANDIDATE_GPU)
 candidates: export CANDIDATE_CPUS_INPUT := $(CANDIDATE_CPUS)
 candidates: export CANDIDATE_MEMORY_INPUT := $(CANDIDATE_MEMORY)
 candidates: export CANDIDATE_DTYPE_INPUT := $(CANDIDATE_DTYPE)
@@ -21,8 +21,8 @@ candidates: checkpoint/image packages/gpu/image
 	test -z "$${ARCHIVE_INPUT}" || test -z "$${ARCHIVE_URL_INPUT}" || { \
 		printf '%s\n' 'ARCHIVE and ARCHIVE_URL are mutually exclusive.' >&2; exit 2; \
 	}; \
-	[[ "$${CANDIDATE_GPU_INPUT}" =~ ^[0-9]+$$ ]] || { \
-		printf '%s\n' 'CANDIDATE_GPU must name one GPU by its nonnegative integer index.' >&2; exit 2; \
+	[[ "$${CANDIDATE_GPU_INPUT}" =~ ^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$$ ]] || { \
+		printf '%s\n' 'Cannot build candidates: set CANDIDATE_GPU=GPU-<uuid> to select one NVIDIA GPU explicitly.' >&2; exit 2; \
 	}; \
 	case "$${CANDIDATE_DTYPE_INPUT}" in \
 		float32|bfloat16) ;; \
