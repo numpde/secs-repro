@@ -228,7 +228,7 @@ class NmriumResourceTests(WorkerCase):
         self.rejected_shift(item)
 
     def rejected_shift(self, item):
-        response = self.request('analyse', selection={
+        response = self.search(selection={
             'representation_id': item['id'], 'formula': 'C22H36O7',
             'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
             'processing': 'as_stored', 'explanation': 'Use stored data.',

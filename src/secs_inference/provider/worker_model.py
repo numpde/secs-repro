@@ -6,10 +6,22 @@ import math
 from pathlib import Path
 import sys
 import tomllib
+from typing import TYPE_CHECKING
 from secs_inference.provider.configuration_error import ConfigurationError
 from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.outcomes import AnalysisOutcome, NO_STARTING_CANDIDATES_MESSAGE
 from secs_inference.provider.formula_notation import normalize_formula_notation
+
+if TYPE_CHECKING:
+    from secs_inference.provider.input_adapter import PreparedSpectrum
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedSearch:
+    handle: int
+    attempt_ref: str
+    spectrum: "PreparedSpectrum"
+    formula: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +84,8 @@ class ScientificHandler:
         self.candidates = candidates
         self.config = config
         self.input_adapter = InputAdapter()
+        self._prepared = None
+        self._next_handle = 0
 
     def __call__(self, command: dict) -> dict:
         from secs_inference.elucidation import FormulaError
@@ -79,6 +93,22 @@ class ScientificHandler:
         from secs_inference.provider.source_access import InputReadError, SourceAccess
         from secs_inference.spectra.errors import SpectrumReadError
 
+        if command["operation"] == "execute":
+            prepared = self._prepared
+            if (prepared is None or command["attempt_ref"] != prepared.attempt_ref
+                    or type(command.get("prepared_handle")) is not int
+                    or command["prepared_handle"] != prepared.handle):
+                raise ValueError("Cannot execute prepared input: no matching prepared handle belongs to this Attempt")
+            # Consumption precedes model dispatch. Even an unexpected scientific
+            # failure cannot make this request eligible for another search.
+            self._prepared = None
+            analysis = self._execute(prepared.spectrum, prepared.formula)
+            outcome = (AnalysisOutcome.NO_STARTING_CANDIDATES
+                       if analysis["search"]["outcome"] == AnalysisOutcome.NO_STARTING_CANDIDATES
+                       else AnalysisOutcome.ANALYSED)
+            return {"outcome": outcome.value, "analysis": analysis}
+        if self._prepared is not None:
+            raise ValueError("Cannot prepare or inspect input: this worker still owns an unconsumed prepared request")
         try:
             access = SourceAccess({ref: Path(path) for ref, path in command["files"].items()}, Path(command["directory"]))
             if command["operation"] == "inspect":
@@ -88,30 +118,31 @@ class ScientificHandler:
                     SourceRef(**command["source"]),
                 )
                 return {"outcome": "inspected", "facts": facts}
-            if command["operation"] != "analyse":
+            if command["operation"] != "prepare":
                 raise AssertionError("No scientific operation is bound to the worker request")
-            analysis = self._analyse(access, command["attempt_ref"], command["selection"])
-            outcome = (AnalysisOutcome.NO_STARTING_CANDIDATES
-                       if analysis["search"]["outcome"] == AnalysisOutcome.NO_STARTING_CANDIDATES
-                       else AnalysisOutcome.ANALYSED)
-            return {"outcome": outcome.value, "analysis": analysis}
+            from secs_inference.elucidation import canonical_formula
+            spectrum = self.input_adapter.prepare(access, command["attempt_ref"], command["selection"])
+            formula = canonical_formula(normalize_formula_notation(command["selection"]["formula"]))
+            spectrum.values.flags.writeable = False
+            self._next_handle += 1
+            self._prepared = _PreparedSearch(self._next_handle, command["attempt_ref"], spectrum, formula)
+            return {"outcome": "prepared", "prepared_handle": self._prepared.handle}
         except (InputReadError, SpectrumReadError, FormulaError) as error:
             return {"outcome": "input_rejected", "reason": str(error)[:2048]}
 
-    def _analyse(self, access, attempt_ref, selection):
-        """Read the chosen input and report refinement or observed empty retrieval."""
+    def _execute(self, prepared, formula):
+        """Search the exact admitted in-memory input without reopening sources."""
         from secs.elucidation import GraphGAOptimizer
         from secs_inference.elucidation import SecsElucidator
         from secs_inference.spectra.secs import SECS_PPM_FROM, SECS_PPM_TO, SECS_SPECTRUM_POINTS
 
-        prepared = self.input_adapter.prepare(access, attempt_ref, selection)
         optimizer = GraphGAOptimizer(
             population_size=self.config.population_size, offspring_size=self.config.offspring_size,
             max_generations=self.config.max_generations, seed=self.config.seed,
         )
         elucidator = SecsElucidator(self.inference, self.candidates, optimizer,
                                   initial_population_size=self.config.initial_population_size)
-        result = elucidator.elucidate(prepared.values, normalize_formula_notation(selection["formula"]))
+        result = elucidator.elucidate(prepared.values, formula)
         # This provider's canonical JSON excludes floating-point numbers. Scientific
         # decimal values travel as text; counts and discrete settings stay integers.
         if result.optimization is None:

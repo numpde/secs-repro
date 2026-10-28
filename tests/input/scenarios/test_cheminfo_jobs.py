@@ -26,7 +26,7 @@ class CheminfoJobScenarios(CheminfoCase):
             self.assertEqual(len(protons), expected_protons)
             for item in protons:
                 with self.subTest(archive=path, sources=item['sources']):
-                    response = self.request('analyse', selection=self.selection(item))
+                    response = self.search(selection=self.selection(item))
                     self.assert_prepared(response, item)
                     self.inference.reset_mock()
                     self.candidates.reset_mock()
@@ -49,7 +49,7 @@ class CheminfoJobScenarios(CheminfoCase):
                 for item in processed + [fid]:
                     with self.subTest(sources=item['sources']):
                         raw = item['kind'] == 'fid'
-                        response = self.request('analyse', selection=self.selection(
+                        response = self.search(selection=self.selection(
                             item, processing='auto' if raw else 'as_stored'))
                         self.assert_prepared(response, item, from_fid=raw)
                         self.inference.reset_mock()
@@ -75,7 +75,7 @@ class CheminfoJobScenarios(CheminfoCase):
                     selection = self.selection(item, formula='C13H18O2')
                     selection['formula_evidence'] = {'kind': 'representations',
                                                      'representation_ids': [structure['id']]}
-                    response = self.request('analyse', selection=selection)
+                    response = self.search(selection=selection)
                     self.assert_prepared(response, item)
                     self.assertEqual(self.candidates.propose.call_args.args[1], 'C13H18O2')
                     prepared.append(self.inference.embed_spectrum.call_args.args[0].copy())

@@ -44,7 +44,7 @@ class ScientificJobScenarios(WorkerCase):
                     deadline=monotonic() + 10, max_turns=1)
                 decision = asdict(session.select())
                 self.assertEqual(decision, choice)
-                response = self.request('analyse', selection=decision)
+                response = self.search(selection=decision)
                 self.assertEqual(response['outcome'], 'no_starting_candidates')
                 self.inference.embed_spectrum.assert_called_once()
                 self.assertEqual(self.candidates.propose.call_args.args[1], 'C22H36O7')
@@ -54,7 +54,7 @@ class ScientificJobScenarios(WorkerCase):
         self.upload('ethanol.mol', 'upload:structure')
         spectrum = self.one(self.discover('upload:spectrum'))
         structure = self.one(self.discover('upload:structure'), 'structure', nucleus=None)
-        response = self.request('analyse', selection={
+        response = self.search(selection={
             'representation_id': spectrum['id'], 'formula': ' C₂ H 6 O ',
             'formula_evidence': {'kind': 'representations', 'representation_ids': [structure['id']]},
             'processing': 'as_stored', 'explanation': 'Use the attached structure formula.'})
@@ -70,7 +70,7 @@ class ScientificJobScenarios(WorkerCase):
         self.one(self.discover('upload:carbon'), nucleus='13C')
         structure = self.one(self.discover('upload:structure'), 'structure', nucleus=None)
         self.assertEqual(structure['metadata']['formula'], 'C2H6O')
-        response = self.request('analyse', selection={'representation_id': proton['id'],
+        response = self.search(selection={'representation_id': proton['id'],
             'formula': 'C22H36O7',
             'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
             'processing': 'as_stored',
@@ -98,7 +98,7 @@ class ScientificJobScenarios(WorkerCase):
                             and item['metadata'].get('formula') == 'C2H6O']
                 self.assertEqual(len(matching), 1)
 
-                response = self.request('analyse', selection={
+                response = self.search(selection={
                     'representation_id': spectrum['id'],
                     'formula': 'C2H6O',
                     'formula_evidence': {
@@ -129,12 +129,12 @@ class ScientificJobScenarios(WorkerCase):
         choice = {'representation_id': usable[0]['id'], 'formula': 'C22H36O7',
                   'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
                   'explanation': 'Use the complete proton spectrum despite the separately reported corrupt member.'}
-        rejected = self.request('analyse', selection=choice)
+        rejected = self.search(selection=choice)
         self.assertEqual(rejected['outcome'], 'input_rejected')
         self.assertIn('processing', rejected['reason'].lower())
         self.assertEqual(self.inference.mock_calls, [])
         self.assertEqual(self.candidates.mock_calls, [])
-        response = self.request('analyse', selection={**choice, 'processing': 'as_stored'})
+        response = self.search(selection={**choice, 'processing': 'as_stored'})
         self.assertEqual(response['outcome'], 'no_starting_candidates')
         self.inference.embed_spectrum.assert_called_once()
         self.candidates.propose.assert_called_once()

@@ -33,6 +33,67 @@ GRANT = UploadReadCapability(UPLOAD.upload_ref, 4, "sha256:" + "b" * 64,
 
 
 class AcquisitionTests(unittest.TestCase):
+    def test_rejected_preparation_repairs_input_before_one_scientific_entry(self):
+        api = Mock()
+        api.specification.return_value = JobSpecification("job:test", "C2H6O")
+        api.uploads.return_value = (UPLOAD,)
+        api.capability.return_value = GRANT
+        chat = ScriptedChat(selection(), selection(call_id="corrected"))
+        entered = Mock()
+        commands = []
+
+        def request(command, **kwargs):
+            commands.append(command)
+            if command["operation"] == "prepare":
+                entered.assert_not_called()
+                return ({"outcome": "input_rejected", "reason": "Choose the proton spectrum."}
+                        if len(commands) == 1 else {"outcome": "prepared", "prepared_handle": 7})
+            entered.assert_called_once()
+            self.assertEqual(command, {"operation": "execute", "prepared_handle": 7,
+                                       "attempt_ref": ACTIVE.execution_attempt_ref})
+            return {"outcome": "analysed", "analysis": REPORT["analysis"]}
+
+        worker = Mock(request=Mock(side_effect=request))
+        with TemporaryDirectory() as directory, patch("secs_inference.provider.analysis_run.download_upload",
+                return_value=Path(directory) / "verified"):
+            result = run_analysis(api=api, active=ACTIVE, chat=chat, worker=worker, store=None,
+                directory=Path(directory) / "current", work_deadline=monotonic() + 10,
+                interpretation_seconds=5, max_turns=2, max_total_bytes=100,
+                execution_entered=entered)
+        self.assertEqual([command["operation"] for command in commands], ["prepare", "prepare", "execute"])
+        self.assertEqual(result["input_choices"][0]["reading_error"], "Choose the proton spectrum.")
+        self.assertTrue(result["input_choices"][1]["used"])
+
+    def test_refused_scientific_entry_stops_prepared_worker_before_source_cleanup(self):
+        for unconfirmed in (False, True):
+            with self.subTest(unconfirmed=unconfirmed), TemporaryDirectory() as directory:
+                api = Mock()
+                api.specification.return_value = JobSpecification("job:test", "C2H6O")
+                api.uploads.return_value = (UPLOAD,)
+                api.capability.return_value = GRANT
+                root = Path(directory) / "current"
+                worker = Mock()
+                worker.request.return_value = {"outcome": "prepared", "prepared_handle": 1}
+                failure = ApiUnavailable("entry not confirmed")
+
+                def stop():
+                    self.assertTrue(root.exists(), "Sources were released before stopping prepared work")
+                    if unconfirmed:
+                        raise WorkerStopUnconfirmed("No native retirement confirmation")
+
+                worker.stop.side_effect = stop
+                with patch("secs_inference.provider.analysis_run.download_upload",
+                           return_value=Path(directory) / "verified"):
+                    with self.assertRaises(WorkerStopUnconfirmed if unconfirmed else ApiUnavailable):
+                        run_analysis(api=api, active=ACTIVE, chat=ScriptedChat(selection()),
+                            worker=worker, store=None, directory=root,
+                            work_deadline=monotonic() + 10, interpretation_seconds=5,
+                            max_turns=1, max_total_bytes=100,
+                            execution_entered=Mock(side_effect=failure))
+                worker.request.assert_called_once()
+                worker.stop.assert_called_once()
+                self.assertEqual(root.exists(), unconfirmed)
+
     def test_no_starting_candidates_fails_with_private_input_evidence(self):
         api = FakeApi()
         api.specification = Mock(return_value=JobSpecification("job:test", "C2H6O"))
@@ -46,6 +107,7 @@ class AcquisitionTests(unittest.TestCase):
         worker = Mock()
         worker.request.side_effect = [
             {"outcome": "inspected", "facts": {"representations": [{"id": "opaque-spectrum"}]}},
+            {"outcome": "prepared", "prepared_handle": 1},
             {"outcome": "no_starting_candidates", "analysis": analysis},
         ]
         with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as journal, patch(
@@ -65,7 +127,7 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual(report["analysis"], analysis)
         self.assertTrue(report["input_choices"][0]["used"])
         self.assertEqual(report["acquired_uploads"][UPLOAD.upload_ref]["content_hash"], GRANT.content_hash)
-        self.assertEqual(worker.request.call_count, 2)
+        self.assertEqual(worker.request.call_count, 3)
 
     def test_transient_metadata_outages_do_not_restart_admission_or_interpretation(self):
         api = FakeApi()
@@ -74,7 +136,8 @@ class AcquisitionTests(unittest.TestCase):
         api.capability = Mock(return_value=GRANT)
         chat = ScriptedChat(selection(explanation="Proton experiment."))
         worker = Mock()
-        worker.request.return_value = {"outcome": "analysed", "analysis": REPORT["analysis"]}
+        worker.request.side_effect = [{"outcome": "prepared", "prepared_handle": 1},
+                                      {"outcome": "analysed", "analysis": REPORT["analysis"]}]
         clock = [10.0]
         def advance(seconds):
             clock[0] += seconds
@@ -89,7 +152,14 @@ class AcquisitionTests(unittest.TestCase):
                                     directory=Path(directory) / "current", work_deadline=20,
                                     interpretation_seconds=5, max_turns=1, max_total_bytes=100,
                                     execution_entered=loop.mark_execution_entered)
-            def request(*args, **kwargs):
+            def request(command, **kwargs):
+                if command["operation"] == "prepare":
+                    self.assertEqual(journal.load().local_phase, "preparing")
+                    return {"outcome": "prepared", "prepared_handle": 1}
+                self.assertEqual(command["operation"], "execute")
+                self.assertEqual(command["prepared_handle"], 1)
+                self.assertNotIn("files", command)
+                self.assertNotIn("directory", command)
                 self.assertEqual(journal.load().local_phase, "running")
                 return {"outcome": "analysed", "analysis": REPORT["analysis"]}
             worker.request.side_effect = request
@@ -98,7 +168,7 @@ class AcquisitionTests(unittest.TestCase):
             self.assertIsNone(journal.load())
         self.assertEqual(len(api.calls), 3)
         self.assertEqual(json.loads(api.calls[-1])["schema_id"], "nmr.provider.execution_attempt_complete_request.v1")
-        worker.request.assert_called_once()
+        self.assertEqual(worker.request.call_count, 2)
         self.assertEqual(api.specification.call_count, 2)
         self.assertEqual(api.uploads.call_count, 2)
         self.assertEqual(len(chat.requests), 1)
@@ -184,7 +254,7 @@ class AcquisitionTests(unittest.TestCase):
                 def analyse(active):
                     with AttemptSources(api, active, (), None, root / "current", deadline=monotonic() + 5,
                                         max_total_bytes=100) as sources:
-                        return _worker_request(worker, sources, {"operation": "analyse"}, monotonic() + 5)
+                        return _worker_request(worker, sources, {"operation": "execute", "prepared_handle": 1}, monotonic() + 5)
                 with AttemptStore(root / "journal") as journal:
                     journal.save(START)
                     with self.assertRaises(WorkerStopUnconfirmed) as caught:
@@ -202,7 +272,7 @@ class AcquisitionTests(unittest.TestCase):
                 worker.stop.assert_called_once()
 
     def test_worker_errors_name_inspection_or_search_in_the_published_failure(self):
-        for operation, description in (("inspect", "input inspection"), ("analyse", "SECS structure search")):
+        for operation, description in (("inspect", "input inspection"), ("execute", "SECS structure search")):
             for failure in ({"outcome": "failed", "exception_type": "ValueError", "frames": []},
                             WorkerError("The scientific worker disconnected; its exit was confirmed"),
                             TimeoutError("private timeout text")):
@@ -231,7 +301,8 @@ class AcquisitionTests(unittest.TestCase):
         api.capability.return_value = GRANT
         chat = ScriptedChat(selection(explanation="Proton experiment."))
         worker = Mock()
-        worker.request.return_value = {"outcome": "analysed", "analysis": REPORT["analysis"]}
+        worker.request.side_effect = [{"outcome": "prepared", "prepared_handle": 1},
+                                      {"outcome": "analysed", "analysis": REPORT["analysis"]}]
         with TemporaryDirectory() as directory, patch("secs_inference.provider.analysis_run.download_upload",
                 return_value=Path(directory) / "verified"):
             with self.assertLogs("secs_inference.provider.analysis_run", level="ERROR"), patch(
@@ -241,7 +312,7 @@ class AcquisitionTests(unittest.TestCase):
                     interpretation_seconds=5, max_turns=1, max_total_bytes=100)
             self.assertTrue((Path(directory) / "current").exists())
         self.assertEqual(report["outcome"], "analysed")
-        self.assertEqual(report["analysis"], worker.request.return_value["analysis"])
+        self.assertEqual(report["analysis"], REPORT["analysis"])
         self.assertTrue(report["input_choices"][0]["used"])
         self.assertEqual(report["input_choices"][0]["explanation"], "Proton experiment.")
         self.assertNotIn("explanation", report)
@@ -409,7 +480,7 @@ class AcquisitionTests(unittest.TestCase):
                 )
                 worker = Mock()
                 worker.request.side_effect = ([inspection_failure] if inspection_failure else
-                                               [{"outcome": "inspected", "facts": {}}, {"outcome": "analysed", "analysis": REPORT["analysis"]}])
+                                               [{"outcome": "inspected", "facts": {}}, {"outcome": "prepared", "prepared_handle": 1}, {"outcome": "analysed", "analysis": REPORT["analysis"]}])
                 work_deadline = monotonic() + 1800
                 with patch("secs_inference.provider.analysis_run.download_upload", return_value=Path(directory) / "verified") as download:
                     def run():
@@ -526,6 +597,7 @@ class AcquisitionTests(unittest.TestCase):
         worker.request.side_effect = [
             {"outcome": "inspected", "facts": {"representations": [{"id": "old-choice"}]}},
             {"outcome": "inspected", "facts": {"representations": [{"id": "new-choice"}]}},
+            {"outcome": "prepared", "prepared_handle": 1},
             {"outcome": "analysed", "analysis": REPORT["analysis"]},
         ]
         with TemporaryDirectory() as directory:

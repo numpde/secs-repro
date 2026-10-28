@@ -1,9 +1,11 @@
 """A discovered representation reaches the real reader and scientific search."""
 
 from pathlib import Path
+import shutil
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
+import weakref
 from zipfile import ZipFile
 
 import numpy as np
@@ -38,6 +40,100 @@ def _selection(handler, files, directory, formula="C7H8ClN"):
 
 
 class SelectedSpectrumTests(unittest.TestCase):
+    def test_prepared_input_survives_source_deletion_and_is_consumed_once(self):
+        from secs.elucidation import StaticCandidateSource
+
+        class Inference:
+            def __init__(self):
+                self.spectra = []
+
+            def embed_spectrum(self, values):
+                self.spectra.append(values.copy())
+                return np.array([1., 0.], dtype=np.float32)
+
+        inference = Inference()
+        candidates = Mock(wraps=StaticCandidateSource([]))
+        handler = ScientificHandler(inference, candidates,
+            ScientificWorkerConfig("unused", "unused", device="cpu"))
+        observed = {}
+        original_prepare = handler.input_adapter.prepare
+
+        def observe_prepare(*args):
+            prepared = original_prepare(*args)
+            observed["spectrum"] = prepared.values.copy()
+            observed["prepared"] = weakref.ref(prepared.values)
+            return prepared
+
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "source.jdx"
+            shutil.copyfile(JCAMP, source)
+            files = {"upload:chosen": str(source)}
+            choice = _selection(handler, files, directory)
+            with patch.object(handler.input_adapter, "prepare", side_effect=observe_prepare):
+                prepared = handler({"operation": "prepare", "files": files,
+                    "directory": directory, "attempt_ref": ATTEMPT, "selection": choice})
+            self.assertEqual(prepared["outcome"], "prepared")
+            self.assertEqual(inference.spectra, [])
+            self.assertIsNotNone(observed["prepared"]())
+            source.unlink()
+            # Neither mutable selection facts nor the removed source can alter
+            # the worker's admitted values and formula after preparation.
+            choice["formula"] = "C30H62"
+            command = {"operation": "execute", "attempt_ref": ATTEMPT,
+                       "prepared_handle": prepared["prepared_handle"]}
+            response = handler(command)
+            self.assertEqual(response["outcome"], "no_starting_candidates")
+            self.assertEqual(len(inference.spectra), 1)
+            self.assertEqual(candidates.propose.call_args.args[1], "C7H8ClN")
+            np.testing.assert_array_equal(inference.spectra[0], observed["spectrum"])
+            self.assertIsNone(observed["prepared"](), "Completed response retains prepared input")
+            with self.assertRaisesRegex(ValueError, "prepared"):
+                handler(command)
+            self.assertEqual(len(inference.spectra), 1)
+
+    def test_wrong_attempt_cannot_consume_prepared_input(self):
+        handler = self.handler()
+        with TemporaryDirectory() as directory:
+            files = {"upload:chosen": str(JCAMP)}
+            choice = _selection(handler, files, directory)
+            prepared = handler({"operation": "prepare", "files": files,
+                "directory": directory, "attempt_ref": ATTEMPT, "selection": choice})
+            with self.assertRaisesRegex(ValueError, "prepared"):
+                handler({"operation": "execute", "attempt_ref": "another-attempt",
+                         "prepared_handle": prepared["prepared_handle"]})
+            handler.inference.embed_spectrum.assert_not_called()
+
+    def test_failed_dispatch_cannot_reuse_its_consumed_preparation(self):
+        failure = ValueError("retrieval fault")
+        candidates = Mock(propose=Mock(side_effect=failure))
+        handler = self.handler(candidates)
+        with TemporaryDirectory() as directory:
+            files = {"upload:chosen": str(JCAMP)}
+            choice = _selection(handler, files, directory)
+            prepared = handler({"operation": "prepare", "files": files,
+                "directory": directory, "attempt_ref": ATTEMPT, "selection": choice})
+            command = {"operation": "execute", "attempt_ref": ATTEMPT,
+                       "prepared_handle": prepared["prepared_handle"]}
+            with self.assertRaises(ValueError) as caught:
+                handler(command)
+            self.assertIs(caught.exception, failure)
+            with self.assertRaisesRegex(ValueError, "prepared"):
+                handler(command)
+            handler.inference.embed_spectrum.assert_called_once()
+            candidates.propose.assert_called_once()
+
+    def test_formula_rejection_precedes_scientific_dispatch(self):
+        handler = self.handler()
+        with TemporaryDirectory() as directory:
+            files = {"upload:chosen": str(JCAMP)}
+            choice = _selection(handler, files, directory)
+            choice["formula"] = "C7H8ClN followed by prose"
+            choice["formula_evidence"]["quote"] = choice["formula"]
+            response = handler({"operation": "prepare", "files": files,
+                "directory": directory, "attempt_ref": ATTEMPT, "selection": choice})
+            self.assertEqual(response["outcome"], "input_rejected")
+            handler.inference.embed_spectrum.assert_not_called()
+
     def handler(self, candidates=None):
         inference = Mock(embed_spectrum=Mock(return_value=np.array([1., 0.], dtype=np.float32)))
         if candidates is None:
@@ -48,9 +144,13 @@ class SelectedSpectrumTests(unittest.TestCase):
                                    initial_population_size=2))
 
     def request(self, handler, directory, selection):
-        return handler({"operation": "analyse", "files": {"upload:chosen": str(JCAMP)},
+        prepared = handler({"operation": "prepare", "files": {"upload:chosen": str(JCAMP)},
                         "directory": str(directory), "attempt_ref": ATTEMPT,
                         "selection": selection})
+        if prepared["outcome"] == "input_rejected":
+            return prepared
+        return handler({"operation": "execute", "attempt_ref": ATTEMPT,
+                        "prepared_handle": prepared["prepared_handle"]})
 
     def test_empty_or_nonfinite_optimizer_output_is_a_scientific_fault(self):
         from secs.elucidation import OptimizerResult

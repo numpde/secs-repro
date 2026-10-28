@@ -22,7 +22,7 @@ class SelectedInputTests(WorkerCase):
         self.worker.candidates = self.candidates
 
     def analyse(self, representation, processing='as_stored'):
-        return self.request('analyse', selection={
+        return self.search(selection={
             'representation_id': representation['id'], 'formula': 'C22H36O7',
             'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
             'processing': processing, 'explanation': 'Use the explicitly selected synthetic proton data.'})

@@ -198,12 +198,20 @@ def run_analysis(
                             [asdict(item) for item in current], ensure_ascii=False
                         ))
                         continue
-                execution_entered()
-                response = _worker_request(worker, sources, {"operation": "analyse", "selection": choice}, work_deadline, check_running)
+                response = _worker_request(worker, sources, {"operation": "prepare", "selection": choice}, work_deadline, check_running)
                 if response["outcome"] == "input_rejected":
                     choice["reading_error"] = response["reason"]
                     session.reject(response["reason"])
                     continue
+                try:
+                    execution_entered()
+                except BaseException:
+                    # Preparation now owns live worker state. If entry is
+                    # refused, retire it before this scope releases its sources.
+                    worker.stop()
+                    raise
+                response = _worker_request(worker, sources, {"operation": "execute",
+                    "prepared_handle": response["prepared_handle"]}, work_deadline, check_running)
                 choice["used"] = True
                 return {"schema_id": RESULT_SCHEMA_ID, "outcome": response["outcome"],
                         "interpretation_rejections": session.rejections,
@@ -245,7 +253,8 @@ def _read_job_metadata(read, active, deadline, check_running):
 
 
 def _worker_request(worker, sources, request, deadline, check_running=lambda: None):
-    operation = "input inspection" if request["operation"] == "inspect" else "SECS structure search"
+    operation = {"inspect": "input inspection", "prepare": "SECS input preparation",
+                 "execute": "SECS structure search"}[request["operation"]]
     def check_active():
         check_running()
         try:
@@ -264,14 +273,14 @@ def _worker_request(worker, sources, request, deadline, check_running=lambda: No
             # its failure report. Merely closing the Job does not stop this Attempt.
             raise AnalysisCancelled("Scientific work stopped because the Job was cancelled")
     try:
-        response = worker.request(request | {"files": {
-                                                ref: str(item.path)
-                                                for ref, item in sources.acquired.items()
-                                                if ref in sources.uploads
-                                            },
-                                            "directory": str(sources.directory),
-                                            "attempt_ref": sources.active.execution_attempt_ref}, deadline=deadline,
-                                  check_active=check_active)
+        command = request | {"attempt_ref": sources.active.execution_attempt_ref}
+        if request["operation"] != "execute":
+            command |= {
+                "files": {ref: str(item.path) for ref, item in sources.acquired.items()
+                          if ref in sources.uploads},
+                "directory": str(sources.directory),
+            }
+        response = worker.request(command, deadline=deadline, check_active=check_active)
     except TimeoutError as error:
         # WorkerClient confirms child exit before propagating a timeout.
         # Preserve that fact and the controller-owned phase in the public result.
@@ -288,9 +297,14 @@ def _worker_request(worker, sources, request, deadline, check_running=lambda: No
             error = WorkerError(f"Cannot finish {operation}: the SECS worker encountered an internal error; inspect this Attempt's operator diagnostics")
             error.diagnostic = response
             raise error
-        if response.get("outcome") not in {"inspected", "input_rejected",
-                                           AnalysisOutcome.ANALYSED, AnalysisOutcome.NO_STARTING_CANDIDATES}:
+        expected = {"inspect": {"inspected", "input_rejected"},
+                    "prepare": {"prepared", "input_rejected"},
+                    "execute": {AnalysisOutcome.ANALYSED, AnalysisOutcome.NO_STARTING_CANDIDATES}}
+        if response.get("outcome") not in expected[request["operation"]]:
             raise WorkerError(f"Cannot confirm {operation}: the SECS worker returned an unrecognized operation outcome")
+        if response["outcome"] == "prepared" and (type(response.get("prepared_handle")) is not int
+                                                   or response["prepared_handle"] <= 0):
+            raise WorkerError("Cannot confirm SECS input preparation: the worker returned no valid prepared handle")
     except WorkerError:
         # Raise the response failure first so a failed stop retains it as
         # context. Stop uncertainty still controls source retention and admission.

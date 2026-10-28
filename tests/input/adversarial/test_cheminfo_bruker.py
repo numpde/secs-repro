@@ -26,7 +26,7 @@ class CheminfoRefusalTests(CheminfoCase):
             with self.subTest(nucleus=nucleus):
                 self.fixture('zipped/' + path)
                 item = self.one(self.discover(), nucleus=nucleus)
-                self.assert_rejected(self.request('analyse', selection=self.selection(item)),
+                self.assert_rejected(self.search(selection=self.selection(item)),
                                      nucleus, 'requires 1H spectrum')
 
     def test_mutated_real_pair_reports_missing_parameters_or_truncated_data(self):
@@ -60,4 +60,4 @@ class CheminfoRefusalTests(CheminfoCase):
         self.archive(members)
         item = self.one(self.discover())
         self.archive([(members[0][0], bytes([members[0][1][0] ^ 1]) + members[0][1][1:]), members[1]])
-        self.assert_rejected(self.request('analyse', selection=self.selection(item)), 'changed')
+        self.assert_rejected(self.search(selection=self.selection(item)), 'changed')

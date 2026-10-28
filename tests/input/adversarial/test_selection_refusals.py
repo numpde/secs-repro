@@ -34,7 +34,7 @@ class SelectionRefusalTests(WorkerCase):
                 'processing': 'as_stored', 'explanation': 'Explicit selection for SECS.'}
 
     def rejected(self, selection, *evidence):
-        response = self.request('analyse', selection=selection)
+        response = self.search(selection=selection)
         self.assertEqual(response['outcome'], 'input_rejected')
         self.assert_safe_reason(response['reason'])
         for term in evidence:
@@ -178,7 +178,7 @@ class SelectionRefusalTests(WorkerCase):
     def test_selection_identity_does_not_cross_attempts(self):
         self.upload('proton.jdx')
         item = self.one(self.discover())
-        response = self.request('analyse', attempt_ref=OTHER_ATTEMPT_REF, selection=self.selection(item['id']))
+        response = self.search(attempt_ref=OTHER_ATTEMPT_REF, selection=self.selection(item['id']))
         self.assertEqual(response['outcome'], 'input_rejected')
         self.assert_safe_reason(response['reason'])
         self.assertIn('representation', response['reason'].lower())

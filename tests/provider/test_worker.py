@@ -260,7 +260,7 @@ class WorkerTests(unittest.TestCase):
         with patch.object(worker, "_receive_next", return_value={"outcome": "stopped", "reason": "deadline"}), \
              self.assertLogs("secs_inference.provider.worker", level="ERROR"):
             with self.assertRaisesRegex(TimeoutError, "child was stopped"):
-                worker.request({"operation": "analyse"}, deadline=monotonic() + 5)
+                worker.request({"operation": "execute"}, deadline=monotonic() + 5)
         self.assertTrue(worker.stopped)
         transport.close.assert_called_once()
 
@@ -358,7 +358,7 @@ class WorkerTests(unittest.TestCase):
             _send(connection, {"outcome": "stopped"})
         def exercise(worker):
             with self.assertRaises(TimeoutError):
-                worker.request({"operation": "analyse"}, deadline=monotonic() + 0.05)
+                worker.request({"operation": "execute"}, deadline=monotonic() + 0.05)
             self.assertTrue(worker.stopped)
         self._scripted_peer(serve, exercise)
 

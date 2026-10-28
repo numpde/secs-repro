@@ -17,6 +17,14 @@ class FormulaError(ValueError):
     """The formula parser rejected the supplied text before model work."""
 
 
+def canonical_formula(formula: str) -> str:
+    """Admit one complete formula using the scientific parser's rules."""
+    try:
+        return build_formula_string(get_atom_counts_from_formula(formula))
+    except ValueError as cause:
+        raise FormulaError(str(cause)) from cause
+
+
 @dataclass(frozen=True, slots=True)
 class ElucidationResult:
     """Per-call retrieval evidence and optional refinement.

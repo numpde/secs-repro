@@ -47,6 +47,13 @@ class WorkerCase(unittest.TestCase):
         return self.worker({'operation': operation, 'files': dict(self.files),
                             'directory': str(self.root), 'attempt_ref': attempt_ref, **arguments})
 
+    def search(self, *, attempt_ref=ATTEMPT_REF, selection):
+        prepared = self.request('prepare', attempt_ref=attempt_ref, selection=selection)
+        if prepared['outcome'] == 'input_rejected':
+            return prepared
+        return self.worker({'operation': 'execute', 'attempt_ref': attempt_ref,
+                            'prepared_handle': prepared['prepared_handle']})
+
     def discover(self, ref='upload:sample', member=None):
         response = self.request('inspect', source={'upload_ref': ref, 'member': member})
         self.assertEqual(response['outcome'], 'inspected')
