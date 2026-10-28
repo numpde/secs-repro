@@ -1,5 +1,6 @@
 PROVIDER_IMAGE_TAG := secs-repro/provider:local
 PROVIDER_WHEELHOUSE := $(REPOSITORY_ROOT)/wheelhouse/provider
+override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.4.0/provider_core-0.4.0-py3-none-any.whl
 
 # Initialization is a host filesystem operation, not a build or API operation.
 # Pass the literal name through the environment to keep shell syntax out of it.
@@ -72,6 +73,8 @@ provider/support/check:
 provider/support/write:
 	@python3 -B tools/project_support_catalog.py write docs/index.html
 
+# Upgrade provider.in and the qualified provider.lock together for a new SDK.
+# Regeneration reuses that lock as a constraint; it does not refresh dependencies.
 provider/lock/write:
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot write the provider lock as host UID 0.' >&2
@@ -87,12 +90,21 @@ provider/lock/write:
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
 		--env UV_CACHE_DIR=/output/.uv-cache \
 		--mount type=bind,src="$$locks_directory/provider.in",dst=/input/provider.in,readonly \
+		--mount type=bind,src="$$locks_directory/provider.lock",dst=/input/provider.lock,readonly \
 		--mount type=bind,src="$$stage",dst=/output \
 		"$$lock_image" /input/provider.in \
+		--constraint /input/provider.lock \
 		--python-version "$(PACKAGES_PYTHON_VERSION)" \
 		--python-platform x86_64-manylinux_2_28 \
 		--generate-hashes --index-url https://pypi.org/simple \
-		--output-file /output/provider.lock
+		--output-file /output/provider.raw
+	$(DOCKER) run --rm --network none --read-only --cap-drop ALL \
+		--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
+		--pull never --pids-limit 16 --cpus 1 --memory 64m --memory-swap 64m \
+		--entrypoint python --mount type=bind,src="$$stage",dst=/output \
+		"$$lock_image" /usr/local/bin/normalize_lock.py \
+		/output/provider.raw /output/provider.lock
+	rm "$$stage/provider.raw"
 	rm -rf "$$stage/.uv-cache"
 	chmod 0644 "$$stage/provider.lock"
 	mv -f "$$stage/provider.lock" "$$locks_directory/provider.lock"
@@ -115,6 +127,7 @@ provider/wheelhouse: requirements/provider.lock
 		--mount type=bind,src="$$stage",dst=/wheelhouse \
 		"$(PYTHON_BASE)" python -m pip download --require-hashes \
 		--only-binary=:all: --no-deps --index-url https://pypi.org/simple \
+		--find-links "$(PROVIDER_CORE_WHEEL_URL)" \
 		--dest /wheelhouse -r /input/requirements.lock
 	rm -rf "$$stage/.tmp"
 	( cd "$$stage" && sha256sum * | LC_ALL=C sort ) > "$$stage/.complete"
