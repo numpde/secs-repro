@@ -81,9 +81,15 @@ scientific admission for that binding until handoff can succeed. Settled GPU
 resources can be released independently. Other provider bindings remain isolated.
 
 The supervising scheduler owns that gate, not the now-free GPU slot. Its retry
-observer records the blocking controller; clear it only when the original
-invocation completes with DeliveryAcceptedCheckpoint. A held/failed owner needs
-explicit disposition, not a timer-based resume. That report's acknowledgement
+observer records the blocking controller. Normal completion with
+DeliveryAcceptedCheckpoint clears its delivery-pressure blocker. If enqueue was
+acknowledged but independent retirement failed, the invocation can raise while
+retaining verified delivery_acceptance in its original execution failure. An
+explicit disposition may clear only delivery pressure from that evidence; it
+must retain cleanup exclusion, the live owner, and lifetime locking. Already
+queued bytes must not be called unacknowledged, retried as fresh work, or made
+contingent on successful cleanup. Other held/failed owners require explicit
+resolution, not timer-based resume. That report's acknowledgement
 does not reserve future queue space: each new admission still needs its own
 live terminal reservation and may meet backpressure again. Do not use an empty
 inventory or successful status read as a substitute for that handoff proof.
@@ -285,6 +291,19 @@ must be stated in operator guidance, not described as equivalent recovery.
 Deployment and old obligations
 -----------------------------
 
+Separate stopping new admission from setting the controllers' stopping event.
+A scientific outcome being returned is not yet a selected terminal handoff:
+_handoff checks require_execution_ready before selection. If stopping wins that
+race, the controller can refuse selection. Do not promise that every returned
+outcome drains on orderly stop. Already selected/approved handoffs retain their
+original exact retry owner; unselected outcomes stopped by controller policy
+need settled original work/I/O followed by the SDK's explicit supported
+suppression disposition where applicable. Record the reason; never send them
+through an alternate publisher or mark them enqueued. A selected report cannot
+be erased using the unselected-outcome suppression path. Other unresolved
+outcomes remain held. Shutdown readiness requires each owner's actual valid
+delivery/suppression disposition and independent cleanup, not a fabricated ACK.
+
 On orderly shutdown, stop admission and settle the original controller, API,
 delivery, and native operations. work_settled alone is insufficient: an outcome
 still awaiting durable handoff can block shutdown_ready. Hold ProviderLifetime
@@ -357,6 +376,17 @@ a closed socket or a completed Python wrapper as proof.
 removes publication/retry responsibility from the scientific process. Recreating
 a local outbox or publisher would cancel that ownership simplification.
 
+
+The admitted-crash path catches ANY retry-observer exception, including a
+semantic admission-gate failure. Raising that exception alone cannot enforce
+fail-closed scheduling. Before a semantic gate update, latch a separate visible
+intervention/admission-block marker; clear that provisional marker only after
+the semantic update succeeds. On failure, preserve its cause and leave the
+marker set independently of whether the SDK catches the exception. Admission
+always checks this marker. Diagnostic-sink isolation must not clear it; operator
+recovery needs an explicit validated gate/owner disposition. Protecting crash
+handoff must not silently reopen scientific admission after scheduler failure.
+
 Report and evidence budgets
 ---------------------------
 
@@ -386,6 +416,16 @@ Completion and evidence required
 --------------------------------
 
 Before merge, prove the actual SECS binding, not only SDK fixtures:
+
+- Race stopping with scientific return before terminal selection, then with an
+  already selected handoff. Prove supported explicit suppression versus exact
+  draining; neither path invents delivery or cleanup acceptance.
+- Inject durable enqueue ACK followed by independent retirement failure. Clear
+  delivery pressure only from retained verified acceptance, preserve cleanup
+  exclusion, and never resend already queued bytes as a replacement report.
+- Fail the semantic gate update during admitted-crash retry. Even if the SDK
+  catches the callback exception and handoff continues, admission stays latched
+  closed and the semantic failure remains visible for explicit intervention.
 
 - Reader/formula rejection returns to interpretation before one consumed prepare
   handle leads to at most one search. Membership changes cannot substitute input.
