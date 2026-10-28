@@ -80,6 +80,14 @@ When the binding's queue is full, retain the controller/report and pause new
 scientific admission for that binding until handoff can succeed. Settled GPU
 resources can be released independently. Other provider bindings remain isolated.
 
+The supervising scheduler owns that gate, not the now-free GPU slot. Its retry
+observer records the blocking controller; clear it only when the original
+invocation completes with DeliveryAcceptedCheckpoint. A held/failed owner needs
+explicit disposition, not a timer-based resume. That report's acknowledgement
+does not reserve future queue space: each new admission still needs its own
+live terminal reservation and may meet backpressure again. Do not use an empty
+inventory or successful status read as a substitute for that handoff proof.
+
 Make preparation a real boundary
 --------------------------------
 
@@ -145,11 +153,53 @@ displaced generic fork/relay/reap owner, rather than nesting two supervisors.
 
 Successful scientific replies need an explicit quiescence rule: the operation
 has returned, no child work is still using its inputs, prepared state is consumed
-or released, and per-Attempt source grants can be revoked. Only then may retire
+or released, and per-Attempt source access can be released. Only then may retire
 return and the pool reuse the worker. A healthy loaded child need not exit after
 every Attempt. On interruption or uncertain quiescence, stop the child and obtain
 native retirement/scratch confirmation instead. Preserve files and block that
 worker slot when confirmation fails.
+
+The following scientific lease protocol is part of the required SECS change;
+it is not already provided by the SDK. One RunnerSession.operation and its
+scratch directory cover the loaded child's lifetime, possibly many Attempts.
+They must never be used as if they uniquely identified one Attempt.
+
+The pool is the sole owner of that native control session and science stream.
+It serializes checkout, dispatch, release, and exit handling. Each checkout has
+an unguessable lease identity distinct from the Attempt and native operation.
+Scientific frames carry the worker boot, lease, Attempt, request sequence, and
+prepared-handle identity where applicable. The child acknowledges lease/phase
+entry before dependent scientific work. Only the corresponding live session
+may consume its responses. Reject stale, duplicate, wrong-boot, and wrong-lease
+frames; do not let a later session drain or reinterpret an earlier reply.
+
+Before checkout can change owners, a correlated release reply must establish
+that the previous request ended, its tasks joined, and all prepared state and
+source readers were cleared. Join the provider-side original exchange too.
+The release acknowledgement may be the final scientific reply if cleanup has
+already completed before sending it; do not add another round trip merely to
+rename the same proof.
+The pool then invalidates that handle/lease and admits the next lease only
+after a fresh correlated readiness/lease-entry exchange. A missing release,
+unreadable stream, or unmatched reply invalidates the child for reuse.
+
+An exit with no active lease is an idle worker failure: replace the child after
+settlement, without failing a completed or newly selected Attempt. Before the
+new lease's entry acknowledgement, an observed exit does not prove the child
+entered that lease's scientific phase. Do not borrow the old lease's evidence
+for it. After a matching entry acknowledgement, the original native exit may
+be associated with that live lease/phase, subject to SDK admission. That records
+where work stopped; it does not prove that this Attempt caused the process to die.
+
+SourceAccess passes filesystem paths, so clearing a mapping or unlinking a file
+cannot revoke an open descriptor or erase bytes already materialized in the
+worker. A release reply is cooperative evidence from the trusted worker: all
+readers/archive handles and per-Attempt prepared data are closed/released, and
+no background task can still use them. Remove that Attempt's source directory
+only after this protocol and the provider's readers settle. Do not describe
+this as kernel-enforced per-Attempt revocation. Where that cooperation is not
+established, terminate/reap the child before releasing the sources. Forced
+revocation within a still-live warm child is outside the current design.
 
 Use a separate API transport for source acquisition and another for Hello;
 neither shares the controller's serial transport while observation is active.
@@ -179,6 +229,33 @@ worker is not enough. Record local interruption before closing channels or
 requesting stop. On unexpected EOF, observe original retirement within a bounded
 wait before deliberate close; retain the original reader if that wait expires.
 
+Distinguish expiry of a caller's wait from failure of the lifecycle read itself.
+If the original read is still running, keep and join that same operation; never
+start another reader. If RunnerSession's own read raises, including its timeout
+after a partial frame, it stores _observation_failure and refuses later reads.
+The original object then preserves a failure, not a resumable frame reader.
+A later child exit cannot repair that channel or establish original_exit through
+a second observation. Process exit and scratch cleanup are separate facts.
+
+The current SDK has no in-process reset for this poisoned channel. Mark local
+interruption, request stop through the original native owner where possible,
+retain sources, and expose an unconfirmed-retirement state that blocks this
+slot. Health/status snapshots or absence of a socket do not clear it. Do not
+introduce another supervisor or synthesize a retirement receipt to regain capacity.
+
+The recovery path is explicit offline containment: stop admission, preserve any
+live unacknowledged report, and attempt its original handoff first. If ownership
+still cannot settle, an operator may authorize emergency stopping of the affected
+provider and exact runner deployment. Confirm that its original supervisor and
+child processes are gone through the deployment owner, then inspect and clean
+the exact retained operation/source directories under exclusive ownership.
+Verify scratch cleanup independently before restarting a fresh native session.
+This retires an unconfirmed lifetime; it does not repair its SDK object, fabricate
+a crash report, or reconstruct an Attempt on restart. Emergency provider death
+may lose an unacknowledged report and must disclose that consequence. Qualify
+this recovery procedure before rollout; the current status protocol is not
+evidence that it is already implemented.
+
 The current SECS WorkerClient is not an SDK RunnerSession and cannot be cast or
 wrapped by name to manufacture this evidence. Shared native control adoption is
 part of this design, not an optional promise to fill the gap after rollout.
@@ -190,6 +267,15 @@ store. Diagnostic history does not authorize execution, replay, or publication.
 Its write failure remains visible and must not veto an otherwise admitted crash
 report or replace a chosen outcome. Do not retain a hidden executable journal
 under the name of diagnostic history.
+
+For ordinary reports, SDK 0.4.0 still lets a failing retry observer stop handoff;
+only admitted-crash retry observers have core protection. The SECS observer
+must keep semantic admission/backpressure state separate from diagnostic I/O,
+retain a bounded sink failure in operator-visible state, and not propagate that
+diagnostic failure back into a chosen report's handoff. Do not silently swallow
+it or misclassify an ownership failure as a harmless logging error. Qualify this
+consumer callback behavior for both selected success and classified failure;
+the design does not assume a broader SDK guarantee than the source provides.
 
 Durability begins when shared delivery commits the exact report. If SECS dies
 before it can confirm handoff, acceptance may be unknown and the report may be
@@ -204,6 +290,20 @@ delivery, and native operations. work_settled alone is insufficient: an outcome
 still awaiting durable handoff can block shutdown_ready. Hold ProviderLifetime
 until all controllers are shutdown-ready and the other resource owners settle.
 Forced death does not acquire orderly shutdown guarantees by deleting state.
+
+The normal stop sequence is: stop admission; settle/stop science; release settled
+GPU resources; keep each exact selected handoff and its retry owner alive; wait
+for matching durable enqueue and all required cleanup; then release the lifetime
+lock and exit. Use the SDK's supported settlement path rather than cancelling
+the handoff task as a substitute for draining. Surface blocked shutdown with
+its Attempt/report identities, delivery state, and independent cleanup failures.
+
+If delivery never becomes available, this wait has no guaranteed finite bound.
+A generic service stop timeout must not silently be the normal report-loss policy.
+Deployment shutdown tooling must observe and escalate a blocked drain before
+automatic kill, and allow the operator to restore delivery. An explicit emergency
+force-stop decision can accept loss of an unacknowledged report; it is separate
+from successful orderly shutdown and creates no restart recovery promise.
 
 Use the shared neutral binding definition for API identity, signing credential,
 CA, route, and delivery socket. Provider and service select the same binding;
@@ -261,10 +361,26 @@ Report and evidence budgets
 ---------------------------
 
 Configure explicit live-control, terminal-body, queue-count, and queue-byte
-allowances. Qualify the real encoded result/failure envelope against the SDK's
-terminal-body limit; do not silently truncate scientific results to fit. Keep
-diagnostic-history budgets separate. Resource capacity is admission policy, not
-permission to overlap scientific requests or discard a retained report.
+allowances. The SDK caps a controller's terminal reservation at 2,097,152 bytes;
+raising a SECS configuration value cannot enlarge that ceiling. The bound applies
+to the fully encoded complete/fail request, including its envelope, not only
+the scientific content or separately stored diagnostic evidence.
+
+Before rollout, bound the actual encoder using the supported candidate counts,
+selection/rejection histories, text lengths, and scientific metadata. Verify the
+worst supported configuration fits the ceiling, and reject configurations that
+cannot satisfy that bound before admitting science. If required scientific
+content does not fit, obtain a deliberately revised and qualified SDK/wire
+contract before adoption; this note does not authorize one.
+
+Unexpected oversize after computation is a held software/contract failure. Stop
+new admission, retain the exact outcome and cleanup owner, release only settled
+scientific resources, and expose the attempted encoded size and fixed ceiling.
+Do not truncate, rerun science, or replace that result with a convenient FAIL.
+The current controller cannot enqueue it or become shutdown-ready by increasing
+its allowance. Operator/developer resolution must preserve the outcome and
+explicitly address any emergency loss risk; ordinary restart is not a remedy.
+Keep diagnostic-history budgets separate from these required report bytes.
 
 Completion and evidence required
 --------------------------------
@@ -279,6 +395,18 @@ Before merge, prove the actual SECS binding, not only SDK fixtures:
   cancellation stops, and API observation outages follow an explicit bounded policy.
 - Known worker exit and deliberate interruption remain distinguishable. Failed
   stop/cleanup keeps sources and worker exclusion; healthy reuse avoids reload.
+- Delay old scientific replies past release, inject wrong lease/sequence, and
+  kill an idle child between leases. No reply or exit is attributed to a new
+  Attempt without its own entry/phase evidence. Prove the worker really closes
+  per-Attempt readers/prepared state before a cooperative release acknowledgement.
+- Exercise a caller wait expiring around a still-running original read separately
+  from a lifecycle read that fails on a partial frame. Subsequent native exit
+  does not clear a poisoned read or prove scratch cleanup. Rehearse the offline
+  containment procedure and refuse reuse before all its proof obligations hold.
+- Keep delivery unavailable throughout shutdown: settled GPU work releases, exact
+  report retry and lifetime exclusion remain, and blocked drain is visible. Test
+  the supported encoded maximum and an unexpected oversize outcome without
+  truncation, recomputation, replacement failure, or a false shutdown-ready state.
 - Lost enqueue acknowledgement retries identical bytes while the live owner remains;
   queue-full backpressure releases settled scientific resources without losing
   the report. A chosen report and independent cleanup failure both remain visible.
