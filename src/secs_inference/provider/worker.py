@@ -14,20 +14,15 @@ import multiprocessing
 from multiprocessing.connection import wait
 from pathlib import Path
 import socket
-import struct
 import stat
 from time import monotonic
 
 from secs_inference.provider.socket_deadline import socket_deadline
 from secs_inference.provider.diagnostics import exception_evidence
+from secs_inference.provider.worker_protocol import FrameBuffer, WorkerError, send, serve_scientific_session
 
 
-_MAX_MESSAGE_BYTES = 2 * 1024 * 1024
 _LOG = logging.getLogger(__name__)
-
-
-class WorkerError(RuntimeError):
-    """The scientific worker did not complete its requested operation."""
 
 
 class WorkerStopUnconfirmed(WorkerError):
@@ -58,7 +53,7 @@ class WorkerClient:
             _close_socket(self.socket, "the controller's scientific-worker socket")
             raise
         self.stopped = False
-        self._incoming = _FrameBuffer()
+        self._incoming = FrameBuffer()
         self._messages = []
         try:
             ready = self._receive_next(startup_deadline, check_running)
@@ -77,7 +72,7 @@ class WorkerClient:
             raise WorkerError("The scientific worker has stopped; reconnect before accepting work")
         try:
             self.socket.settimeout(_remaining(deadline))
-            _send(self.socket, command | {"deadline": deadline})
+            send(self.socket, command | {"deadline": deadline})
             response = self._receive_next(deadline, check_active)
             self._accept_stop(response)
             return response
@@ -117,7 +112,7 @@ class WorkerClient:
             deadline = monotonic() + 10
             self.socket.settimeout(10)
             try:
-                _send(self.socket, {"operation": "cancel"})
+                send(self.socket, {"operation": "cancel"})
             except OSError as error:
                 # The supervisor may already have stopped and closed its write
                 # side. Its queued acknowledgement is still the needed proof.
@@ -212,7 +207,7 @@ def _serve_session(client: socket.socket, load_handler) -> None:
     diagnostic = None
     try:
         context = multiprocessing.get_context("spawn")
-        child = context.Process(target=_child_loop, args=(child_socket, load_handler))
+        child = context.Process(target=serve_scientific_session, args=(child_socket, load_handler))
         child.start()
         _close_socket(child_socket, "the supervisor's child-side socket")
         child_socket = None
@@ -241,7 +236,7 @@ def _serve_session(client: socket.socket, load_handler) -> None:
     if reason is not None:
         try:
             with socket_deadline(client, monotonic() + 2):
-                _send(client, {"outcome": "stopped", "reason": reason,
+                send(client, {"outcome": "stopped", "reason": reason,
                                **({"diagnostic": diagnostic} if diagnostic is not None else {})})
         except OSError as error:
             _LOG.error("Scientific child exit was confirmed, but its acknowledgement could not be delivered: %s",
@@ -250,7 +245,7 @@ def _serve_session(client: socket.socket, load_handler) -> None:
 
 def _relay(client, parent, child):
     """Return a stop reason; only the enclosing process owner may acknowledge it."""
-    buffers = {client: _FrameBuffer(), parent: _FrameBuffer()}
+    buffers = {client: FrameBuffer(), parent: FrameBuffer()}
     deadline = None
     while True:
         timeout = None if deadline is None else max(0, deadline - monotonic())
@@ -277,7 +272,7 @@ def _relay(client, parent, child):
                     deadline = None
                 outgoing = parent if incoming is client else client
                 with socket_deadline(outgoing, monotonic() + 2):
-                    _send(outgoing, message)
+                    send(outgoing, message)
         if child.sentinel in ready:
             return "child_exit"
 
@@ -293,84 +288,6 @@ def _reap(child) -> None:
     if child.is_alive():
         raise WorkerStopUnconfirmed("The scientific child has not exited after termination; the supervisor cannot accept another session")
     child.join()
-
-
-def _child_loop(connection: socket.socket, load_handler) -> None:
-    """Load scientific state once, then execute requests without network inputs."""
-    with connection:
-        try:
-            handler = load_handler()
-        except Exception as error:
-            diagnostic = {"outcome": "failed", **exception_evidence(error)}
-            print(json.dumps(diagnostic), flush=True)
-            _send(connection, diagnostic)
-            return
-        _send(connection, {"outcome": "ready"})
-        while True:
-            command = _receive(connection)
-            # Answer in the loaded child, not the supervisor: a listening
-            # socket alone cannot establish that scientific state is usable.
-            if command.get("operation") == "ready":
-                _send(connection, {"outcome": "ready"})
-                continue
-            try:
-                response = handler(command)
-            except Exception as error:
-                # The process boundary owns unexpected-failure serialization,
-                # including imports or setup outside the scientific reader's catches.
-                response = {"outcome": "failed", **exception_evidence(error)}
-            _send(connection, response)
-
-
-class _FrameBuffer:
-    """A bounded frame accumulator shared by supervisor and blocking readers."""
-
-    def __init__(self):
-        self.bytes = bytearray()
-
-    def feed(self, chunk: bytes) -> list[dict]:
-        self.bytes.extend(chunk)
-        messages = []
-        while len(self.bytes) >= 4:
-            length = struct.unpack("!I", self.bytes[:4])[0]
-            if not 1 <= length <= _MAX_MESSAGE_BYTES:
-                raise WorkerError("Scientific worker message exceeds its framing limit")
-            if len(self.bytes) < length + 4:
-                break
-            document = json.loads(self.bytes[4:length + 4])
-            del self.bytes[:length + 4]
-            if type(document) is not dict:
-                raise WorkerError("Scientific worker message is not an object")
-            messages.append(document)
-        return messages
-
-
-def _send(connection: socket.socket, document: dict) -> None:
-    raw = json.dumps(document, ensure_ascii=False, allow_nan=False).encode("utf-8")
-    if len(raw) > _MAX_MESSAGE_BYTES:
-        raise WorkerError("Scientific worker message exceeds its framing limit")
-    connection.sendall(struct.pack("!I", len(raw)) + raw)
-
-
-def _receive(connection: socket.socket) -> dict:
-    header = _exact(connection, 4)
-    length = struct.unpack("!I", header)[0]
-    if not 1 <= length <= _MAX_MESSAGE_BYTES:
-        raise WorkerError("Scientific worker message exceeds its framing limit")
-    document = json.loads(_exact(connection, length))
-    if type(document) is not dict:
-        raise WorkerError("Scientific worker message is not an object")
-    return document
-
-
-def _exact(connection: socket.socket, length: int) -> bytes:
-    result = bytearray()
-    while len(result) < length:
-        chunk = connection.recv(min(length - len(result), 64 * 1024))
-        if not chunk:
-            raise WorkerError("The scientific worker connection ended before its message was complete")
-        result.extend(chunk)
-    return bytes(result)
 
 
 def _remaining(deadline: float) -> float:

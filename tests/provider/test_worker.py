@@ -13,7 +13,8 @@ from time import monotonic, sleep
 import unittest
 from unittest.mock import Mock, patch
 
-from secs_inference.provider.worker import WorkerClient, WorkerError, WorkerStopUnconfirmed, serve_worker, _listen, _serve_session, _send, _receive
+from secs_inference.provider.worker_protocol import send, receive
+from secs_inference.provider.worker import WorkerClient, WorkerError, WorkerStopUnconfirmed, serve_worker, _listen, _serve_session
 
 
 def load_test_handler():
@@ -138,7 +139,7 @@ class WorkerTests(unittest.TestCase):
                 with patch("secs_inference.provider.worker.socket.socketpair", return_value=(parent, child_socket)), \
                      patch("secs_inference.provider.worker.multiprocessing.get_context", return_value=context), \
                      patch("secs_inference.provider.worker._reap") as reaping, \
-                     patch("secs_inference.provider.worker._send") as sending:
+                     patch("secs_inference.provider.worker.send") as sending:
                     with self.assertRaises(RuntimeError) as caught:
                         _serve_session(Mock(), Mock())
                 self.assertIs(caught.exception, original)
@@ -161,7 +162,7 @@ class WorkerTests(unittest.TestCase):
              patch("secs_inference.provider.worker.multiprocessing.get_context", return_value=context), \
              patch("secs_inference.provider.worker._relay", return_value="cancel"), \
              patch("secs_inference.provider.worker._reap") as reaping, \
-             patch("secs_inference.provider.worker._send") as sending, \
+             patch("secs_inference.provider.worker.send") as sending, \
              patch("secs_inference.provider.worker.socket_deadline", return_value=nullcontext()), \
              self.assertLogs("secs_inference.provider.worker", level="ERROR") as captured:
             _serve_session(Mock(), Mock())
@@ -187,7 +188,7 @@ class WorkerTests(unittest.TestCase):
                      patch("secs_inference.provider.worker.socket.socketpair", return_value=(parent, child_socket)), \
                      patch("secs_inference.provider.worker._relay", side_effect=ValueError("private-relay")), \
                      patch("secs_inference.provider.worker._reap", side_effect=stop_failure if stage == "reap" else None), \
-                     patch("secs_inference.provider.worker._send", side_effect=OSError(errno.EPIPE, "private-delivery")) as sending, \
+                     patch("secs_inference.provider.worker.send", side_effect=OSError(errno.EPIPE, "private-delivery")) as sending, \
                      patch("secs_inference.provider.worker.socket_deadline", return_value=nullcontext()), \
                      self.assertLogs("secs_inference.provider.worker", level="ERROR") as captured:
                     if stage == "reap":
@@ -216,7 +217,7 @@ class WorkerTests(unittest.TestCase):
                     worker = WorkerClient(Path("/worker.sock"), startup_deadline=monotonic() + 5)
                 receive_failure = EOFError("private-receive")
                 receive = {"return_value": {"outcome": "stopped"}} if acknowledged else {"side_effect": receive_failure}
-                with patch("secs_inference.provider.worker._send", side_effect=OSError(errno.EPIPE, "private-send")), \
+                with patch("secs_inference.provider.worker.send", side_effect=OSError(errno.EPIPE, "private-send")), \
                      patch.object(worker, "_receive_next", **receive), \
                      self.assertNoLogs("secs_inference.provider.worker", level="WARNING"):
                     if acknowledged:
@@ -334,7 +335,7 @@ class WorkerTests(unittest.TestCase):
             def serve():
                 connection, _ = listener.accept()
                 with connection:
-                    _send(connection, {"outcome": "ready"})
+                    send(connection, {"outcome": "ready"})
                     script(connection)
             thread = Thread(target=serve, daemon=True)
             thread.start()
@@ -349,13 +350,13 @@ class WorkerTests(unittest.TestCase):
 
     def test_partial_raced_result_is_drained_before_stop_acknowledgement(self):
         def serve(connection):
-            _receive(connection)
+            receive(connection)
             raw = json.dumps({"outcome": "analysed", "padding": "x" * 100}).encode()
             frame = struct.pack("!I", len(raw)) + raw
             connection.sendall(frame[:8])
-            self.assertEqual(_receive(connection)["operation"], "cancel")
+            self.assertEqual(receive(connection)["operation"], "cancel")
             connection.sendall(frame[8:])
-            _send(connection, {"outcome": "stopped"})
+            send(connection, {"outcome": "stopped"})
         def exercise(worker):
             with self.assertRaises(TimeoutError):
                 worker.request({"operation": "execute"}, deadline=monotonic() + 0.05)
@@ -365,7 +366,7 @@ class WorkerTests(unittest.TestCase):
     def test_queued_stop_ack_is_read_even_when_cancel_can_no_longer_be_sent(self):
         closed = Event()
         def serve(connection):
-            _send(connection, {"outcome": "stopped"})
+            send(connection, {"outcome": "stopped"})
             connection.close()
             closed.set()
         def exercise(worker):
