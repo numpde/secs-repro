@@ -1,0 +1,76 @@
+SECS provider adoption: deferred work and qualification limits
+============================================================
+2026-10-29
+
+Common design and active decisions:
+  <local repository checkout>
+  <local repository checkout>
+
+These items do not waive the common design's correctness requirements or
+constitute deployment approval. Active adoption blockers belong in note 014.
+In particular, independent work deadlines, original native retirement, source
+retention, and removal of duplicate lifecycle/publication owners are active
+implementation requirements, not caveats to defer.
+Shared runtime support, safe deployment reconciliation, and selected-report
+ownership also remain active in note 014.
+
+GPU and full-model qualification
+-------------------------------
+
+Owner: SECS scientific qualification maintainer. Deferred because the current
+infrastructure slices preserve scientific/model policy. Revisit before claiming
+checkpoint/GPU effects or rolling out the corresponding scientific image.
+
+Commit 19e356c qualifies the isolated native SDK environment on the CPU image,
+with real inherited descriptors, lease identity, repeated use of one child,
+and SDK retirement. The reader/scientific-boundary and input suites passed.
+This is not a GPU image qualification, a checkpoint inference result, or proof
+of numerical equivalence. Run the maintained model/GPU lanes before claiming
+those effects or rolling out the corresponding scientific image. The native
+installation does not change the scientific Python or dependency locks.
+Final shared runtime placement remains an active decision in note 014.
+
+Deployment and recovery rehearsal
+--------------------------------
+
+Owner: shared deployment maintainer and SECS deployment owner. Defer only the
+deployment-specific rehearsal: no rollout is authorized or performed. Revisit
+after the shared drain/reconciliation design lands and before a deployment.
+
+The eventual deployment still needs its actual blocked-drain and native
+containment procedures rehearsed under the common design. A finite Compose
+stop grace is not proof that an unacknowledged report drains successfully.
+An unconfirmed native owner keeps its sources and exclusion until settlement
+is proved; status/socket disappearance or a replacement scratch root is not
+that proof. Do not build provider-local recovery machinery just to avoid this
+qualification. Any shared online barrier must establish its real continuity
+preconditions; failed proof remains held for explicit operator resolution.
+That protects current obligations; it is not the desired final reconciliation
+experience. Shared drain/reconciliation implementation remains active work.
+
+Legacy obligations at cutover
+----------------------------
+
+Owner: SECS deployment operator. Deferred because this session does not perform
+a deployment. Revisit before any legacy-to-shared-runtime cutover.
+
+A future deployment cutover must inspect and settle the real legacy START,
+active, terminal, and held obligations using their qualified owner before
+switching runtimes. Local adapter tests cannot establish a deployment's empty
+obligation set. Preserve existing keys, terminal bytes, shared delivery state,
+and diagnostic history; do not delete them to obtain a clean migration check.
+The implementation must retain the corresponding fail-closed admission guard.
+
+Standalone evidence provenance
+------------------------------
+
+Owner: SECS qualification coordinator. Deferred because existing Docker command
+receipts bind these runs to their images. Revisit at the next retained capture
+or before relying on a log outside its tool history.
+
+Some contained-test logs rely on their recorded Docker command receipts for
+image identity. Include the image identity beside future standalone captures;
+formatting alone does not justify broad retesting. During D021, the old D005
+science/input log filenames were reused. Historical D005 runs remain in tool
+history and note 014; the current files must not be cited as those original
+runs. D021 captures use /tmp/secs-native-* names and the recorded CPU image.
