@@ -1,0 +1,296 @@
+SECS: adopt the shared Attempt controller and result delivery
+===========================================================
+2026-10-28
+
+Status and decision
+-------------------
+
+This note defines the intended redesign, not an implemented migration or a
+deployment instruction. Adopt provider-core's AttemptController, its native
+supervision/control layer, and shared delivery. SECS continues to own input
+interpretation, Upload selection and reading, scientific preparation, model
+execution, offerings, result content, and deployment resource policy.
+
+The purpose is to remove a second implementation of START uncertainty, Attempt
+observation, lifecycle progress, terminal handoff, native retirement, and result
+publication. The final runtime has one owner for each of these responsibilities.
+Keeping ExecutionLoop and its journal as a parallel recovery engine would not
+complete this redesign.
+
+The existing execution path works and contains important scientific behavior.
+Adoption is worthwhile only if that behavior survives and the displaced generic
+machinery is removed. This is a substantive migration, not an import substitution.
+
+Source reviewed
+---------------
+
+SECS checkout: 7356c354368f2355d3ab5cef00cf48c67cea9c2c.
+nmr-provider-tools checkout: e8f3afc4c18ee5faf1bde6a2e08dd90f25abd2e9;
+the package declares provider-core 0.4.0.
+
+SECS owners under src/secs_inference/provider/:
+  execution.py: ExecutionLoop.step, _recover_active, _publish_terminal
+  runtime.py: run_execution, worker readiness and reuse
+  analysis_run.py: run_analysis, AttemptSources, _worker_request
+  worker_model.py: ScientificHandler.__call__, _analyse
+  worker.py: WorkerClient and child supervision
+  outcomes.py, analysis_evidence.py, diagnostics.py, attempt_store.py
+Other SECS sources: deployment/compose.py and notes/004_provider_execution.txt.
+
+Shared owners under packages/provider-core/src/provider_core/:
+  controller.py, execution.py, analysis.py, ownership.py, lifetime.py
+  runner.py, runner_session.py, runner_protocol.py
+  delivery_client.py, delivery_store.py, deployment_binding.py
+
+These are source observations, not evidence of a particular running deployment.
+Check the selected release's actual contracts again during implementation.
+
+Finished ownership
+------------------
+
+The SECS process selects eligible Jobs and an explicit resource policy. One
+shared live claim registry excludes overlapping ownership. Each admitted Job
+gets one SECS AnalysisSession and one shared AttemptController. The controller
+owns exact START/replay, API point reads, progress, stop decisions, and selection
+of the binding's returned outcome for delivery. SECS does not run a second
+snapshot/progress loop inside scientific operations.
+
+Acquire ProviderLifetime before API effects, using a canonical private directory
+shared by every container that could supervise this provider identity on the
+host. A container-private directory cannot exclude a second container. This
+lock excludes local supervisors; it stores no recoverable Attempt state.
+
+The session implements prepare, execute, and retire. It owns its actual source
+files, interpreter work, scientific requests, and worker lease. Shared native
+supervision owns child exit and control-channel retirement. A SECS worker pool
+owns model readiness and qualified reuse of an idle loaded model/index.
+
+One shared delivery binding for the API-origin/provider-ref pair accepts exact
+complete/fail bodies. The delivery service owns the persistent queue, publication,
+retry pacing, and held-report operator state. SECS retains the exact outcome
+until its matching durable local acknowledgement. That acknowledgement does not
+establish API acceptance. No SECS journal also publishes the same report.
+
+SECS keeps the mol_from_1h_spectrum_formula offering and the
+secs.elucidation.result.v1 result. Input readers, formula rules, index selection,
+GPU selection, scientific precision, retrieval budgets, and graph-GA policy
+remain SECS responsibilities. Generic SDK code must not acquire those rules.
+
+When the binding's queue is full, retain the controller/report and pause new
+scientific admission for that binding until handoff can succeed. Settled GPU
+resources can be released independently. Other provider bindings remain isolated.
+
+Make preparation a real boundary
+--------------------------------
+
+Today run_analysis interleaves interpretation, bounded inspection, acquisition,
+and worker analyse calls. An input_rejected reply returns to interpretation.
+ScientificHandler._analyse both prepares the selected spectrum and launches
+elucidation. Wrapping this entire loop in execute would conceal the boundary
+between choosing valid input and beginning a scientific calculation.
+
+Split the scientific worker operation at input_adapter.prepare and formula
+admission. A prepare operation materializes and validates the selected input,
+then returns a handle to worker-owned prepared state. The handle is bound to
+the worker boot, Attempt, and exact selection/source facts; it is not permission
+to read changed files later. Execute consumes that handle once and creates a
+fresh graph-GA search using the existing scientific implementation.
+
+SECS AnalysisSession.prepare performs the following work:
+
+1. Accept the controller's verified specification and actual START acknowledgement.
+   Acquire Upload membership/capabilities on separately owned API transport.
+2. Run the existing bounded interpretation conversation. Preserve inspection
+   facts, reader/formula rejections, attributed explanations, and deadlines.
+3. Download selected Uploads with length/hash verification and aggregate byte
+   accounting. Reconcile membership before scientific dispatch as today.
+4. Ask the worker to prepare the selected source and formula. A proven input
+   rejection may return to the same conversation before execution begins.
+5. Return PreparedAnalysis whose protected identity describes the actual admitted
+   selection, verified source identities, and prepared worker state. Retain the
+   worker handle and live resources in this session, not in the SDK registry.
+
+An inability to choose usable input returns the existing SECS-classified
+AnalysisFailure with its attributed explanation. It does not become success.
+Execute consumes the precise prepared handle, returns the existing analysed
+result, or maps no_starting_candidates to the existing failed outcome. It does
+not reinterpret inputs after an indeterminate scientific dispatch. Unexpected
+model or transport failures do not authorize another calculation.
+
+This split must be proved at the actual worker boundary. Moving a flag or hashing
+an unvalidated selection is insufficient. If parsing or normalization is repeated
+at execution, prove it uses the same immutable state rather than changed sources.
+
+Async execution, readiness, and warm reuse
+-----------------------------------------
+
+The current worker/API/interpreter flow is blocking. The new async session must
+yield while those operations run so the controller can continue observing the
+Attempt. An executor thread is an implementation option, not evidence of stopped
+work: retain and join its original operation, signal the actual worker, and
+confirm settlement before releasing the lease or source files. Cancellation of
+an asyncio wrapper alone cannot establish any of those facts.
+
+Keep one scientific worker slot initially. The SDK's live bookkeeping capacity
+is a separate resource allowance and does not authorize eight GPU calculations.
+Preserve readiness before START and keep the model/index loaded across healthy
+Attempts. A provider-owned pool creates a per-Attempt lease only for a ready
+worker. Failed START must still release that lease through session retirement.
+
+Adopt provider_core.runner with an owner-session lifetime for the loaded child,
+and provider_core.runner_session.RunnerSession for its control channel. Adapt
+the scientific child entry point to the inherited science/lease descriptors;
+keep the SECS scientific messages and model/index loading in SECS. Remove the
+displaced generic fork/relay/reap owner, rather than nesting two supervisors.
+
+Successful scientific replies need an explicit quiescence rule: the operation
+has returned, no child work is still using its inputs, prepared state is consumed
+or released, and per-Attempt source grants can be revoked. Only then may retire
+return and the pool reuse the worker. A healthy loaded child need not exit after
+every Attempt. On interruption or uncertain quiescence, stop the child and obtain
+native retirement/scratch confirmation instead. Preserve files and block that
+worker slot when confirmation fails.
+
+Use a separate API transport for source acquisition and another for Hello;
+neither shares the controller's serial transport while observation is active.
+Keep SECS's closed-Job policy by allowing open and closed states; cancelled Jobs
+stop work. Preserve aggregate preparation/scientific deadlines explicitly.
+
+Crash reports, transparency, and restart
+----------------------------------------
+
+The intended policy changes notes/004's restart-interruption behavior. Bookkeeping
+is live-only. A new supervisor does not replay old START state, resume preparation,
+poll old Attempts, or manufacture interrupted failures from a missing owner.
+The server continues to own terminal expiry under its policy. Reports already
+accepted by shared delivery continue independently after SECS exits.
+
+This also replaces the old unconditional failure synthesis in ProviderStopping
+and AnalysisCancelled handlers. Shutdown, cancellation, or expiry follows the
+controller's stop/publication permission; SECS must not catch a stopped execution
+and force another FAIL through its old API client. Expected scientific inability
+remains explicitly classified by SECS. Unexpected exceptions retain their causes
+and cleanup state instead of automatically becoming invalid-input failures.
+
+An unexpected original worker exit observed by the live owner may become
+ObservedWorkerCrash only with its current Attempt, phase, SDK RunnerSession,
+and original native exit evidence. EOF, timeout, a deliberate stop, or a killed
+worker is not enough. Record local interruption before closing channels or
+requesting stop. On unexpected EOF, observe original retirement within a bounded
+wait before deliberate close; retain the original reader if that wait expires.
+
+The current SECS WorkerClient is not an SDK RunnerSession and cannot be cast or
+wrapped by name to manufacture this evidence. Shared native control adoption is
+part of this design, not an optional promise to fill the gap after rollout.
+
+Preserve maximum useful, non-sensitive explanations and correlated diagnostics.
+The failure endpoint cannot carry the full cannot_analyse or empty-retrieval
+report, so retain that evidence through a separately owned diagnostic/report
+store. Diagnostic history does not authorize execution, replay, or publication.
+Its write failure remains visible and must not veto an otherwise admitted crash
+report or replace a chosen outcome. Do not retain a hidden executable journal
+under the name of diagnostic history.
+
+Durability begins when shared delivery commits the exact report. If SECS dies
+before it can confirm handoff, acceptance may be unknown and the report may be
+lost; restart does not reconstruct it. This is an intentional policy change and
+must be stated in operator guidance, not described as equivalent recovery.
+
+Deployment and old obligations
+-----------------------------
+
+On orderly shutdown, stop admission and settle the original controller, API,
+delivery, and native operations. work_settled alone is insufficient: an outcome
+still awaiting durable handoff can block shutdown_ready. Hold ProviderLifetime
+until all controllers are shutdown-ready and the other resource owners settle.
+Forced death does not acquire orderly shutdown guarantees by deleting state.
+
+Use the shared neutral binding definition for API identity, signing credential,
+CA, route, and delivery socket. Provider and service select the same binding;
+SECS keeps scientific configuration and interpreter credentials separately.
+Mount the binding's IPC volume at the socket's parent in the provider and grant
+its socket group. Keep the queue in its service-owned persistent volume.
+An API outage must not require loading SECS or keeping the GPU occupied merely
+to publish a previously acknowledged queue item.
+
+Do not silently reinterpret existing AttemptStore records as live SDK owners.
+Before switching a deployment, stop admission and use the old qualified runtime
+to settle retained START/active/terminal obligations under their existing policy.
+Check and record the journal state while its exclusive owner is stopped. If an
+obligation remains held or uncertain, block cutover and preserve it for explicit
+operator resolution. Do not delete it, issue a replacement key, or change its
+terminal bytes. Read-only evidence can be archived after its obligations end.
+
+While a live START is uncertain, retain its exact key/body; do not generate a
+replacement to bypass the uncertainty. Keep active START replay execution disabled.
+An already-active receipt identifies an Attempt, not whether science ran.
+
+This design chooses an empty-obligation cutover, not a permanent dual reader or
+an unqualified queue importer. Existing diagnostic/report files need not be
+deleted to obtain an empty obligation set. No running worker or shared queue
+volume is retired merely to make migration checks pass.
+
+Remove the displaced ExecutionLoop, active/start journal recovery, direct terminal
+publisher, duplicate lifecycle observation, and generic worker supervisor from
+the new runtime after their consumers move. Replace journal-inspection commands
+with clearly separate diagnostic-history and shared-delivery operations. Update
+notes/004 and 006's operational guidance when implementation lands; retain their
+historical evidence with an explicit supersession pointer.
+
+Why objections do not change the end state
+------------------------------------------
+
+"The current journal survives crashes." It does; the new live-only controller
+deliberately has a different restart contract. Do not claim equivalent durability
+or rebuild the old recovery controller beside it. A requirement to retain that
+contract would require revisiting the adoption decision before implementation.
+
+"Our scientific input loop is special." Keep it in SECS. Change its worker seam
+so input rejection is resolved before the exact scientific dispatch; do not move
+SECS readers or formula policy into the SDK to avoid writing the adapter.
+
+"Retirement would reload a costly model." Per-Attempt quiescence and loaded-child
+exit are different. Keep qualified warm reuse, but prove it rather than treating
+a closed socket or a completed Python wrapper as proof.
+
+"A delivery service adds operations." It adds a service and socket grant, and
+removes publication/retry responsibility from the scientific process. Recreating
+a local outbox or publisher would cancel that ownership simplification.
+
+Report and evidence budgets
+---------------------------
+
+Configure explicit live-control, terminal-body, queue-count, and queue-byte
+allowances. Qualify the real encoded result/failure envelope against the SDK's
+terminal-body limit; do not silently truncate scientific results to fit. Keep
+diagnostic-history budgets separate. Resource capacity is admission policy, not
+permission to overlap scientific requests or discard a retained report.
+
+Completion and evidence required
+--------------------------------
+
+Before merge, prove the actual SECS binding, not only SDK fixtures:
+
+- Reader/formula rejection returns to interpretation before one consumed prepare
+  handle leads to at most one search. Membership changes cannot substitute input.
+- Existing scientific outputs, unsuccessful outcome classification, decimal-string
+  encoding, and useful selection/diagnostic evidence remain intact.
+- API observation runs during blocking preparation/search. Closed Jobs continue,
+  cancellation stops, and API observation outages follow an explicit bounded policy.
+- Known worker exit and deliberate interruption remain distinguishable. Failed
+  stop/cleanup keeps sources and worker exclusion; healthy reuse avoids reload.
+- Lost enqueue acknowledgement retries identical bytes while the live owner remains;
+  queue-full backpressure releases settled scientific resources without losing
+  the report. A chosen report and independent cleanup failure both remain visible.
+- After durable enqueue, SECS death does not stop publication. Before handoff,
+  supervisor death causes no restart-generated START, FAIL, or calculation.
+- Upgrade refuses a nonempty legacy obligation set. Shared queue identity,
+  credential/socket permissions, and provider isolation survive the cutover.
+- The new runtime has no reachable legacy controller, publisher, recovery reader,
+  or second native supervisor. Change an ordinary SECS reader without editing
+  SDK lifecycle code, and exercise that change through the same session contract.
+
+Contained adapter tests, installed deployment tests, real worker/model checks,
+and signed API acceptance are distinct proofs. Run the relevant maintained lanes
+for the implementation and name what each establishes. This note runs none of
+them and authorizes no production rollout.
