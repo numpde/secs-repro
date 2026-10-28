@@ -119,11 +119,14 @@ packages/image:
 		cpu|gpu) ;;
 		*) printf '%s\n' 'VARIANT must be cpu or gpu.' >&2; exit 2 ;;
 	esac
+	@test -f "$(PROVIDER_WHEELHOUSE)/.complete" || { \
+		printf '%s\n' 'Native SDK wheelhouse is absent; run make provider/wheelhouse.' >&2; exit 2; }
 	id=$$( {
 		printf '%s\n' "$(PYTHON_BASE)" "$(VARIANT)"
 		cat containers/packages/Dockerfile.dockerignore \
 			requirements/packages-$(VARIANT).lock containers/packages/Dockerfile \
-			pyproject.toml secs/pyproject.toml secs/README.md wheelhouse/packages-$(VARIANT)/.complete
+			pyproject.toml secs/pyproject.toml secs/README.md wheelhouse/packages-$(VARIANT)/.complete \
+			requirements/provider.lock "$(PROVIDER_WHEELHOUSE)/.complete"
 		find src -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
 		find secs/src -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
 	} | sha256sum | cut -d' ' -f1 )
@@ -132,6 +135,7 @@ packages/image:
 		--build-arg PACKAGES_INPUT_ID="$$id" \
 		--build-arg PACKAGES_VARIANT="$(VARIANT)" \
 		--build-context "wheelhouse=$(REPOSITORY_ROOT)/wheelhouse/packages-$(VARIANT)" \
+		--build-context "native_wheelhouse=$(PROVIDER_WHEELHOUSE)" \
 		--file containers/packages/Dockerfile \
 		--tag "secs-repro/packages-$(VARIANT):inputs-$$id" \
 		--tag "$(call packages_image_tag,$(VARIANT))" .

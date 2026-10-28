@@ -26,5 +26,18 @@ RUN python -m pip install --no-index --no-deps --no-build-isolation \
     && rm -rf /opt/source \
     && python -m pip check
 
+COPY requirements/provider.lock /opt/native-install/requirements.lock
+COPY --from=native_wheelhouse . /opt/native-install/wheelhouse/
+RUN cd /opt/native-install/wheelhouse \
+    && sha256sum --check .complete \
+    && python -m venv /opt/native \
+    && /opt/native/bin/python -I -m pip install --no-index --require-hashes \
+        --find-links /opt/native-install/wheelhouse \
+        --no-cache-dir -r /opt/native-install/requirements.lock \
+    && /opt/native/bin/python -I -m pip check \
+    && rm -rf /opt/native-install
+
+ENV PROVIDER_CORE_IN_CONTAINER=1
+
 RUN useradd --no-create-home --uid 65532 secs
 USER 65532:65532
