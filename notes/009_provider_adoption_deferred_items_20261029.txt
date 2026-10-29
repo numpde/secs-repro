@@ -253,3 +253,19 @@ retirement was uncertain. The replacement runs detached with bounded Docker
 logs and a separate CID; its launcher retires the worker first and retains the
 proxy if the worker's retirement is unconfirmed. A missing proxy CID also
 retains the receipt directory and cannot authorize a guessed removal.
+
+Intermittent API-route restart
+------------------------------
+
+Owners: SECS and shared SDK maintainers. Revisit on another proxy-stop restart
+or a controlled witness capturing the actual retry and retirement objects.
+One disposable deployment end-to-end run observed a provider restart after its
+API proxy was stopped; its failure projection contained a response ReadError
+with connection reset and a distinct write failure with broken pipe. It did not
+establish the retry predicate's object identities or why the process exited.
+The full suite and several focused reruns passed, which does not fix or explain
+the earlier failure. A temporary instrumented run confirmed ordinary missing
+socket ConnectError retries were admitted after retirement; it did not reproduce
+the read/write case. Evidence: /tmp/secs-selector-e2e.log and
+/tmp/secs-route-witness-detailed.log on the test host, subject to temporary-file
+retention. No change to shared retry policy is selected from this evidence.
