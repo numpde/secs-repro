@@ -30,6 +30,39 @@ That establishes this bounded composition, not GPU behavior, full-index quality,
 or numerical equivalence across the production workload. Run the maintained
 GPU and published-challenge lanes before claiming those effects.
 
+Scientific retry artifact identity
+----------------------------------
+
+Owner: SECS scientific binding and candidate-source maintainers. Revisit before
+enabling a positive scientific retry count or claiming that a replacement child
+uses the same loaded checkpoint and candidate index.
+
+The worker-container snapshot in 5218429 holds worker TOML bytes for that
+container lifetime; a restart captures the then-current operator file. The
+checkpoint loader in 0ce5a64 hashes and decodes the same spec and weight bytes.
+Neither establishes that a replacement child reads the same candidate index,
+Parquet table, model cache or complete artifact bundle. Container read-only
+mounts do not prevent the host from changing their contents.
+
+The existing candidate manifest names the index and table and their expected
+digests, but the runtime candidate loader reads paths and checks row counts; it
+does not bind its loaded bytes to those digests. A small offline HNSWPQ probe
+showed that FAISS can hash bytes as its loader consumes them and can detect
+trailing data; a small Parquet byte-buffer probe also passed. The evidence is in
+this session's offline tool receipts. Those probes do
+not qualify the full index, resource usage, timing or concurrent host changes.
+The manifest lists about 23.7 GB of index and 1.0 GB of table; these full files
+were not available for this qualification.
+
+Choose an upstream-owned verified-read or streaming seam for the candidate
+index and table, and qualify the actual bundle, identity continuity, memory and
+performance before enabling retries. Hashing candidate paths and reopening them
+is insufficient; duplicating their loader in the provider would create another
+scientific authority. The local checkpoint loader still needs its first-child
+identity bound across replacement children.
+Retain the current single-search behavior until this proof and the other retry
+eligibility, source, native-retirement and deadline requirements are complete.
+
 Deployment and recovery rehearsal
 --------------------------------
 
