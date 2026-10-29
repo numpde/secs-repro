@@ -57,6 +57,7 @@ class WorkerClient:
     def _begin_lifetime(self):
         self.native = self.proof = None
         self._opening = self._pending = self._retirement = None
+        self._observed_opening = None
         self._reader = self._writer = None
         self._stopping = self.stopped = False
         self._science_close_failure = None
@@ -121,11 +122,16 @@ class WorkerClient:
             # A fresh SDK owner is allowed only after this client's retirement
             # positively settled; a poisoned or pending read never reaches here.
             self._begin_lifetime()
-        if self._opening is None:
+        starting = self._opening is None
+        if starting:
             self._opening = self._own(self._open, deadline)
+        try:
             await _join(self._opening, deadline)
+        except ScientificWorkerFailed:
+            self._observed_opening = self._opening
+            raise
+        if starting:
             return
-        await _join(self._opening, deadline)
         response = await self.request({"operation": "ready"}, deadline=deadline)
         if response.get("outcome") != "ready":
             self._request_stop()
@@ -221,18 +227,18 @@ class WorkerClient:
         if self.proof.session.generation != generation:
             raise WorkerStopUnconfirmed("A replacement runner cannot confirm cleanup of the original runner's scratch")
 
-    async def _join_science(self, task, deadline, fatal_failures):
+    async def _join_science(self, task, deadline, retained_failures):
         try:
             await _join(task, deadline)
         except Exception:
             if not task.done():
                 raise
         except BaseExceptionGroup as cause:
-            fatal_failures.append(cause)
+            retained_failures.append(cause)
             if not task.done():
                 raise
 
-    async def _retire_native(self, deadline, fatal_failures):
+    async def _retire_native(self, deadline, retained_failures):
         try:
             await contain_task_exit(self.native.join_retirement, wait_seconds=max(0.001, deadline - monotonic()))
         except (RunnerStartupStopped, RunnerStartupUnavailable):
@@ -241,7 +247,7 @@ class WorkerClient:
                 raise
         except (Exception, BaseExceptionGroup) as cause:
             if not isinstance(cause, Exception):
-                fatal_failures.append(cause)
+                retained_failures.append(cause)
             original = self.native.reader if self.native.reader is not None else self.native.setup
             failure = (self.native.retirement_failure if self.native.reader is not None
                        else self.native.setup_failure)
@@ -249,16 +255,31 @@ class WorkerClient:
                 raise
             await self._prove_retirement(deadline)
 
+    def _unconsumed_scientific_failures(self):
+        failures = []
+        if (self._opening is not None and self._opening is not self._observed_opening
+                and self._opening.done() and not self._opening.cancelled()):
+            failure = self._opening.exception()
+            if type(failure) is ScientificWorkerFailed:
+                failures.append(failure)
+        if (self._pending is not None and self._pending.done() and not self._pending.cancelled()
+                and self._pending.exception() is None):
+            response = self._pending.result()
+            if response.get("outcome") == "failed":
+                failures.append(ScientificWorkerFailed(response))
+        return failures
+
     async def _retire(self):
         deadline = monotonic() + self.retirement_seconds if self.native is None else self.native.retirement_deadline
-        fatal_failures = []
+        retained_failures = []
+        cleanup_failure = None
         try:
             if self._opening is not None:
-                await self._join_science(self._opening, deadline, fatal_failures)
+                await self._join_science(self._opening, deadline, retained_failures)
             if self.native is not None:
-                await self._retire_native(deadline, fatal_failures)
+                await self._retire_native(deadline, retained_failures)
             if self._pending is not None:
-                await self._join_science(self._pending, deadline, fatal_failures)
+                await self._join_science(self._pending, deadline, retained_failures)
             if self._writer is not None:
                 try:
                     await _join(self._own(self._writer.wait_closed), deadline)
@@ -269,15 +290,18 @@ class WorkerClient:
             if self.native is not None:
                 self.native.session.close()
         except BaseException as cleanup:
-            if fatal_failures and all(cleanup is not cause for cause in fatal_failures):
-                raise BaseExceptionGroup("Native retirement retained fatal observations and cleanup failure",
-                                         (*fatal_failures, cleanup)) from None
-            raise
+            cleanup_failure = cleanup
+        retained_failures.extend(self._unconsumed_scientific_failures())
+        if cleanup_failure is not None:
+            if retained_failures and all(cleanup_failure is not cause for cause in retained_failures):
+                raise BaseExceptionGroup("Native retirement retained observations and cleanup failure",
+                                         (*retained_failures, cleanup_failure)) from None
+            raise cleanup_failure
         self.stopped = True
-        if len(fatal_failures) == 1:
-            raise fatal_failures[0]
-        if fatal_failures:
-            raise BaseExceptionGroup("Native retirement retained fatal observations", fatal_failures)
+        if len(retained_failures) == 1:
+            raise retained_failures[0]
+        if retained_failures:
+            raise BaseExceptionGroup("Native retirement retained observations", retained_failures)
 
     async def stop(self):
         if not self.stopped:
@@ -287,4 +311,6 @@ class WorkerClient:
         try:
             await asyncio.shield(self._retirement)
         except Exception as cause:
+            if self.stopped:
+                raise
             raise WorkerStopUnconfirmed("Scientific worker retirement is unconfirmed; retain its sources and stop admission") from cause

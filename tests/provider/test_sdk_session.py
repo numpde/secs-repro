@@ -15,7 +15,7 @@ from provider_core.job_input import FeedInputFacts, VerifiedJobInput
 
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.session import SecsSession
-from secs_inference.provider.worker_protocol import WorkerError
+from secs_inference.provider.worker_protocol import ScientificWorkerFailed, WorkerError
 from secs_inference.provider.diagnostics import exception_evidence
 from test_async_interpretation import ScriptedCarrier, choice, call
 
@@ -61,6 +61,7 @@ class Worker:
         self.events, self.responses = events, iter(responses)
         self.commands = []
         self.stopping_failure = None
+        self.stopped = False
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
     async def check_ready(self, *, deadline):
@@ -77,6 +78,7 @@ class Worker:
         self.release.set()
         if self.stopping_failure is not None:
             raise self.stopping_failure
+        self.stopped = True
 
 
 class Carrier(ScriptedCarrier):
@@ -108,23 +110,25 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"private fixture", outcome.evidence.content)
         await session.retire()
 
-    async def test_fatal_stop_observation_keeps_positive_retirement_and_independent_source_cleanup(self):
-        session, worker, _, events = self.make_session([{"outcome": "prepared", "prepared_handle": 7}])
-        await self.prepare(session)
-        failure = BaseExceptionGroup("contained SCI exit", [SystemExit(0)])
-        async def stopped_with_fatal_observation():
-            events.append("worker-stop")
-            worker.stopped = True
-            raise failure
-        worker.stop = stopped_with_fatal_observation
-        with self.assertRaises(BaseExceptionGroup) as caught:
-            await session.retire()
-        self.assertEqual(caught.exception.exceptions, (failure,))
-        self.assertIn(("sources-retire", True), events)
-        await session.retire()
-        self.assertEqual(events.count("worker-stop"), 1)
-        self.assertEqual(events.count("chat-retire"), 1)
-        self.assertEqual(events.count(("sources-retire", True)), 1)
+    async def test_scientific_stop_observation_keeps_positive_retirement_and_independent_source_cleanup(self):
+        for failure in (BaseExceptionGroup("contained SCI exit", [SystemExit(0)]),
+                        ScientificWorkerFailed({"outcome": "failed", "exception_type": "RuntimeError"})):
+            with self.subTest(failure=type(failure).__name__):
+                session, worker, _, events = self.make_session([{"outcome": "prepared", "prepared_handle": 7}])
+                await self.prepare(session)
+                async def stopped_with_observation():
+                    events.append("worker-stop")
+                    worker.stopped = True
+                    raise failure
+                worker.stop = stopped_with_observation
+                with self.assertRaises(BaseExceptionGroup) as caught:
+                    await session.retire()
+                self.assertEqual(caught.exception.exceptions, (failure,))
+                self.assertIn(("sources-retire", True), events)
+                await session.retire()
+                self.assertEqual(events.count("worker-stop"), 1)
+                self.assertEqual(events.count("chat-retire"), 1)
+                self.assertEqual(events.count(("sources-retire", True)), 1)
 
     def make_session(self, responses, turns=None):
         events = []

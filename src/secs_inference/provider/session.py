@@ -187,7 +187,7 @@ class SecsSession:
                 await self.worker.stop()
                 self._quiescent = True
             except (Exception, BaseExceptionGroup) as cause:
-                if not isinstance(cause, Exception) and self.worker.stopped:
+                if self.worker.stopped:
                     self._quiescent = True
                 else:
                     cleanup_failed = True

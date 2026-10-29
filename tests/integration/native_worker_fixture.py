@@ -34,6 +34,8 @@ if options.mode == "startup_eof_alive":
 
 
 def load():
+    if options.mode == "startup_failure":
+        raise RuntimeError("private fixture startup failure")
     calls = 0
     def handle(command):
         nonlocal calls

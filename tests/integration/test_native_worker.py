@@ -12,9 +12,10 @@ from tempfile import TemporaryDirectory
 from time import monotonic
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from secs_inference.provider.worker import NativeWorkerExited, WorkerClient, WorkerError, WorkerStopUnconfirmed
+from secs_inference.provider.worker_protocol import ScientificWorkerFailed, encode
 
 
 class WorkerDispatchTests(unittest.IsolatedAsyncioTestCase):
@@ -23,6 +24,57 @@ class WorkerDispatchTests(unittest.IsolatedAsyncioTestCase):
         worker._reader = object()
         worker._writer = SimpleNamespace(write=Mock(), drain=AsyncMock(), close=Mock(), wait_closed=AsyncMock())
         return worker
+
+    async def cancel_before_reply_is_consumed(self, worker, frame):
+        worker._reader = asyncio.StreamReader()
+        dispatched = asyncio.Event()
+        worker._writer.write.side_effect = lambda _frame: dispatched.set()
+        request = asyncio.create_task(worker.request({"operation": "inspect"}, deadline=monotonic() + 5))
+        await asyncio.wait_for(dispatched.wait(), 1)
+        original = worker._pending
+        original.add_done_callback(lambda _task: request.cancel("original caller interruption"))
+        worker._reader.feed_data(encode(frame))
+        with self.assertRaises(asyncio.CancelledError) as cancelled:
+            await request
+        self.assertEqual(cancelled.exception.args, ("original caller interruption",))
+        self.assertIs(worker._pending, original)
+        self.assertEqual(original.result(), frame)
+
+    async def test_cancelled_caller_does_not_discard_a_completed_scientific_failure_frame(self):
+        with TemporaryDirectory() as temporary:
+            worker = self.client(temporary)
+            frame = {"outcome": "failed", "exception_type": "RuntimeError", "cause": {"errno": errno.EIO}}
+            await self.cancel_before_reply_is_consumed(worker, frame)
+            with self.assertRaises(ScientificWorkerFailed) as failure:
+                await worker.stop()
+            self.assertEqual(failure.exception.diagnostic, frame)
+            self.assertTrue(worker.stopped)
+            worker._writer.wait_closed.assert_awaited_once()
+
+    async def test_completed_scientific_failure_survives_independent_native_retirement_failure(self):
+        with TemporaryDirectory() as temporary:
+            worker = self.client(temporary)
+            frame = {"outcome": "failed", "exception_type": "RuntimeError"}
+            await self.cancel_before_reply_is_consumed(worker, frame)
+            cleanup = RuntimeError("Original native retirement remains unconfirmed")
+            worker.native = SimpleNamespace(request_stop=Mock(), retirement_deadline=monotonic() + 5)
+            with patch.object(worker, "_retire_native", new=AsyncMock(side_effect=cleanup)):
+                with self.assertRaises(WorkerStopUnconfirmed) as failure:
+                    await worker.stop()
+            retained = failure.exception.__cause__
+            self.assertIsInstance(retained, BaseExceptionGroup)
+            self.assertEqual(retained.exceptions[0].diagnostic, frame)
+            self.assertIs(retained.exceptions[1], cleanup)
+            self.assertFalse(worker.stopped)
+            worker._writer.wait_closed.assert_not_awaited()
+
+    async def test_cancelled_caller_with_a_completed_success_does_not_invent_a_failure(self):
+        with TemporaryDirectory() as temporary:
+            worker = self.client(temporary)
+            await self.cancel_before_reply_is_consumed(worker, {"outcome": "inspected", "facts": {}})
+            await worker.stop()
+            self.assertTrue(worker.stopped)
+            worker._writer.wait_closed.assert_awaited_once()
 
     async def test_expired_deadline_does_not_start_another_scientific_exchange(self):
         with TemporaryDirectory() as temporary:
@@ -103,6 +155,35 @@ class NativeWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(select.select([descriptor], [], [], 0)[0], "The original PID remains alive")
         self.assertTrue(self.worker.native.session.retirement.scratch_released)
         self.assertEqual(list((self.root / "scratch").iterdir()), [])
+
+    async def test_cancelled_startup_waiter_retains_the_original_failed_frame(self):
+        await self.start("startup_failure")
+        own = self.worker._own
+        def cancel_after_open(operation, *arguments):
+            original = own(operation, *arguments)
+            if operation == self.worker._open:
+                original.add_done_callback(lambda _task: caller.cancel("original startup interruption"))
+            return original
+        self.worker._own = cancel_after_open
+        caller = asyncio.create_task(self.worker.check_ready(deadline=monotonic() + 10))
+        with self.assertRaises(asyncio.CancelledError) as cancelled:
+            await caller
+        self.assertEqual(cancelled.exception.args, ("original startup interruption",))
+        original_failure = self.worker._opening.exception()
+        self.assertIsInstance(original_failure, ScientificWorkerFailed)
+        with self.assertRaises(ScientificWorkerFailed) as observed:
+            await self.worker.stop()
+        self.assertIs(observed.exception, original_failure)
+        self.assertTrue(self.worker.stopped)
+        self.assertTrue(self.worker.native.session.retirement.scratch_released)
+
+    async def test_observed_startup_failure_is_not_reported_again_during_retirement(self):
+        await self.start("startup_failure")
+        with self.assertRaises(ScientificWorkerFailed):
+            await self.worker.check_ready(deadline=monotonic() + 10)
+        await self.worker.stop()
+        self.assertTrue(self.worker.stopped)
+        self.assertTrue(self.worker.native.session.retirement.scratch_released)
 
     async def fatal_probe(self, mode):
         await self.start()
