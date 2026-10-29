@@ -101,37 +101,22 @@ candidates/qualification: checkpoint/image packages/gpu/image
 	mkdir "$$evidence"
 	chmod 2770 "$$evidence"
 	container_prefix="secs-candidate-qualification-$$run_id"
-	owned_containers=(
-		"$$container_prefix-extractor"
-		"$$container_prefix-sampler"
-		"$$container_prefix-functional-builder"
-		"$$container_prefix-functional-verifier"
-		"$$container_prefix-scale-builder"
-		"$$container_prefix-scale-verifier"
-		"$$container_prefix-receipt"
-	)
+	identity_directory=$$(mktemp -d /tmp/secs-qualification-ids.XXXXXXXX)
+	source tools/qualification_cleanup.sh
+	qualification_docker() { $(DOCKER) "$$@"; }
+	qualification_background_active=0
 	cleanup_qualification() {
 		local original_status=$$?
 		local cleanup_failed=0
-		local inspection
 		trap - EXIT
-		for container in "$${owned_containers[@]}"; do
-			if inspection=$$($(DOCKER) container inspect "$$container" 2>&1); then
-				if ! $(DOCKER) rm -f "$$container" >/dev/null; then
-					printf 'Failed to stop qualification container during cleanup: %s\n' "$$container" >&2
-					cleanup_failed=1
-				fi
-			else
-				case "$$inspection" in
-					*'No such object'*|*'No such container'*) ;;
-					*) printf 'Could not confirm qualification container cleanup for %s: %s\n' \
-						"$$container" "$$inspection" >&2; cleanup_failed=1 ;;
-				esac
-			fi
-		done
+		retire_qualification_containers "$$identity_directory" || cleanup_failed=1
+		if test "$$qualification_background_active" -ne 0; then
+			printf 'Qualification local workers may still be active; retaining %s.\n' "$$stage" >&2
+			cleanup_failed=1
+		fi
 		if test "$$cleanup_failed" -eq 0; then
-			if ! rm -rf -- "$$stage"; then
-				printf 'Failed to remove qualification staging directory: %s\n' "$$stage" >&2
+			if ! rm -rf -- "$$stage" "$$identity_directory"; then
+				printf 'Failed to remove qualification staging or identity directory: %s %s\n' "$$stage" "$$identity_directory" >&2
 				cleanup_failed=1
 			fi
 		else
@@ -150,8 +135,9 @@ candidates/qualification: checkpoint/image packages/gpu/image
 	# The extractor admits the complete pinned archive before exposing the
 	# member. Keeping that full member in this private stage lets both profiles
 	# share one archive scan without creating a second candidate source.
+	touch "$$identity_directory/extractor.started"
 	timeout --foreground --signal=TERM --kill-after="$(QUALIFICATION_KILL_GRACE_SECONDS)s" "$(QUALIFICATION_EXTRACT_TIMEOUT_SECONDS)s" \
-	$(DOCKER) run --rm --name "$$container_prefix-extractor" --pull never --network none --read-only \
+	$(DOCKER) run --rm --cidfile "$$identity_directory/extractor.cid" --name "$$container_prefix-extractor" --pull never --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 64 \
 		--cpus 1 --memory 2304m --memory-swap 2304m \
 		--tmpfs /scratch:rw,noexec,nosuid,nodev,size=2g \
@@ -164,8 +150,9 @@ candidates/qualification: checkpoint/image packages/gpu/image
 		--member-spec /input/candidates.toml --scratch-directory /scratch \
 		> "$$stage/source.parquet"
 
+	touch "$$identity_directory/sampler.started"
 	timeout --foreground --signal=TERM --kill-after="$(QUALIFICATION_KILL_GRACE_SECONDS)s" "$(QUALIFICATION_SAMPLE_TIMEOUT_SECONDS)s" \
-	$(DOCKER) run --rm --name "$$container_prefix-sampler" --pull never --network none --read-only \
+	$(DOCKER) run --rm --cidfile "$$identity_directory/sampler.cid" --name "$$container_prefix-sampler" --pull never --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 128 \
 		--cpus 8 --memory 16g --memory-swap 16g --group-add "$$(id -g)" \
 		--tmpfs /tmp:rw,noexec,nosuid,nodev,size=1g \
@@ -259,10 +246,12 @@ candidates/qualification: checkpoint/image packages/gpu/image
 		mkdir "$$bundle"
 		chmod 2770 "$$bundle"
 
+		touch "$$identity_directory/$$profile-builder.started"
+		qualification_background_active=1
 		(
 			set +e
 			timeout --foreground --signal=TERM --kill-after="$(QUALIFICATION_KILL_GRACE_SECONDS)s" "$${deadline_seconds}s" \
-			$(DOCKER) run --rm -i --name "$$container_prefix-$$profile-builder" --pull never --network none --read-only \
+			$(DOCKER) run --rm -i --cidfile "$$identity_directory/$$profile-builder.cid" --name "$$container_prefix-$$profile-builder" --pull never --network none --read-only \
 			--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 512 \
 			--cpus "$${QUALIFICATION_CPUS_INPUT}" --memory "$${QUALIFICATION_MEMORY_INPUT}" \
 			--memory-swap "$${QUALIFICATION_MEMORY_INPUT}" --gpus "device=$${QUALIFICATION_GPU_INPUT}" \
@@ -316,6 +305,7 @@ candidates/qualification: checkpoint/image packages/gpu/image
 		local monitor_status=0
 		if wait "$$builder_process"; then :; else builder_status=$$?; fi
 		if wait "$$monitor_process"; then :; else monitor_status=$$?; fi
+		qualification_background_active=0
 		if test "$$builder_status" -ne 0; then
 			printf 'Candidate qualification profile %s failed in the production builder with status %s.\n' \
 				"$$profile" "$$builder_status" >&2
@@ -327,8 +317,9 @@ candidates/qualification: checkpoint/image packages/gpu/image
 			return "$$monitor_status"
 		fi
 
+		touch "$$identity_directory/$$profile-verifier.started"
 		timeout --foreground --signal=TERM --kill-after="$(QUALIFICATION_KILL_GRACE_SECONDS)s" "$(QUALIFICATION_VERIFY_TIMEOUT_SECONDS)s" \
-		$(DOCKER) run --rm --name "$$container_prefix-$$profile-verifier" --pull never --network none --read-only \
+		$(DOCKER) run --rm --cidfile "$$identity_directory/$$profile-verifier.cid" --name "$$container_prefix-$$profile-verifier" --pull never --network none --read-only \
 			--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 256 \
 			--cpus 4 --memory 16g --memory-swap 16g --gpus "device=$${QUALIFICATION_GPU_INPUT}" \
 			--group-add "$$(id -g)" \
@@ -373,8 +364,9 @@ candidates/qualification: checkpoint/image packages/gpu/image
 	run_profile functional
 	run_profile scale
 
+	touch "$$identity_directory/receipt.started"
 	timeout --foreground --signal=TERM --kill-after="$(QUALIFICATION_KILL_GRACE_SECONDS)s" "$(QUALIFICATION_RECEIPT_TIMEOUT_SECONDS)s" \
-	$(DOCKER) run --rm --name "$$container_prefix-receipt" --pull never --network none --read-only \
+	$(DOCKER) run --rm --cidfile "$$identity_directory/receipt.cid" --name "$$container_prefix-receipt" --pull never --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 \
 		--cpus 1 --memory 1g --memory-swap 1g --group-add "$$(id -g)" \
 		--tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
