@@ -75,3 +75,27 @@ formatting alone does not justify broad retesting. During D021, the old D005
 science/input log filenames were reused. Historical D005 runs remain in tool
 history and note 014; the current files must not be cited as those original
 runs. D021 captures use /tmp/secs-native-* names and the recorded CPU image.
+
+Retry diagnostic detail
+-----------------------
+
+Owner: shared SDK diagnostics maintainer and SECS runtime owner. Revisit after
+the release-critical availability/deadline adoption, when the shared bounded
+renderer is qualified. Shared rendering work is tracked in SDK note 015 and
+decision D125; SECS should integrate that owner rather than add a serializer.
+
+Hello and discovery retry warnings currently show delay, HTTP status and request
+identity but omit the original causal graph when no response exists. The generic
+START/delivery callback also discards failure, wait and recovery detail. Controlled
+backend-stage test failures establish this gap (D131); the richer rendering remains
+deferred, not fixed. Preserve retry/stop/retirement rules and disclosure boundaries.
+
+Fatal diagnostic interruption status
+------------------------------------
+
+Owner: SECS CLI and deployment maintainer. The reporting-failure guard preserves
+an already-failed operation's exit status 1 and retains both original errors for
+embedding callers. An actual SIGINT during fatal reporting therefore changes
+raw termination status from -2 to 1; SIGTERM remains -15. This is not equivalent
+signal preservation. The current Compose stop uses TERM; revisit only if a
+selected supervisor needs the post-failure SIGINT distinction (D133).
