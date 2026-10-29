@@ -184,18 +184,17 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
         raise ValueError("SECS deployment requires a nonroot host UID and GID.")
     environment = {
         "PROVIDER_UID": str(os.getuid()), "PROVIDER_GID": str(os.getgid()),
+        "SECS_DEPLOYMENT": name,
+        "SECS_CHECKOUT": str(repository.resolve()),
         "PROVIDER_CONFIG_DIRECTORY": str(config),
         "INTERPRETER_KEY_FILE": str(state / "interpreter.key"),
-        "ATTEMPT_STATE_DIRECTORY": str(state / "state"),
-        "SOURCE_DIRECTORY": str(state / "sources"),
-        "WORKER_SOCKET_DIRECTORY": str(state / "socket"),
         "WORKER_CONFIG_FILE": str(config / "worker.toml"),
         "MOLFORMER_LOCK_FILE": str(repository / "molformer.lock.toml"),
         "CACHE_VERIFIER_FILE": str(repository / "tools/materialize_molformer_cache.py"),
         "SECS_HOST_WORKER_GPU_UUID": gpu_uuid,
     }
     project = _project(repository, name)
-    base_recipe = ComposeProject(repository, project.name, ("provider", "worker"))
+    base_recipe = ComposeProject(repository, project.name, ("provider", "worker", "sources-init", "session-init"))
     plan = base_recipe.render(
         repository / "compose/provider.yml", config / "deployment.env", environment,
     )
@@ -211,7 +210,33 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
 def _project(repository: Path, name: str) -> ComposeProject:
     """SECS stops Job admission before its scientific worker."""
     configuration_directory(repository, name)
-    return ComposeProject(repository, f"secs-{name}", ("provider", "worker", "api", "api-init"), ("api-init",))
+    return ComposeProject(repository, f"secs-{name}",
+                          ("provider", "worker", "api", "sources-init", "session-init", "api-init"),
+                          ("sources-init", "session-init", "api-init"))
+
+
+def _admit_runtime_volumes(project: ComposeProject, plan: dict, name: str) -> None:
+    """Reuse only volumes owned by this deployment and its Compose project."""
+    present = set(project.command("volume", "ls", "--quiet").decode("utf-8").splitlines())
+    for role in ("lifetime", "sources", "session"):
+        volume = plan["volumes"][role]["name"]
+        if volume not in present:
+            continue
+        records = json.loads(project.command("volume", "inspect", volume))
+        if type(records) is not list or len(records) != 1 or type(records[0]) is not dict:
+            raise ValueError("Docker did not inspect exactly one SECS runtime volume.")
+        record = records[0]
+        labels = record.get("Labels")
+        expected = {"com.docker.compose.project": project.name, "com.docker.compose.volume": role,
+                    "io.secs.deployment": name, "io.secs.checkout": str(project.repository.resolve())}
+        if record.get("Name") != volume or type(labels) is not dict or any(
+                labels.get(key) != value for key, value in expected.items()):
+            raise ValueError(f"Cannot reuse SECS runtime volume {volume!r}: its ownership labels differ.")
+        options = record.get("Options")
+        if options is None:
+            options = {}
+        if record.get("Driver") != "local" or type(options) is not dict or options != plan["volumes"][role].get("driver_opts", {}):
+            raise ValueError(f"Cannot reuse SECS runtime volume {volume!r}: its driver or options differ.")
 
 
 def _private_directory(path: Path) -> None:
@@ -283,20 +308,9 @@ def start_deployment(repository: Path, name: str) -> dict:
     for path in (config / "provider.toml", config / "worker.toml", state / "interpreter.key"):
         _private_input(path)
     state = _state_root(repository, name)
-    if (state / "state" / "journal").exists():
-        raise ValueError("Legacy Attempt journal remains; drain its obligations under the old runtime before selecting a fresh SDK lifetime directory.")
-    for part in ("state", "sources", "socket"):
-        _ensure_private_parent(state / part)
-    lock = state / "socket/.owner-session.lock"
-    try:
-        descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    except FileExistsError:
-        metadata = lock.lstat()
-        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(metadata.st_mode) != 0o600):
-            raise ValueError("Native lifetime lock must remain an operator-owned mode 0600 regular file.")
-    else:
-        os.close(descriptor)
+    if any(os.path.lexists(state / part) for part in ("state", "sources", "socket")):
+        raise ValueError("Old host runtime directories remain; drain the old deployment and preserve its state before selecting the new volumes.")
+    _admit_runtime_volumes(project, plan, name)
     return project.start(plan)
 
 

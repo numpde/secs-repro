@@ -15,6 +15,7 @@ from deployment.compose import ComposeProject
 from deployment.provider_deployment import (
     _apply_provider_network,
     _admit_provider_network,
+    _admit_runtime_volumes,
     _apply_delivery_binding,
     _host_gpu_uuid,
     _provider_network,
@@ -22,11 +23,69 @@ from deployment.provider_deployment import (
     install_secret,
     main,
     render_deployment,
+    start_deployment,
 )
 from deployment.templates import _locked_parent
 
 
 class ProviderDeploymentTests(unittest.TestCase):
+    def test_runtime_volume_reuse_requires_peer_style_ownership_labels(self):
+        project = Mock(name="project")
+        project.name = "secs-example"
+        project.repository = Path("/workspace")
+        plan = {"volumes": {role: {"name": "secs-example_" + role}
+                            for role in ("lifetime", "sources", "session")}}
+        labels = {"com.docker.compose.project": project.name,
+                  "com.docker.compose.volume": "sources", "io.secs.deployment": "example",
+                  "io.secs.checkout": "/workspace"}
+        volume = {"Name": "secs-example_sources", "Labels": labels, "Driver": "local", "Options": None}
+        project.command.side_effect = (b"secs-example_sources\n", json.dumps([volume]).encode())
+        _admit_runtime_volumes(project, plan, "example")
+        labels["io.secs.deployment"] = "other"
+        project.command.side_effect = (b"secs-example_sources\n", json.dumps([volume]).encode())
+        with self.assertRaisesRegex(ValueError, "ownership labels differ"):
+            _admit_runtime_volumes(project, plan, "example")
+        labels["io.secs.deployment"] = "example"
+        labels["io.secs.checkout"] = "/other-checkout"
+        project.command.side_effect = (b"secs-example_sources\n", json.dumps([volume]).encode())
+        with self.assertRaisesRegex(ValueError, "ownership labels differ"):
+            _admit_runtime_volumes(project, plan, "example")
+        labels["io.secs.checkout"] = "/workspace"
+        volume["Options"] = {"type": "tmpfs"}
+        project.command.side_effect = (b"secs-example_sources\n", json.dumps([volume]).encode())
+        with self.assertRaisesRegex(ValueError, "driver or options differ"):
+            _admit_runtime_volumes(project, plan, "example")
+
+    def test_start_refuses_old_host_runtime_before_starting_volumes(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config/deployments/example"
+            config.mkdir(parents=True, mode=0o700)
+            for name in ("provider.toml", "worker.toml", "deployment.env"):
+                path = config / name
+                path.write_text("test")
+                path.chmod(0o600)
+            state = root / "secrets/deployments/example"
+            state.mkdir(parents=True, mode=0o700)
+            (root / "secrets").chmod(0o700)
+            (root / "secrets/deployments").chmod(0o700)
+            (state / "interpreter.key").write_text("test")
+            (state / "interpreter.key").chmod(0o600)
+            project = Mock()
+            with patch("deployment.provider_deployment._provider_network", return_value={}), patch(
+                "deployment.provider_deployment._render_deployment", return_value={}
+            ), patch("deployment.provider_deployment._admit_provider_network"), patch(
+                "deployment.provider_deployment._project", return_value=project
+            ):
+                for name in ("state", "sources", "socket"):
+                    with self.subTest(name=name):
+                        old = state / name
+                        old.mkdir()
+                        with self.assertRaisesRegex(ValueError, "Old host runtime directories remain"):
+                            start_deployment(root, "example")
+                        old.rmdir()
+            project.start.assert_not_called()
+
     def test_shared_grants_cannot_shadow_scientific_or_configuration_mounts(self):
         for socket_path, inputs in (("/run/secs/delivery.sock", ["/private/credential"]),
                                     ("/run/delivery/delivery.sock", ["/run/secs/sources/credential"])):

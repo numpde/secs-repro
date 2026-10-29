@@ -17,9 +17,12 @@ work and selected reports before stopping the scientific worker. It may wait
 indefinitely while delivery is unavailable; interruption leaves shutdown unconfirmed.
 
 Before switching a legacy deployment, drain its obligations under the old runtime
-and preserve its evidence. Startup rejects a legacy journal in the selected
-lifetime directory. [Legacy recovery instructions](notes/005_closed_attempt_archival.txt)
-apply to the old runtime.
+and preserve its evidence. Before starting this volume-backed deployment, move
+the stopped deployment's old `state`, `sources`, and `socket` directories out of
+its runtime directory; startup refuses to silently leave those owners behind.
+[Legacy recovery instructions](notes/005_closed_attempt_archival.txt) apply to
+the old runtime. Provider lifetime, source files, worker IPC and API routing use
+Docker-managed volumes; the shared delivery queue remains separately owned.
 
 [GPU selection and checks after host software upgrades](notes/004_provider_execution.txt).
 

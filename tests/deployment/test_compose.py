@@ -98,6 +98,7 @@ class ComposeTests(unittest.TestCase):
         plan = {"services": {role: {"image": "sha256:" + "a" * 64} for role in project.stop_order}}
         provider = record(project, "provider", 1)
         initializer = record(project, "api-init", 2, running=False)
+        initializer["State"]["OOMKilled"] = False
         for exit_code in (0, 1):
             initializer["State"]["ExitCode"] = exit_code
             with self.subTest(exit_code=exit_code), patch.object(

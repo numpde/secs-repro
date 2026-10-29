@@ -16,7 +16,10 @@ services:
     memswap_limit: 512m
     # Covers the example's longest input transfer plus stop acknowledgement.
     stop_grace_period: 1900s
-    depends_on: [worker]
+    depends_on:
+      worker: {condition: service_started}
+      sources-init: {condition: service_completed_successfully}
+      session-init: {condition: service_completed_successfully}
     networks: [provider-egress]
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777
@@ -31,19 +34,19 @@ services:
         target: /run/secrets/provider/interpreter.key
         read_only: true
         bind: {create_host_path: false}
-      - type: bind
-        source: "${ATTEMPT_STATE_DIRECTORY:?set the persistent private state directory}"
+      - type: volume
+        source: lifetime
         target: /state
-        bind: {create_host_path: false}
-      - type: bind
-        source: "${SOURCE_DIRECTORY:?set the private shared source directory}"
+        volume: {nocopy: true}
+      - type: volume
+        source: sources
         target: /run/secs/sources
-        bind: {create_host_path: false}
-      - type: bind
-        source: "${WORKER_SOCKET_DIRECTORY:?set the private shared socket directory}"
+        volume: {nocopy: true}
+      - type: volume
+        source: session
         target: /run/secs/worker
         read_only: true
-        bind: {create_host_path: false}
+        volume: {nocopy: true}
     logging:
       driver: json-file
       options: {max-file: "3", max-size: 10m}
@@ -53,6 +56,9 @@ services:
     pull_policy: never
     restart: unless-stopped
     init: true
+    depends_on:
+      sources-init: {condition: service_completed_successfully}
+      session-init: {condition: service_completed_successfully}
     user: "${PROVIDER_UID:?set the owning nonroot UID}:${PROVIDER_GID:?set its GID}"
     network_mode: none
     read_only: true
@@ -110,14 +116,14 @@ services:
         target: /opt/materialize.py
         read_only: true
         bind: {create_host_path: false}
-      - type: bind
-        source: "${SOURCE_DIRECTORY:?set the private shared source directory}"
+      - type: volume
+        source: sources
         target: /run/secs/sources
-        bind: {create_host_path: false}
-      - type: bind
-        source: "${WORKER_SOCKET_DIRECTORY:?set the private shared socket directory}"
+        volume: {nocopy: true}
+      - type: volume
+        source: session
         target: /run/secs/worker
-        bind: {create_host_path: false}
+        volume: {nocopy: true}
     entrypoint: [/bin/sh, -c]
     command:
       - >-
@@ -132,6 +138,66 @@ services:
     logging:
       driver: json-file
       options: {max-file: "3", max-size: 10m}
+
+  sources-init:
+    image: "${PROVIDER_IMAGE_REF:?set the built provider image ID}"
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    restart: "no"
+    pids_limit: 16
+    cpus: 1
+    mem_limit: 128m
+    memswap_limit: 128m
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: [no-new-privileges:true]
+    entrypoint: [python, -P, -m, secs_inference.provider.volume_init]
+    command: [sources, "${PROVIDER_UID}", "${PROVIDER_GID}"]
+    volumes:
+      - type: volume
+        source: sources
+        target: /sources
+        volume: {nocopy: true}
+      - type: volume
+        source: session
+        target: /session
+        volume: {nocopy: true}
+
+  session-init:
+    image: "${PROVIDER_IMAGE_REF:?set the built provider image ID}"
+    user: "${PROVIDER_UID}:${PROVIDER_GID}"
+    network_mode: none
+    read_only: true
+    restart: "no"
+    pids_limit: 16
+    cpus: 1
+    mem_limit: 128m
+    memswap_limit: 128m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      sources-init: {condition: service_completed_successfully}
+    entrypoint: [python, -P, -m, secs_inference.provider.volume_init]
+    command: [session]
+    volumes:
+      - type: volume
+        source: session
+        target: /session
+        volume: {nocopy: true}
+
+volumes:
+  sources:
+    labels: {io.secs.deployment: "${SECS_DEPLOYMENT}", io.secs.checkout: "${SECS_CHECKOUT}"}
+  lifetime:
+    labels: {io.secs.deployment: "${SECS_DEPLOYMENT}", io.secs.checkout: "${SECS_CHECKOUT}"}
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=64k,uid=${PROVIDER_UID},gid=${PROVIDER_GID},mode=0700,noexec,nosuid,nodev"
+  session:
+    labels: {io.secs.deployment: "${SECS_DEPLOYMENT}", io.secs.checkout: "${SECS_CHECKOUT}"}
 
 networks:
   # The controller uses configured HTTPS destinations. This bridge is not an

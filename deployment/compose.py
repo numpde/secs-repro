@@ -115,7 +115,8 @@ class ComposeProject:
             records = self.inventory()
             if set(records) != set(plan["services"]) or not all(
                 record["Image"] == plan["services"][role]["image"]
-                and (record["State"]["Status"] == "exited" and record["State"]["ExitCode"] == 0
+                and (record["State"].get("Status") == "exited" and record["State"].get("ExitCode") == 0
+                     and record["State"].get("OOMKilled") is False
                      if role in self.completed_roles else record["State"]["Running"])
                 for role, record in records.items()
             ):

@@ -1,6 +1,10 @@
 Provider execution
 ==================
 
+This note records the legacy provider and its original qualification. Its
+journal paths, runtime layout and configuration schema are historical; see the
+README for the current SDK-backed deployment.
+
 The provider now handles a Job from input selection to result publication.
 The API and model endpoint in the local proof are scripted HTTPS peers.
 No live deployment or full-index benchmark is implied by that proof.

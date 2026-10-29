@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from deployment.compose import ComposeProject
-from deployment.provider_deployment import _admit_provider_network, _status, render_deployment
+from deployment.provider_deployment import _admit_provider_network, _admit_runtime_volumes, _status, render_deployment
 
 
 @contextmanager
@@ -80,6 +80,89 @@ addresses = ["{urlsplit(origin).hostname}=127.0.0.1"]
 
 
 class LifecycleEndToEndTests(unittest.TestCase):
+    def test_volume_backed_runtime_starts_and_retains_native_lock(self):
+        image = os.environ["DEPLOYMENT_TEST_IMAGE"]
+        source = Path(__file__).resolve().parents[2]
+        with lifecycle_workspace() as temporary:
+            root = Path(temporary)
+            project = ComposeProject(root, "secs-volume-" + uuid4().hex[:12],
+                                     ("provider", "worker", "sources-init", "session-init"),
+                                     ("sources-init", "session-init"))
+            env_file = root / "deployment.env"
+            env_file.write_text(f"PROVIDER_IMAGE_REF={image}\nWORKER_IMAGE_REF={image}\n"
+                                f"CHECKPOINT_DIRECTORY={root}\nMOLFORMER_CACHE_DIRECTORY={root}\n")
+            environment = {"PROVIDER_UID": str(os.getuid()), "PROVIDER_GID": str(os.getgid()),
+                           "SECS_DEPLOYMENT": "example",
+                           "SECS_CHECKOUT": str(root),
+                           "PROVIDER_CONFIG_DIRECTORY": str(root), "INTERPRETER_KEY_FILE": str(env_file),
+                           "WORKER_CONFIG_FILE": str(env_file), "MOLFORMER_LOCK_FILE": str(env_file),
+                           "CACHE_VERIFIER_FILE": str(env_file),
+                           "SECS_HOST_WORKER_GPU_UUID": "GPU-00000000-0000-0000-0000-000000000000"}
+            plan = project.render(source / "compose/provider.yml", env_file, environment)
+            for role in ("provider", "worker"):
+                service = plan["services"][role]
+                service["entrypoint"] = ["python", "-I", "-c", "import time; time.sleep(300)"]
+                service.pop("command", None)
+                service.pop("deploy", None)
+                service["network_mode"] = "none"
+                service.pop("networks", None)
+                service["volumes"] = [mount for mount in service["volumes"]
+                                      if mount["type"] == "volume"]
+            plan.pop("networks", None)
+            volumes = [volume["name"] for volume in plan["volumes"].values()]
+            try:
+                records = project.start(plan)
+                _admit_runtime_volumes(project, plan, "example")
+                for role in project.completed_roles:
+                    self.assertEqual(records[role]["State"]["ExitCode"], 0)
+                script = "import os; print(os.stat('/run/secs/worker/.owner-session.lock').st_ino)"
+                provider_inode = project.command("exec", records["provider"]["Id"], "python", "-I", "-c", script)
+                worker_inode = project.command("exec", records["worker"]["Id"], "python", "-I", "-c", script)
+                self.assertEqual(provider_inode, worker_inode)
+                project.stop()
+                records = project.start(plan)
+                self.assertEqual(provider_inode, project.command("exec", records["worker"]["Id"], "python", "-I", "-c", script))
+                project.stop()
+            finally:
+                for record in project.inventory().values():
+                    project.command("rm", "--force", record["Id"])
+                present = project.command("volume", "ls", "--quiet").decode().splitlines()
+                for volume in volumes:
+                    if volume in present:
+                        project.command("volume", "rm", volume)
+
+    def test_runtime_volume_initializers_preserve_owned_contents_and_lock(self):
+        image = os.environ["DEPLOYMENT_TEST_IMAGE"]
+        with lifecycle_workspace() as temporary:
+            project = ComposeProject(Path(temporary), "volume-test-" + uuid4().hex[:12], ())
+            sources = project.name + "-sources"
+            session = project.name + "-session"
+            created = []
+            try:
+                for volume in (sources, session):
+                    project.command("volume", "create", volume)
+                    created.append(volume)
+                mounts = ("--mount", f"type=volume,src={sources},dst=/sources",
+                          "--mount", f"type=volume,src={session},dst=/session")
+                root = ("run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+                        "--cap-add", "CHOWN", "--user", "0:0", *mounts, "--entrypoint", "python", image,
+                        "-P", "-m", "secs_inference.provider.volume_init", "sources", str(os.getuid()), str(os.getgid()))
+                owner = ("run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL",
+                         "--user", f"{os.getuid()}:{os.getgid()}", *mounts, "--entrypoint", "python", image)
+                project.command(*root)
+                project.command(*owner, "-P", "-m", "secs_inference.provider.volume_init", "session")
+                script = "import os; from pathlib import Path; p=Path('/session/.owner-session.lock'); print(p.stat().st_ino); Path('/sources/retained').touch()"
+                inode = project.command(*owner, "-I", "-c", script).strip()
+                project.command(*root)
+                project.command(*owner, "-P", "-m", "secs_inference.provider.volume_init", "session")
+                self.assertEqual(inode, project.command(*owner, "-I", "-c", script).strip())
+                project.command(*owner, "-I", "-c", "import os; os.chmod('/sources', 0o755)")
+                with self.assertRaises(RuntimeError):
+                    project.command(*root)
+            finally:
+                for volume in created:
+                    project.command("volume", "rm", volume)
+
     def test_forwarded_network_admission_reads_the_real_engine_record(self):
         with TemporaryDirectory(prefix="secs-network-admission-") as temporary:
             root = Path(temporary).resolve()
