@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import ssl
+import asyncio
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -11,6 +12,8 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from provider_core.lifetime import ProviderLifetime
+from provider_core.api import ApiFailure
+from provider_core.diagnostics import DiagnosticOutputRefused
 from provider_core.api_config import ApiSettings, HttpsSettings
 from provider_core.signing import SigningIdentity
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -34,6 +37,49 @@ class MainCleanupTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(b'"exception_type": "SystemExit"', result.stderr)
                 self.assertNotIn(b"private fixture detail", result.stderr)
                 self.assertNotIn(b"Traceback", result.stderr)
+
+    def test_reporting_failure_retains_original_uncertainty_and_error_objects(self):
+        primary = ApiFailure("complete Execution Attempt", "the reply was not confirmed")
+        primary.request_method = "POST"
+        primary.request_target = b"/provider/v1/execution-attempts/complete"
+        primary.attempt_mutation_may_have_committed = True
+        for reporting in (DiagnosticOutputRefused("fixture output refusal"), KeyboardInterrupt(),
+                          SystemExit(0), asyncio.CancelledError()):
+            with self.subTest(reporting=type(reporting).__name__):
+                with (patch.object(main, "run_provider", new=AsyncMock(side_effect=primary)),
+                      patch.object(main, "write_stderr", side_effect=reporting)):
+                    try:
+                        main.main()
+                    except BaseException as caught:
+                        observed = caught
+                    else:
+                        self.fail("failed diagnostic output returned without its failure exit")
+                self.assertIs(type(observed), SystemExit)
+                self.assertEqual(observed.code, 1)
+                self.assertIsInstance(observed.__cause__, BaseExceptionGroup)
+                self.assertEqual(len(observed.__cause__.exceptions), 2)
+                self.assertIs(observed.__cause__.exceptions[0], primary)
+                self.assertIs(observed.__cause__.exceptions[1], reporting)
+                self.assertTrue(primary.attempt_mutation_may_have_committed)
+                self.assertEqual(primary.request_target, b"/provider/v1/execution-attempts/complete")
+
+    def test_partial_fatal_write_does_not_add_a_raw_private_traceback(self):
+        script = """from secs_inference.provider import main
+from provider_core import diagnostics
+async def fail():
+    raise RuntimeError("private-primary-payload")
+original_write = diagnostics.os.write
+def partial(descriptor, content):
+    return original_write(descriptor, content[:37])
+main.run_provider = fail
+diagnostics.os.write = partial
+raise SystemExit(main.main())
+"""
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(b"private-primary-payload" in result.stderr, "primary payload escaped after output failure")
+        self.assertFalse(b"Traceback" in result.stderr, "CLI emitted an uncontrolled traceback")
+        self.assertEqual(len(result.stderr), 37)
 
     async def test_lifetime_close_and_runtime_failures_both_reach_process_owner(self):
         runtime_failure = BaseExceptionGroup("contained exit", [SystemExit("private fixture detail")])

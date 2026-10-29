@@ -173,9 +173,13 @@ def main():
         asyncio.run(run_provider())
     except BaseException as cause:
         import json
-        write_stderr(json.dumps({"operation": "run SECS provider", "failure": failure_evidence(
-            cause, secrets=(), describe_owner=_diagnostic_details,
-        )}).encode())
+        try:
+            write_stderr(json.dumps({"operation": "run SECS provider", "failure": failure_evidence(
+                cause, secrets=(), describe_owner=_diagnostic_details,
+            )}).encode())
+        except BaseException as reporting:
+            retained = BaseExceptionGroup("SECS operation and diagnostic output failed", (cause, reporting))
+            raise SystemExit(1) from retained
         return 1
     return 0
 
