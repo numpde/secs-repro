@@ -2,10 +2,6 @@
 set -euo pipefail
 
 readonly wlan_interface="${SECS_WLAN_INTERFACE_INPUT:-}"
-if [[ -z "$wlan_interface" ]]; then
-    exec docker "$@"
-fi
-
 arguments=("$@")
 subcommand_index=-1
 network_index=-1
@@ -31,6 +27,9 @@ done
 if (( subcommand_index < 0 )) || [[ "$network" == none ]]; then
     exec docker "${arguments[@]}"
 fi
+if [[ -z "$wlan_interface" ]] && { [[ "${arguments[$subcommand_index]}" != run ]] || [[ "$network" != bridge && "$network" != default ]]; }; then
+    exec docker "${arguments[@]}"
+fi
 if [[ "$network" != bridge && "$network" != default ]]; then
     printf 'WLAN routing supports Docker bridge/default downloads, not --network %s.\n' "${network:-<unset>}" >&2
     exit 2
@@ -38,7 +37,7 @@ fi
 if [[ "${arguments[$subcommand_index]}" == run ]]; then
     for argument in "${arguments[@]}"; do
         if [[ $argument == --cidfile || $argument == --cidfile=* ]]; then
-            printf '%s\n' 'Interface-bound acquisition owns its CID receipt; do not supply --cidfile.' >&2
+            printf '%s\n' 'Acquisition owns its CID receipt; do not supply --cidfile.' >&2
             exit 2
         fi
     done
@@ -115,6 +114,7 @@ trap 'request_stop 130' INT
 trap 'request_stop 143' TERM
 
 readonly ready_file="$scratch/proxy.port"
+if [[ -n "$wlan_interface" ]]; then
 proxy_starting=1
 python3 "$(dirname -- "${BASH_SOURCE[0]}")/bound_http_proxy.py" \
     --interface "$wlan_interface" --ready-file "$ready_file" &
@@ -142,16 +142,19 @@ if [[ "${arguments[$network_index]}" == --network ]]; then
 else
     arguments[$network_index]=--network=host
 fi
+fi
 
 injected=()
 if [[ "${arguments[$subcommand_index]}" == run ]]; then
-    injected=(
-        --cidfile "$scratch/worker.cid"
+    injected=(--cidfile "$scratch/worker.cid")
+    if [[ -n "$wlan_interface" ]]; then
+        injected+=(
         --env "HTTP_PROXY=$proxy_url"
         --env "HTTPS_PROXY=$proxy_url"
         --env "http_proxy=$proxy_url"
         --env "https_proxy=$proxy_url"
-    )
+        )
+    fi
 else
     injected=(
         --build-arg "HTTP_PROXY=$proxy_url"
