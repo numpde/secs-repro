@@ -6,10 +6,20 @@ import socket
 import ssl
 import unittest
 
-from secs_inference.provider.diagnostics import exception_evidence
+from secs_inference.provider.diagnostics import exception_evidence, scientific_failure_evidence
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_scientific_operator_projection_is_bounded_without_changing_the_private_frame(self):
+        member = {"exception_type": "ValueError", "detail": "private scientific input"}
+        frame = {"exception_type": "ExceptionGroup", "exceptions": [member] * 1000}
+        projected = scientific_failure_evidence(frame)
+        self.assertEqual(len(projected["exceptions"]), 63)
+        self.assertEqual(projected["omitted_exception_count"], 937)
+        self.assertNotIn("private scientific", json.dumps(projected))
+        self.assertEqual(member["detail"], "private scientific input")
+        self.assertEqual(scientific_failure_evidence({"frames": "private input"}), {"omitted_field_count": 1})
+
     def test_suppressed_context_survives_without_text_notes_or_arbitrary_details(self):
         try:
             try:

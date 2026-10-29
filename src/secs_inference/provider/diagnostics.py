@@ -1,6 +1,7 @@
 """Retain bounded exception structure without messages, source text or local values."""
 
 from collections import deque
+import builtins
 import errno
 import os
 from pathlib import Path
@@ -8,6 +9,61 @@ import socket
 import ssl
 import traceback
 
+
+
+_BUILTIN_EXCEPTION_NAMES = frozenset(
+    name for name, value in vars(builtins).items()
+    if isinstance(value, type) and issubclass(value, BaseException)
+)
+_SCIENTIFIC_NUMBERS = ("exception_id", "exception_reference", "errno", "tls_verify_code",
+                       "omitted_frame_count", "omitted_exception_count")
+
+
+def scientific_failure_evidence(frame):
+    """Project numeric facts and code-owned names without copying child text.
+
+    The original frame remains private. Even plausible filenames, function
+    names and TLS labels are untrusted on this channel and are omitted here.
+    """
+    remaining = 64
+
+    def describe(current):
+        nonlocal remaining
+        if remaining <= 0:
+            return {"truncated": True}
+        remaining -= 1
+        if type(current) is not dict:
+            return {"invalid_structure": True}
+        result = {}
+        name = current.get("exception_type")
+        if type(name) is str and name in _BUILTIN_EXCEPTION_NAMES:
+            result["exception_type"] = name
+        for field in _SCIENTIFIC_NUMBERS:
+            value = current.get(field)
+            if type(value) is int and -(2 ** 63) <= value < 2 ** 63 and (field == "errno" or value >= 0):
+                result[field] = value
+        frames = current.get("frames")
+        if type(frames) is list:
+            result["omitted_frame_count"] = result.get("omitted_frame_count", 0) + len(frames)
+        for relationship in ("cause", "context"):
+            if relationship in current:
+                result[relationship] = describe(current[relationship])
+        members = current.get("exceptions")
+        if type(members) is list:
+            result["exceptions"] = []
+            for index, member in enumerate(members):
+                if remaining <= 0:
+                    result["omitted_exception_count"] = result.get("omitted_exception_count", 0) + len(members) - index
+                    break
+                result["exceptions"].append(describe(member))
+        omitted = current.keys() - result.keys()
+        if type(frames) is list:
+            omitted.discard("frames")
+        if omitted:
+            result["omitted_field_count"] = len(omitted)
+        return result
+
+    return describe(frame)
 
 
 def exception_evidence(error: BaseException, *, boundary_details=None) -> dict:

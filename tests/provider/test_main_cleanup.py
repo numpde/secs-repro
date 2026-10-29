@@ -4,6 +4,8 @@ from pathlib import Path
 import os
 import ssl
 import asyncio
+import errno
+import json
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -19,9 +21,47 @@ from provider_core.signing import SigningIdentity
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from secs_inference.provider import main
 from secs_inference.provider.config import HelloPolicy, ProviderConfig
+from secs_inference.provider.diagnostics import exception_evidence
+from secs_inference.provider.worker_protocol import ScientificWorkerFailed, _document, encode
 
 
 class MainCleanupTests(unittest.IsolatedAsyncioTestCase):
+    def test_framed_scientific_failure_cannot_copy_nested_private_text_to_operator_output(self):
+        marker = "PRIVATE_SYNTHETIC_SCIENTIFIC_INPUT"
+        frame = {"outcome": "failed", "exception_type": marker, "frames": [
+            {"file": marker, "function": marker, "line": 7}],
+            "cause": {"exception_type": "OSError", "errno": errno.EIO, "reason": marker,
+                      "unexpected": {"payload": marker}}, "tls_reason": marker}
+        received = _document(encode(frame)[4:])
+        failure = ScientificWorkerFailed(received)
+        with (patch.object(main, "run_provider", new=AsyncMock(side_effect=failure)),
+              patch.object(main, "write_stderr") as output):
+            self.assertEqual(main.main(), 1)
+        emitted = output.call_args.args[0]
+        self.assertNotIn(marker.encode(), emitted)
+        self.assertEqual(json.loads(emitted)["failure"]["scientific_worker"]["cause"]["errno"], errno.EIO)
+        self.assertIs(failure.diagnostic, received)
+
+    def test_late_scientific_failure_keeps_structural_child_evidence_in_fatal_output(self):
+        original = RuntimeError("private scientific input")
+        original.__cause__ = OSError(errno.EIO, "private scientific path")
+        frame = {"outcome": "failed", **exception_evidence(original)}
+        failure = BaseExceptionGroup("provider interrupted with retained observations", [
+            asyncio.CancelledError("private scientific cancellation"),
+            ExceptionGroup("Attempt retirement", [ScientificWorkerFailed(frame)]),
+        ])
+        with (patch.object(main, "run_provider", new=AsyncMock(side_effect=failure)),
+              patch.object(main, "write_stderr") as output):
+            self.assertEqual(main.main(), 1)
+        emitted = output.call_args.args[0]
+        document = json.loads(emitted)
+        group = document["failure"]["relationships"][1]["failure"]
+        scientific = group["relationships"][0]["failure"]["scientific_worker"]
+        self.assertEqual(scientific["exception_type"], "RuntimeError")
+        self.assertEqual(scientific["cause"]["errno"], errno.EIO)
+        self.assertIs(failure.exceptions[1].exceptions[0].diagnostic, frame)
+        self.assertNotIn(b"private scientific", emitted)
+
     def test_contained_background_exit_is_nonzero_without_a_private_traceback(self):
         for code in (0, None, "private fixture detail"):
             with self.subTest(code=code):

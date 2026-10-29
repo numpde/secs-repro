@@ -24,11 +24,13 @@ from provider_core.startup_file import read_startup_file
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.config import CONFIG_PATH, INTERPRETER_KEY_PATH, decode_provider_config
 from secs_inference.provider.configuration_error import ConfigurationError
+from secs_inference.provider.diagnostics import scientific_failure_evidence
 from secs_inference.provider.process import publish_hello_until_stopped
 from secs_inference.provider.runtime import _drain_controller, run_services
 from secs_inference.provider.session import SecsSession
 from secs_inference.provider.sources import AttemptSources
 from secs_inference.provider.worker import WorkerClient
+from secs_inference.provider.worker_protocol import ScientificWorkerFailed
 
 
 _LOG = logging.getLogger(__name__)
@@ -40,6 +42,8 @@ WORKER_SOCKET = Path("/run/secs/worker/worker.sock")
 def _diagnostic_details(error, text, diagnostic_window):
     if type(error) is ConfigurationError:
         return {"message": str(error)}
+    if type(error) is ScientificWorkerFailed:
+        return {"scientific_worker": scientific_failure_evidence(error.diagnostic)}
     return owned_details(error)
 
 
