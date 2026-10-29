@@ -40,6 +40,14 @@ class SecsInferenceAdapterTest(unittest.TestCase):
 
 
 class SecsInferenceLoadTest(unittest.TestCase):
+    def test_load_requires_manifest_weight_size(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            manifest.write_text(json.dumps({"spec": {"file": "spec.toml"}, "weights": {"file": "weights"}}))
+            with self.assertRaisesRegex(ValueError, "declared byte size"):
+                SecsInference.load(manifest, molformer_lock="unused", device="cpu",
+                                   compute_dtype=torch.float32, smiles_batch_size=1)
+
     def test_load_rejects_unsupported_compute_dtype_before_model_construction(self):
         with self.assertRaises(ValueError):
             SecsInference.load(
@@ -65,7 +73,7 @@ class SecsInferenceLoadTest(unittest.TestCase):
                             "file": specification.name,
                             "sha256": hashlib.sha256(specification.read_bytes()).hexdigest(),
                         },
-                        "weights": {"file": weights.name, "sha256": "0" * 64},
+                        "weights": {"file": weights.name, "bytes": len(b"weights"), "sha256": "0" * 64},
                     }
                 ),
                 encoding="utf-8",

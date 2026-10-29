@@ -15,15 +15,20 @@ from secs_inference.model_failure import ModelExecutionFailed
 
 
 FloatArray = NDArray[np.float32]
-_HASH_READ_BYTES = 1024 * 1024
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
+def _verified_artifact(path: Path, expected_sha256: str, name: str, expected_bytes: int | None, manifest_name: str) -> bytes:
+    if expected_bytes is not None and (type(expected_bytes) is not int or expected_bytes <= 0):
+        raise ValueError(f"Checkpoint artifact '{name}' requires a positive declared size.")
     with path.open("rb") as artifact:
-        for chunk in iter(lambda: artifact.read(_HASH_READ_BYTES), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        raw = artifact.read() if expected_bytes is None else artifact.read(expected_bytes + 1)
+    if expected_bytes is not None and len(raw) != expected_bytes:
+        raise ValueError(f"Checkpoint artifact '{name}' does not match its declared size.")
+    actual_sha256 = hashlib.sha256(raw).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"Checkpoint artifact '{name}' does not match {manifest_name}: "
+            f"expected SHA-256 {expected_sha256}, got {actual_sha256}."
+        )
+    return raw
 
 
 class SecsInference:
@@ -79,20 +84,11 @@ class SecsInference:
         specification_path = checkpoint_directory / manifest["spec"]["file"]
         weights_path = checkpoint_directory / manifest["weights"]["file"]
 
-        for artifact_name, artifact_path in (
-            ("spec", specification_path),
-            ("weights", weights_path),
-        ):
-            expected_sha256 = manifest[artifact_name]["sha256"]
-            actual_sha256 = _sha256(artifact_path)
-            if actual_sha256 != expected_sha256:
-                raise ValueError(
-                    f"Checkpoint artifact '{artifact_name}' does not match {manifest_path.name}: "
-                    f"expected SHA-256 {expected_sha256}, got {actual_sha256}."
-                )
-
-        with specification_path.open("rb") as source:
-            specification = tomllib.load(source)
+        if "bytes" not in manifest["weights"]:
+            raise ValueError("Checkpoint weights require the manifest's declared byte size before loading.")
+        specification_bytes = _verified_artifact(specification_path, manifest["spec"]["sha256"], "spec", None, manifest_path.name)
+        weights_bytes = _verified_artifact(weights_path, manifest["weights"]["sha256"], "weights", manifest["weights"]["bytes"], manifest_path.name)
+        specification = tomllib.loads(specification_bytes.decode("utf-8"))
         spectrum_points = specification["model"]["encoders"]["h_nmr"]["input_length"]
         smiles_context_length = specification["inputs"]["smiles"]["context_length"]
         with Path(molformer_lock).open("rb") as source:
@@ -109,7 +105,7 @@ class SecsInference:
             )
 
         from omegaconf import OmegaConf
-        from safetensors.torch import load_file
+        from safetensors.torch import load
 
         # Importing the tokenizer loads trusted remote code from the admitted cache,
         # so the revision comparison above must happen before this import.
@@ -121,7 +117,8 @@ class SecsInference:
         # Float32 avoids an incompatible LayerNorm boundary while autocast
         # controls the eligible reduced-precision forward operations.
         model = MolBind(OmegaConf.create(specification)).to(device=compute_device)
-        weights = load_file(weights_path, device="cpu")
+        weights = load(weights_bytes)
+        del weights_bytes
         model.load_state_dict(weights, strict=True)
         model.eval()
         return cls(
