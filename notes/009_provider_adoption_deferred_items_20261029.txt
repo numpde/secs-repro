@@ -51,8 +51,14 @@ showed that FAISS can hash bytes as its loader consumes them and can detect
 trailing data; a small Parquet byte-buffer probe also passed. The evidence is in
 this session's offline tool receipts. Those probes do
 not qualify the full index, resource usage, timing or concurrent host changes.
-The manifest lists about 23.7 GB of index and 1.0 GB of table; these full files
-were not available for this qualification.
+The local checkout has the manifest but not the approximately 23.7 GB index
+or 1.0 GB table. On 2026-10-29 a low-priority, read-only scan on ProArt found
+both files and their SHA-256 digests matched that manifest; its candidate and
+checkpoint manifest digests also matched the local copies. The candidate
+manifest digest is pinned by the published-challenge fixture, but the provider
+does not use that fixture as runtime admission. This is a snapshot of bytes read
+by the scan, not proof of what a worker subsequently loads or full-bundle
+performance qualification.
 
 Choose an upstream-owned verified-read or streaming seam for the candidate
 index and table, and qualify the actual bundle, identity continuity, memory and
