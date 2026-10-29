@@ -235,6 +235,11 @@ full cold-start and cancellation contract. NETWORK_INTERFACE makes device or
 system routing explicit; base-image bootstrap and GitHub updates may use the
 default connection.
 
+A disposable BuildKit build selected loopback through the wrapper and used its
+configured proxy to request a loopback HTTP endpoint successfully. Its output
+mode was cache-only. This establishes the local build-to-proxy path, not DNS
+routing, the absence of other network traffic, or cancellation of the build.
+
 A disposable Docker probe showed that TERM to the current wrapper did not retire
 its running container. Commit 5ddf70a preserves mounted staging inputs when a
 Docker operation has not returned successfully; an independent TERM probe
