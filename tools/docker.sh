@@ -47,6 +47,7 @@ scratch="$(realpath -e -- "$(mktemp -d)")"
 proxy_pid=''
 docker_pid=''
 proxy_starting=0
+proxy_pending=0
 docker_starting=0
 worker_pending=0
 pending_signal=0
@@ -58,12 +59,17 @@ request_stop() {
         exit "$1"
     fi
 }
-retire_worker() {
-    local cid receipt="$scratch/worker.cid" observed
+read_cid() {
+    local cid receipt="$scratch/$1.cid"
     [[ -f "$receipt" && ! -L "$receipt" ]] || return 1
     cid=$(<"$receipt")
     [[ "$cid" =~ ^[a-f0-9]{64}$ ]] || return 1
     { cmp -s "$receipt" <(printf '%s' "$cid") || cmp -s "$receipt" <(printf '%s\n' "$cid"); } || return 1
+    printf '%s' "$cid"
+}
+retire_container() {
+    local cid observed
+    cid=$(read_cid "$1") || return 1
     local -a engine=(docker "${arguments[@]:0:$subcommand_index}")
     observed=$(timeout --signal=TERM --kill-after=2 10 "${engine[@]}" ps --all --no-trunc --quiet --filter "id=$cid") || return 1
     [[ -z "$observed" || "$observed" == "$cid" ]] || return 1
@@ -86,24 +92,26 @@ cleanup() {
         done
         wait "$docker_pid" 2>/dev/null || true
     fi
+    if [[ -n "$proxy_pid" ]]; then
+        for child in $(jobs -pr); do
+            [[ "$child" == "$proxy_pid" ]] && kill -TERM "$proxy_pid" 2>/dev/null || true
+        done
+        wait "$proxy_pid" 2>/dev/null || true
+    fi
     if [[ "$worker_pending" == 1 ]]; then
         if [[ "${arguments[$subcommand_index]}" == run ]]; then
-            retire_worker || uncertain=1
+            retire_container worker || uncertain=1
         else
             uncertain=1
         fi
     fi
-    if [[ "$uncertain" == 0 && -n "$proxy_pid" ]]; then
-        for child in $(jobs -pr); do
-            [[ "$child" == "$proxy_pid" ]] && kill -KILL "$proxy_pid" 2>/dev/null || true
-        done
-        wait "$proxy_pid" 2>/dev/null || true
+    if [[ "$uncertain" == 0 && "$proxy_pending" == 1 ]]; then
+        retire_container proxy || uncertain=1
     fi
     if [[ "$uncertain" == 0 ]]; then
         rm -rf -- "$scratch"
     else
         printf 'Docker retirement is unconfirmed; retain %s and inspect the owned worker/proxy before retrying.\n' "$scratch" >&2
-        printf '%s\n' "$proxy_pid" > "$scratch/proxy.pid"
         [[ "$status" == 0 ]] && status=1
     fi
     exit "$status"
@@ -115,25 +123,54 @@ trap 'request_stop 143' TERM
 
 readonly ready_file="$scratch/proxy.port"
 if [[ -n "$wlan_interface" ]]; then
+bootstrap_dir="$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/bootstrap")"
+python3 "$(dirname -- "${BASH_SOURCE[0]}")/bootstrap_snapshot.py"
+resolver_mount=()
+if [[ -f /run/systemd/resolve/resolv.conf ]]; then
+    resolver_mount=(--mount type=bind,src=/run/systemd/resolve/resolv.conf,dst=/run/systemd/resolve/resolv.conf,readonly)
+fi
 proxy_starting=1
-python3 "$(dirname -- "${BASH_SOURCE[0]}")/bound_http_proxy.py" \
-    --interface "$wlan_interface" --ready-file "$ready_file" &
+proxy_pending=1
+timeout --signal=TERM --kill-after=2 30 docker "${arguments[@]:0:$subcommand_index}" run --detach --pull never \
+    --cidfile "$scratch/proxy.cid" --network host --read-only \
+    --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges:true \
+    --pids-limit 64 --cpus 1 --memory 128m --memory-swap 128m \
+    --log-driver local --log-opt max-size=1m --log-opt max-file=2 \
+    --env PROVIDER_CORE_IN_CONTAINER=1 \
+    --mount "type=bind,src=$bootstrap_dir,dst=/bootstrap,readonly" \
+    --mount "type=bind,src=$scratch,dst=/receipt" "${resolver_mount[@]}" \
+    --entrypoint python "${SECS_BOOTSTRAP_IMAGE:?Pinned bootstrap image is required}" \
+    -I -B -c 'import sys; sys.path.insert(0, "/bootstrap"); from provider_core.bound_http_proxy import main; main()' \
+    --interface "$wlan_interface" --port 0 --ready-file /receipt/proxy.port >/dev/null &
 proxy_pid=$!
 proxy_starting=0
 [[ "$pending_signal" == 0 ]] || exit "$pending_signal"
+if wait "$proxy_pid"; then
+    proxy_pid=''
+else
+    status=$?
+    proxy_pid=''
+    exit "$status"
+fi
+proxy_cid=$(read_cid proxy) || { printf '%s\n' 'Cannot verify the proxy container identity.' >&2; exit 2; }
 for _ in {1..100}; do
     [[ -s "$ready_file" ]] && break
-    kill -0 "$proxy_pid" 2>/dev/null || {
-        printf 'WLAN proxy stopped before Docker started.\n' >&2
-        exit 2
-    }
     sleep 0.05
 done
 if [[ ! -s "$ready_file" ]]; then
     printf 'WLAN proxy did not become ready before Docker started.\n' >&2
+    timeout --signal=TERM --kill-after=2 10 docker "${arguments[@]:0:$subcommand_index}" logs --tail 30 "$proxy_cid" 2>&1 | head -c 8192 >&2 || true
     exit 2
 fi
-readonly proxy_url="http://127.0.0.1:$(<"$ready_file")"
+proxy_running=$(timeout --signal=TERM --kill-after=2 10 docker "${arguments[@]:0:$subcommand_index}" inspect --format '{{.State.Running}}' "$proxy_cid") || {
+    printf '%s\n' 'Cannot inspect the proxy container.' >&2; exit 2;
+}
+[[ "$proxy_running" == true ]] || { printf '%s\n' 'Proxy container stopped before acquisition.' >&2; exit 2; }
+proxy_port=$(<"$ready_file")
+[[ "$proxy_port" =~ ^[0-9]{1,5}$ ]] && (( 10#$proxy_port > 0 && 10#$proxy_port <= 65535 )) || {
+    printf '%s\n' 'Proxy published an invalid port.' >&2; exit 2;
+}
+readonly proxy_url="http://127.0.0.1:$proxy_port"
 
 # The proxy is loopback-only. Host networking lets an already-networked build
 # or download container reach it without exposing a proxy listener to the LAN.
@@ -153,6 +190,7 @@ if [[ "${arguments[$subcommand_index]}" == run ]]; then
         --env "HTTPS_PROXY=$proxy_url"
         --env "http_proxy=$proxy_url"
         --env "https_proxy=$proxy_url"
+        --env NO_PROXY= --env no_proxy= --env ALL_PROXY= --env all_proxy= --env FTP_PROXY= --env ftp_proxy=
         )
     fi
 else
@@ -161,6 +199,7 @@ else
         --build-arg "HTTPS_PROXY=$proxy_url"
         --build-arg "http_proxy=$proxy_url"
         --build-arg "https_proxy=$proxy_url"
+        --build-arg NO_PROXY= --build-arg no_proxy= --build-arg ALL_PROXY= --build-arg all_proxy= --build-arg FTP_PROXY= --build-arg ftp_proxy=
     )
 fi
 arguments=(

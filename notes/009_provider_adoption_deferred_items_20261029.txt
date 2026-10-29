@@ -226,15 +226,14 @@ contract is designed and qualified, each existing owner retains its own check.
 Acquisition network and retirement
 ----------------------------------
 
-Owner: SECS deployment and shared SDK maintainers. Revisit when a qualified
-standalone bootstrap owner and its cold-start acquisition contract are agreed.
-The current SECS download proxy binds outbound TCP to the chosen device but
-uses host name resolution; it does not establish device-bound DNS. An explicit
-NETWORK_INTERFACE selector and an independently tested NMRPeak-derived proxy
-were evaluated locally, but neither was selected or published: copying DNS
-protocol code would create another owner, while a preloaded SDK wheel introduces
-a first-acquisition prerequisite. Base-image bootstrap and GitHub updates may
-use the default connection; those exceptions do not settle other download DNS.
+Owner: SECS deployment and shared SDK maintainers. The acquisition proxy uses
+the release-record-verified SDK source snapshot in a pinned Python container;
+its DNS and TCP sockets bind to the selected device. A real ProArt probe reached
+PyPI through WLAN with the SDK while wired was the preferred host route. This
+does not establish that every acquisition client uses the proxy, nor prove the
+full cold-start and cancellation contract. The explicit NETWORK_INTERFACE
+selector remains to be integrated. Base-image bootstrap and GitHub updates may
+use the default connection.
 
 A disposable Docker probe showed that TERM to the current wrapper did not retire
 its running container. Commit 5ddf70a preserves mounted staging inputs when a
@@ -249,9 +248,8 @@ future acquisition owner must cover those paths and cancellation before CID
 publication without guessing an identity. Avoid
 broad cleanup of shared Docker or BuildKit state.
 
-When retirement is uncertain the retained proxy inherits the caller's output
-pipes. A failing Docker client without a CID can therefore leave a caller
-waiting for pipe EOF even after the wrapper exits. A private unbounded proxy log
-was evaluated but not adopted: a retained proxy could fill storage, and copying
-its entire log could itself block shutdown. The bootstrap owner must close this
-pipe-lifetime gap while preserving bounded, useful diagnostics.
+The retired host proxy could hold caller output pipes open when its worker's
+retirement was uncertain. The replacement runs detached with bounded Docker
+logs and a separate CID; its launcher retires the worker first and retains the
+proxy if the worker's retirement is unconfirmed. A missing proxy CID also
+retains the receipt directory and cannot authorize a guessed removal.
