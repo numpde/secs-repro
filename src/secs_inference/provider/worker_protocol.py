@@ -50,6 +50,8 @@ def serve_scientific_session(connection: socket.socket, load_handler) -> None:
                 # The process boundary owns unexpected-failure serialization,
                 # including imports or setup outside the scientific reader's catches.
                 response = {"outcome": "failed", **exception_evidence(error)}
+                send(connection, response)
+                continue
             send(connection, response)
 
 
