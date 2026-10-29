@@ -13,7 +13,7 @@ from time import sleep
 # The API test image keeps the provider under /opt; isolated Python ignores PYTHONPATH.
 if Path("/opt/secs_inference/provider/worker_protocol.py").is_file():
     sys.path.insert(0, "/opt")
-from secs_inference.provider.worker_protocol import serve_scientific_session
+from secs_inference.provider.worker_protocol import encode, serve_scientific_session
 
 
 parser = argparse.ArgumentParser()
@@ -28,6 +28,10 @@ os.fstat(options.lease_fd)
 Path(options.pid_file).write_text(str(os.getpid()))
 config = Path(options.config_file).read_text() if options.config_file else None
 connection = socket.socket(fileno=options.session_fd)
+if options.mode == "startup_malformed":
+    connection.sendall(encode({"outcome": "failed"}))
+    while True:
+        sleep(1)
 if options.mode == "startup_exit":
     while not Path(options.pid_file + ".exit").exists():
         sleep(0.01)
@@ -50,6 +54,10 @@ def load():
         if command["operation"] == "prepare" and options.mode == "unconfirmed_execute":
             Path(options.pid_file + ".prepare_entered").touch()
             return {"outcome": "prepared", "prepared_handle": 7}
+        if command["operation"] == "inspect" and options.mode == "unconfirmed_inspect":
+            Path(options.pid_file + ".inspect_entered").touch()
+            while True:
+                sleep(1)
         if command["operation"] == "execute" and options.mode == "unconfirmed_execute":
             Path(options.pid_file + ".entered").touch()
             while True:

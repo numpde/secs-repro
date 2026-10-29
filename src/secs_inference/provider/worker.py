@@ -10,7 +10,7 @@ from provider_core.async_runner_session import AsyncRunnerSession
 from provider_core.task_boundary import contain_task_exit
 from provider_core.runner_session import RunnerSession, RunnerStartupStopped, RunnerStartupUnavailable
 
-from secs_inference.provider.worker_protocol import ScientificWorkerFailed, WorkerError, encode, receive_async
+from secs_inference.provider.worker_protocol import InvalidFailureEnvelope, ScientificWorkerFailed, WorkerError, encode, receive_async, scientific_worker_failure
 
 
 class WorkerStopUnconfirmed(WorkerError):
@@ -115,7 +115,7 @@ class WorkerClient:
             raise WorkerError("SECS native startup was interrupted during scientific channel adoption")
         ready = await self._receive_reply()
         if ready.get("outcome") == "failed":
-            raise ScientificWorkerFailed(ready)
+            raise scientific_worker_failure(ready)
         if ready.get("outcome") != "ready":
             raise WorkerError("The scientific child did not confirm that its configured model and candidate index loaded")
 
@@ -129,7 +129,7 @@ class WorkerClient:
             self._opening = self._own(self._open, deadline, require_execution)
         try:
             await _join(self._opening, deadline)
-        except ScientificWorkerFailed:
+        except WorkerError:
             self._observed_opening = self._opening
             raise
         if starting:
@@ -266,13 +266,16 @@ class WorkerClient:
         if (self._opening is not None and self._opening is not self._observed_opening
                 and self._opening.done() and not self._opening.cancelled()):
             failure = self._opening.exception()
-            if type(failure) is ScientificWorkerFailed:
+            if type(failure) in (ScientificWorkerFailed, InvalidFailureEnvelope):
                 failures.append(failure)
         if (self._pending is not None and self._pending.done() and not self._pending.cancelled()
                 and self._pending.exception() is None):
             response = self._pending.result()
             if response.get("outcome") == "failed":
-                failures.append(ScientificWorkerFailed(response))
+                try:
+                    failures.append(scientific_worker_failure(response))
+                except WorkerError as failure:
+                    failures.append(failure)
         return failures
 
     async def _retire(self):

@@ -16,7 +16,7 @@ from secs_inference.provider.input_operations import (
 )
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from provider_core.response_json import read_document
-from provider_core.execution import ObservationGapExpired
+from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpired
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.formula_notation import is_formula_space, normalize_formula_notation
 
@@ -74,7 +74,7 @@ class InterpretationSession:
         try:
             async with deadline:
                 return await self._select()
-        except ObservationGapExpired:
+        except (ConditionRecoveryExpired, ObservationGapExpired):
             raise
         except TimeoutError:
             if not deadline.expired():

@@ -29,10 +29,11 @@ from provider_core.transport import HttpResponse
 
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.config import HelloPolicy
+from secs_inference.provider.interpreter import InterpretationFailed
 from secs_inference.provider.runtime import _drain_controller, run_services
 from secs_inference.provider.session import SecsSession
 from secs_inference.provider.worker import WorkerClient
-from test_async_interpretation import choice
+from test_async_interpretation import call, choice
 from test_sdk_session import Carrier, Sources, Worker
 
 
@@ -207,6 +208,12 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.wait_for(owner.wait(), 20)
 
     async def test_real_dispatched_timeout_keeps_claim_without_terminal_handoff(self):
+        await self._assert_real_timeout_keeps_claim("execute")
+
+    async def test_inspection_deadline_keeps_claim_without_terminal_handoff(self):
+        await self._assert_real_timeout_keeps_claim("inspect")
+
+    async def _assert_real_timeout_keeps_claim(self, phase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             for part in ("ipc", "queue", "scratch", "status"):
@@ -220,7 +227,8 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
                 "--status-directory", str(root / "status"), "--owner-session-lifetime",
                 "--startup-seconds", "2", "--terminate-seconds", "2", "--kill-seconds", "2",
                 "--cleanup-seconds", "2", "--", sys.executable, "-I", str(fixture),
-                "--mode", "unconfirmed_execute", "--pid-file", str(root / "pid"),
+                "--mode", "unconfirmed_execute" if phase == "execute" else "unconfirmed_inspect",
+                "--pid-file", str(root / "pid"),
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
             )
             endpoint = DeliveryEndpoint(ORIGIN, PROVIDER, root / "ipc/delivery.sock")
@@ -231,8 +239,12 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
             delivery = DeliveryClient(endpoint, exchange_seconds=1, retirement_seconds=1)
             events = []
             worker = WorkerClient(worker_endpoint, startup_seconds=10, retirement_seconds=10)
-            session = SecsSession(worker=worker, sources=Sources(events), chat=Carrier(events, [choice()]),
-                                  work_seconds=1, interpretation_seconds=1, startup_seconds=10, max_turns=3)
+            turn = ([choice()] if phase == "execute" else [call("inspect_source", {
+                "source": {"upload_ref": "upload:chosen", "member": None}}, "inspect")])
+            session = SecsSession(worker=worker, sources=Sources(events), chat=Carrier(events, turn),
+                                  work_seconds=1 if phase == "execute" else 3,
+                                  interpretation_seconds=1 if phase == "execute" else 0.2,
+                                  startup_seconds=10, max_turns=3)
             claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
             scope = RecoveryScope(ORIGIN, PROVIDER, "secs", "runtime-one")
             pending = StartPending(scope, ANALYSIS_KIND_REF, FACTS, start_body(FACTS.job_ref, "request-held"))
@@ -254,13 +266,18 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
                     from provider_core.analysis import AnalysisOutcomeUnresolved
                     reason = failure.cause.cause
                     self.assertIs(type(reason), AnalysisOutcomeUnresolved)
-                    self.assertIs(type(reason.__cause__), TimeoutError)
+                    if phase == "execute":
+                        self.assertIs(type(reason.__cause__), TimeoutError)
+                    else:
+                        self.assertIs(type(reason.__cause__), InterpretationFailed)
                     self.assertIs(controller.require_held_failure(pending, failure), failure)
                 else:
-                    self.assertTrue((root / "pid.entered").exists(), "The child did not enter execution")
+                    marker = "pid.entered" if phase == "execute" else "pid.inspect_entered"
+                    self.assertTrue((root / marker).exists(), "The child did not enter the operation")
                     self.assertIsNone(queue.next_pending(ORIGIN, PROVIDER), "Unknown result entered terminal delivery")
                     self.fail("Unknown result did not retain a controller failure")
-                self.assertTrue((root / "pid.entered").exists(), "The child did not enter execution")
+                marker = "pid.entered" if phase == "execute" else "pid.inspect_entered"
+                self.assertTrue((root / marker).exists(), "The child did not enter the operation")
                 self.assertIsNone(queue.next_pending(ORIGIN, PROVIDER))
                 self.assertIn(controller, claims.live_owners())
                 self.assertTrue(worker.stopped)
@@ -276,6 +293,15 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.wait_for(owner.wait(), 20)
 
     async def test_unknown_science_keeps_claim_without_terminal_handoff(self):
+        await self._assert_unknown_reply_keeps_claim("execute")
+
+    async def test_unknown_preparation_keeps_claim_without_terminal_handoff(self):
+        await self._assert_unknown_reply_keeps_claim("prepare")
+
+    async def test_unknown_preparation_with_failed_retirement_stays_held(self):
+        await self._assert_unknown_reply_keeps_claim("prepare", fail_retirement=True)
+
+    async def _assert_unknown_reply_keeps_claim(self, phase, *, fail_retirement=False):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "ipc").mkdir(mode=0o700)
@@ -288,7 +314,12 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
             await inbox.start()
             delivery = DeliveryClient(endpoint, exchange_seconds=1, retirement_seconds=1)
             events = []
-            worker = Worker(events, {"outcome": "prepared", "prepared_handle": 7}, {"outcome": "unexpected"})
+            replies = ([{"outcome": "prepared", "prepared_handle": 7}, {"outcome": "unexpected"}]
+                       if phase == "execute" else [{"outcome": "unexpected"}])
+            worker = Worker(events, *replies)
+            cleanup = RuntimeError("fixture retirement failed")
+            if fail_retirement:
+                worker.stopping_failure = cleanup
             session = SecsSession(worker=worker, sources=Sources(events), chat=Carrier(events, [choice()]),
                                   work_seconds=3, interpretation_seconds=1, startup_seconds=1, max_turns=3)
             claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
@@ -307,15 +338,23 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
             try:
                 try:
                     await controller.run(pending)
-                except ControllerFailed:
-                    pass
+                except ControllerFailed as failure:
+                    from provider_core.analysis import AnalysisOutcomeUnresolved
+                    self.assertIs(type(failure.cause.cause), AnalysisOutcomeUnresolved)
+                    if not fail_retirement:
+                        self.assertIs(controller.require_held_failure(pending, failure), failure)
+                    else:
+                        def contains(error):
+                            return error is cleanup or (isinstance(error, BaseExceptionGroup)
+                                                        and any(contains(child) for child in error.exceptions))
+                        self.assertTrue(any(contains(error) for error in failure.cause.cleanup_failures))
                 else:
                     self.assertIsNone(queue.next_pending(ORIGIN, PROVIDER), "Unknown result entered terminal delivery")
                     self.fail("Unknown result did not retain a controller failure")
                 self.assertIsNone(queue.next_pending(ORIGIN, PROVIDER))
                 self.assertIn(controller, claims.live_owners())
-                self.assertTrue(worker.stopped)
-                self.assertIn(("sources-retire", True), events)
+                self.assertEqual(worker.stopped, not fail_retirement)
+                self.assertIn(("sources-retire", not fail_retirement), events)
             finally:
                 await delivery.retire()
                 await inbox.close()

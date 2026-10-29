@@ -19,12 +19,24 @@ class WorkerError(RuntimeError):
     """The scientific worker did not complete its requested operation."""
 
 
+class InvalidFailureEnvelope(WorkerError):
+    """The child sent a failure label without its required structural root."""
+
+
 class ScientificWorkerFailed(WorkerError):
     """Retain the child's bounded structural failure frame for protected evidence."""
 
     def __init__(self, diagnostic):
         super().__init__("Cannot finish SECS scientific work: the worker encountered an internal error; inspect protected diagnostics")
         self.diagnostic = diagnostic
+
+
+def scientific_worker_failure(frame):
+    if (type(frame.get("exception_id")) is not int or frame["exception_id"] != 0
+            or type(frame.get("exception_type")) is not str or not frame["exception_type"]
+            or type(frame.get("frames")) is not list):
+        raise InvalidFailureEnvelope("Cannot confirm SECS scientific work: the worker returned an invalid failure envelope")
+    return ScientificWorkerFailed(frame)
 
 
 def serve_scientific_session(connection: socket.socket, load_handler) -> None:

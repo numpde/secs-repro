@@ -73,11 +73,17 @@ started during preparation checks the phase before submitting its setup; once
 submitted, that setup remains owned even if a later stop is requested.
 
 A received, structurally admitted child failure can produce a public failure.
-During execution, a timeout, malformed reply, or communication loss without a
-confirmed outcome or original worker exit raises the shared unresolved marker.
+An unknown worker reply, worker request timeout, or interpretation deadline that
+interrupts an in-flight inspection raises the shared unresolved marker during
+preparation or execution. When no preparation handle was returned, the
+controller has not admitted search; that does not establish a child failure or
+completed cleanup.
 The controller retains the live claim and does not enqueue FAIL or repeat
-science. This live ownership is not reconstructed after process restart; the
-server owns Attempt expiry.
+science. Independent source and interpretation deadlines retain their reviewed
+public outcomes when no worker request is in flight. This live ownership is not
+reconstructed after process restart; the server owns Attempt expiry.
+Worker request timeouts use this conservative hold even if the local deadline
+expired before the frame was written; no separate pre-dispatch outcome is issued.
 
 One shared delivery binding for the API-origin/provider-ref pair accepts exact
 complete/fail bodies. The delivery service owns the persistent queue, publication,

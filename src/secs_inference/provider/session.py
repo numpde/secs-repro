@@ -7,7 +7,7 @@ from time import monotonic
 from provider_core.analysis import AnalysisFailure, AnalysisOutcomeUnresolved, AnalysisSuccess, ObservedWorkerCrash, PreparedAnalysis
 from provider_core.chat import ChatFailed
 from provider_core.diagnostics import failure_evidence
-from provider_core.execution import ObservationGapExpired
+from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpired
 from provider_core.attempt_record import ProtectedEvidence
 
 from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
@@ -15,7 +15,7 @@ from secs_inference.provider.interpreter import InterpretationFailed, Interpreta
 from secs_inference.provider.outcomes import AnalysisOutcome, NO_STARTING_CANDIDATES_MESSAGE
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.worker import NativeWorkerExited
-from secs_inference.provider.worker_protocol import ScientificWorkerFailed, WorkerError
+from secs_inference.provider.worker_protocol import ScientificWorkerFailed, WorkerError, scientific_worker_failure
 from secs_inference.provider.sources import SourceAcquisitionFailed
 
 
@@ -79,13 +79,19 @@ class SecsSession:
             return await self._prepare(instructions, report_condition.require_execution)
         except NativeWorkerExited as cause:
             raise self._worker_crash(cause, "preparing") from cause
-        except (InterpretationFailed, ChatFailed) as cause:
+        except InterpretationFailed as cause:
+            if not self._quiescent:
+                raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific inspection outcome") from cause
+            return self._failure("interpretation_failed", str(cause), cause)
+        except ChatFailed as cause:
             return self._failure("interpretation_failed", str(cause), cause)
         except SourceAcquisitionFailed as cause:
             return self._failure("input_access_failed", str(cause), cause)
-        except WorkerError as cause:
+        except ScientificWorkerFailed as cause:
             return self._failure("scientific_execution_failed", str(cause), cause)
-        except ObservationGapExpired:
+        except WorkerError as cause:
+            raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific preparation outcome") from cause
+        except (ConditionRecoveryExpired, ObservationGapExpired):
             raise
         except TimeoutError as cause:
             return self._failure("work_deadline_exceeded", "Input preparation exceeded its operation deadline; no verified prepared input was returned.", cause)
@@ -93,8 +99,13 @@ class SecsSession:
     async def _prepare(self, instructions, require_execution):
         self._quiescent = False
         require_execution()
-        await self.worker.check_ready(deadline=monotonic() + self.startup_seconds,
-                                      require_execution=require_execution)
+        try:
+            await self.worker.check_ready(deadline=monotonic() + self.startup_seconds,
+                                          require_execution=require_execution)
+        except (ConditionRecoveryExpired, ObservationGapExpired):
+            raise
+        except TimeoutError as cause:
+            raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific worker readiness") from cause
         self._quiescent = True
         require_execution()
         self._deadline = monotonic() + self.work_seconds
@@ -157,10 +168,6 @@ class SecsSession:
             return self._failure("scientific_execution_failed", str(cause), cause)
         except WorkerError as cause:
             raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific execution outcome") from cause
-        except ObservationGapExpired:
-            raise
-        except TimeoutError as cause:
-            raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific execution outcome") from cause
         self._choices[-1]["used"] = True
         if response["outcome"] == AnalysisOutcome.NO_STARTING_CANDIDATES:
             return self._failure(AnalysisOutcome.NO_STARTING_CANDIDATES.value, NO_STARTING_CANDIDATES_MESSAGE)
@@ -175,13 +182,14 @@ class SecsSession:
         if request["operation"] != "execute":
             command |= self.sources.worker_inputs()
         self._quiescent = False
-        response = await self.worker.request(command, deadline=deadline, require_execution=require_execution)
+        try:
+            response = await self.worker.request(command, deadline=deadline, require_execution=require_execution)
+        except (ConditionRecoveryExpired, ObservationGapExpired):
+            raise
+        except TimeoutError as cause:
+            raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific worker request outcome") from cause
         if response.get("outcome") == "failed":
-            if (type(response.get("exception_id")) is not int or response["exception_id"] != 0
-                    or type(response.get("exception_type")) is not str or not response["exception_type"]
-                    or type(response.get("frames")) is not list):
-                raise WorkerError("Cannot confirm SECS scientific work: the worker returned an invalid failure envelope")
-            raise ScientificWorkerFailed(response)
+            raise scientific_worker_failure(response)
         expected = {"inspect": {"inspected", "input_rejected"},
                     "prepare": {"prepared", "input_rejected"},
                     "execute": {AnalysisOutcome.ANALYSED, AnalysisOutcome.NO_STARTING_CANDIDATES}}

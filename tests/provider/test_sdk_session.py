@@ -15,14 +15,14 @@ import unittest
 from provider_core.analysis import AnalysisFailure, AnalysisOutcomeUnresolved, AnalysisSuccess, PreparedAnalysis
 from provider_core.attempt_record import RecoveryScope, StartPending, acknowledge_start
 from provider_core.attempt_request import start_body
-from provider_core.execution import ObservationGapExpired
+from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpired
 from provider_core.attempt_response import AttemptAdmission
 from provider_core.job_input import FeedInputFacts, VerifiedJobInput
 
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.session import SecsSession
 from secs_inference.provider.worker import WorkerClient
-from secs_inference.provider.worker_protocol import ScientificWorkerFailed, WorkerError
+from secs_inference.provider.worker_protocol import InvalidFailureEnvelope, ScientificWorkerFailed, WorkerError
 from secs_inference.provider.diagnostics import exception_evidence
 from test_async_interpretation import ScriptedCarrier, choice, call
 
@@ -110,6 +110,41 @@ condition.require_execution = lambda: None
 
 
 class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unknown_preparation_reply_is_unresolved(self):
+        session, _, _, events = self.make_session([{"outcome": "unexpected"}])
+        try:
+            with self.assertRaises(AnalysisOutcomeUnresolved) as caught:
+                await self.prepare(session)
+            self.assertIs(type(caught.exception.__cause__), WorkerError)
+        finally:
+            await session.retire()
+        self.assertLess(events.index("worker-stop"), events.index(("sources-retire", True)))
+
+    async def test_worker_preparation_timeout_is_unresolved(self):
+        session, worker, _, _ = self.make_session([])
+        failure = TimeoutError("worker fixture timeout")
+        async def interrupted(command, *, deadline, require_execution):
+            raise failure
+        worker.request = interrupted
+        try:
+            with self.assertRaises(AnalysisOutcomeUnresolved) as caught:
+                await self.prepare(session)
+            self.assertIs(caught.exception.__cause__, failure)
+        finally:
+            await session.retire()
+
+    async def test_source_preparation_timeout_remains_public_deadline(self):
+        session, _, _, _ = self.make_session([])
+        async def timed_out(*, deadline, readers_quiescent):
+            raise TimeoutError("source fixture timeout")
+        session.sources.open = timed_out
+        try:
+            outcome = await self.prepare(session)
+            self.assertIs(type(outcome), AnalysisFailure)
+            self.assertEqual(outcome.code, "work_deadline_exceeded")
+        finally:
+            await session.retire()
+
     async def test_real_worker_malformed_failure_frame_has_no_public_outcome(self):
         await self._assert_real_worker_unresolved("malformed_execute")
 
@@ -146,7 +181,8 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
                     session._deadline = monotonic() + 1
                 with self.assertRaises(AnalysisOutcomeUnresolved) as caught:
                     await session.execute(prepared, report_condition=condition)
-                expected_cause = TimeoutError if mode == "unconfirmed_execute" else WorkerError
+                expected_cause = (TimeoutError if mode == "unconfirmed_execute" else
+                                  InvalidFailureEnvelope if mode == "malformed_execute" else WorkerError)
                 self.assertIs(type(caught.exception.__cause__), expected_cause)
                 if mode == "invalid_json_execute":
                     self.assertIs(type(caught.exception.__cause__.__cause__), json.JSONDecodeError)
@@ -188,6 +224,22 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
         report.require_execution = refuse
         try:
             with self.assertRaises(ObservationGapExpired) as caught:
+                await session.execute(prepared, report_condition=report)
+            self.assertIs(caught.exception, expiry)
+        finally:
+            await session.retire()
+
+    async def test_condition_expiry_at_dispatch_keeps_original_failure(self):
+        session, _, _, _ = self.make_session([{"outcome": "prepared", "prepared_handle": 7}])
+        prepared = await self.prepare(session)
+        expiry = ConditionRecoveryExpired(1, phase="running", condition_code=None, cause=None)
+        async def report(_code):
+            raise AssertionError("No condition expected")
+        def refuse():
+            raise expiry
+        report.require_execution = refuse
+        try:
+            with self.assertRaises(ConditionRecoveryExpired) as caught:
                 await session.execute(prepared, report_condition=report)
             self.assertIs(caught.exception, expiry)
         finally:
@@ -259,7 +311,7 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(WorkerError) as caught:
                         await session._request({"operation": "execute", "prepared_handle": 7}, session._deadline,
                                                require_execution=condition.require_execution)
-                    self.assertIs(type(caught.exception), WorkerError)
+                    self.assertIs(type(caught.exception), InvalidFailureEnvelope)
                 finally:
                     await session.retire()
 
@@ -430,8 +482,8 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_prepared_handle_poisons_worker_before_releasing_sources(self):
         session, _, _, events = self.make_session([{"outcome": "prepared", "prepared_handle": True}])
-        outcome = await self.prepare(session)
-        self.assertIsInstance(outcome, AnalysisFailure)
-        self.assertEqual(outcome.code, "scientific_execution_failed")
+        with self.assertRaises(AnalysisOutcomeUnresolved) as caught:
+            await self.prepare(session)
+        self.assertIs(type(caught.exception.__cause__), WorkerError)
         await session.retire()
         self.assertLess(events.index("worker-stop"), events.index(("sources-retire", True)))
