@@ -2,6 +2,10 @@ SECS provider adoption: deferred work and qualification limits
 ============================================================
 2026-10-29
 
+This note records the original qualification baseline. SECS was subsequently
+deployed on ProArt; the historical statements below that no deployment had yet
+occurred describe that baseline, not the current host.
+
 Common design and active decisions in the nmr-provider-tools repository:
   notes/013_common_provider_lifecycle_design_20261028.txt
   notes/014_joint_provider_refactor_decisions_20261028.txt
@@ -205,3 +209,16 @@ exception_reference 999 and no corresponding node retains that numeric reference
 These displayed values establish no retry, retirement or API-effect permission.
 Reference and count consistency checks remain deferred, not qualified by the
 privacy, original-task retention or physical-cleanup tests.
+
+Private volume initialization
+-----------------------------
+
+Owners: SECS deployment maintainer and shared SDK maintainer. Revisit if the
+provider owners agree on a reusable contract and a real shared caller needs it.
+SECS and NMRNet initialize an empty root-owned volume for a selected private
+UID/GID and retain an already matching root. The shared API route and delivery
+queue have similar but separately owned initialization; delivery IPC uses a
+different group-access mode. SECS additionally initializes a native session
+lock without replacing an existing inode. A shared helper must preserve these
+different owners and modes rather than combine their lifecycles. Until a shared
+contract is designed and qualified, each existing owner retains its own check.
