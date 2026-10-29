@@ -99,3 +99,17 @@ embedding callers. An actual SIGINT during fatal reporting therefore changes
 raw termination status from -2 to 1; SIGTERM remains -15. This is not equivalent
 signal preservation. The current Compose stop uses TERM; revisit only if a
 selected supervisor needs the post-failure SIGINT distinction (D133).
+
+Scientific diagnostic graph coherence
+-------------------------------------
+
+Owner: SECS scientific diagnostics maintainer. Revisit before operator tooling
+relies on child-reported identities, references or counts as a validated graph.
+
+The D148 operator projection bounds numeric facts and admits code-owned exception
+names while omitting arbitrary child text. The original diagnostic object remains
+unchanged. It does not validate graph coherence: an encoded synthetic frame with
+exception_reference 999 and no corresponding node retains that numeric reference.
+These displayed values establish no retry, retirement or API-effect permission.
+Reference and count consistency checks remain deferred, not qualified by the
+privacy, original-task retention or physical-cleanup tests.
