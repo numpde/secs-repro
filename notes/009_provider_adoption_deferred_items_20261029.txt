@@ -248,3 +248,10 @@ evidence. Other passthrough runs and BuildKit retirement remain unqualified. A
 future acquisition owner must cover those paths and cancellation before CID
 publication without guessing an identity. Avoid
 broad cleanup of shared Docker or BuildKit state.
+
+When retirement is uncertain the retained proxy inherits the caller's output
+pipes. A failing Docker client without a CID can therefore leave a caller
+waiting for pipe EOF even after the wrapper exits. A private unbounded proxy log
+was evaluated but not adopted: a retained proxy could fill storage, and copying
+its entire log could itself block shutdown. The bootstrap owner must close this
+pipe-lifetime gap while preserving bounded, useful diagnostics.
