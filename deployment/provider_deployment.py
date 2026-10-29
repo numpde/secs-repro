@@ -218,6 +218,14 @@ def _project(repository: Path, name: str) -> ComposeProject:
 def _admit_runtime_volumes(project: ComposeProject, plan: dict, name: str) -> None:
     """Reuse only volumes owned by this deployment and its Compose project."""
     present = set(project.command("volume", "ls", "--quiet").decode("utf-8").splitlines())
+    inventory = project.inventory()
+    grants = {
+        "lifetime": {"provider": ("/state", True)},
+        "sources": {"provider": ("/run/secs/sources", True), "worker": ("/run/secs/sources", True),
+                    "sources-init": ("/sources", True)},
+        "session": {"provider": ("/run/secs/worker", False), "worker": ("/run/secs/worker", True),
+                    "sources-init": ("/session", True), "session-init": ("/session", True)},
+    }
     for role in ("lifetime", "sources", "session"):
         volume = plan["volumes"][role]["name"]
         if volume not in present:
@@ -237,6 +245,19 @@ def _admit_runtime_volumes(project: ComposeProject, plan: dict, name: str) -> No
             options = {}
         if record.get("Driver") != "local" or type(options) is not dict or options != plan["volumes"][role].get("driver_opts", {}):
             raise ValueError(f"Cannot reuse SECS runtime volume {volume!r}: its driver or options differ.")
+        attached = project.command("ps", "--all", "--no-trunc", "--quiet", "--filter", f"volume={volume}").decode("ascii").splitlines()
+        allowed = {record["Id"]: (record, *grants[role][service]) for service, record in inventory.items()
+                   if service in grants[role]}
+        if len(attached) != len(set(attached)) or any(identifier not in allowed for identifier in attached):
+            raise ValueError(f"Cannot reuse SECS runtime volume {volume!r}: a foreign or ambiguous container is attached.")
+        for identifier in attached:
+            container, target, writable = allowed[identifier]
+            mounts = container.get("Mounts")
+            if type(mounts) is not list or any(type(mount) is not dict for mount in mounts):
+                raise ValueError(f"Cannot reuse SECS runtime volume {volume!r}: its container mounts are unavailable.")
+            matches = [mount for mount in mounts if mount.get("Type") == "volume" and mount.get("Name") == volume]
+            if len(matches) != 1 or matches[0].get("Destination") != target or matches[0].get("RW") is not writable:
+                raise ValueError(f"Cannot reuse SECS runtime volume {volume!r}: its container grant differs.")
 
 
 def _private_directory(path: Path) -> None:

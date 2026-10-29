@@ -33,13 +33,14 @@ class ProviderDeploymentTests(unittest.TestCase):
         project = Mock(name="project")
         project.name = "secs-example"
         project.repository = Path("/workspace")
+        project.inventory.return_value = {}
         plan = {"volumes": {role: {"name": "secs-example_" + role}
                             for role in ("lifetime", "sources", "session")}}
         labels = {"com.docker.compose.project": project.name,
                   "com.docker.compose.volume": "sources", "io.secs.deployment": "example",
                   "io.secs.checkout": "/workspace"}
         volume = {"Name": "secs-example_sources", "Labels": labels, "Driver": "local", "Options": None}
-        project.command.side_effect = (b"secs-example_sources\n", json.dumps([volume]).encode())
+        project.command.side_effect = (b"secs-example_sources\n", json.dumps([volume]).encode(), b"")
         _admit_runtime_volumes(project, plan, "example")
         labels["io.secs.deployment"] = "other"
         project.command.side_effect = (b"secs-example_sources\n", json.dumps([volume]).encode())
@@ -55,6 +56,38 @@ class ProviderDeploymentTests(unittest.TestCase):
         project.command.side_effect = (b"secs-example_sources\n", json.dumps([volume]).encode())
         with self.assertRaisesRegex(ValueError, "driver or options differ"):
             _admit_runtime_volumes(project, plan, "example")
+        volume["Options"] = None
+        project.command.side_effect = (b"secs-example_sources\n", json.dumps([volume]).encode(), b"f" * 64 + b"\n")
+        with self.assertRaisesRegex(ValueError, "foreign or ambiguous container"):
+            _admit_runtime_volumes(project, plan, "example")
+
+    def test_session_volume_reuse_checks_owned_container_grants(self):
+        project = Mock(name="project")
+        project.name = "secs-example"
+        project.repository = Path("/workspace")
+        plan = {"volumes": {role: {"name": "secs-example_" + role}
+                            for role in ("lifetime", "sources", "session")}}
+        name = "secs-example_session"
+        labels = {"com.docker.compose.project": project.name, "com.docker.compose.volume": "session",
+                  "io.secs.deployment": "example", "io.secs.checkout": "/workspace"}
+        volume = {"Name": name, "Labels": labels, "Driver": "local", "Options": None}
+        identifier = "a" * 64
+        mount = {"Type": "volume", "Name": name, "Destination": "/run/secs/worker", "RW": False}
+        container = {"Id": identifier, "Mounts": [mount]}
+        project.inventory.return_value = {"provider": container}
+
+        def inspect():
+            project.command.side_effect = (name.encode() + b"\n", json.dumps([volume]).encode(), identifier.encode() + b"\n")
+            _admit_runtime_volumes(project, plan, "example")
+
+        inspect()
+        mount["RW"] = True
+        with self.assertRaisesRegex(ValueError, "container grant differs"):
+            inspect()
+        mount["RW"] = False
+        container["Mounts"].append(mount.copy())
+        with self.assertRaisesRegex(ValueError, "container grant differs"):
+            inspect()
 
     def test_start_refuses_old_host_runtime_before_starting_volumes(self):
         with TemporaryDirectory() as temporary:

@@ -113,6 +113,16 @@ class LifecycleEndToEndTests(unittest.TestCase):
             try:
                 records = project.start(plan)
                 _admit_runtime_volumes(project, plan, "example")
+                foreign = project.command(
+                    "run", "--detach", "--network", "none", "--read-only", "--cap-drop", "ALL",
+                    "--mount", f"type=volume,src={plan['volumes']['sources']['name']},dst=/foreign,readonly",
+                    "--entrypoint", "python", image, "-I", "-c", "import time; time.sleep(300)",
+                ).decode().strip()
+                try:
+                    with self.assertRaisesRegex(ValueError, "foreign or ambiguous container"):
+                        _admit_runtime_volumes(project, plan, "example")
+                finally:
+                    project.command("rm", "--force", foreign)
                 for role in project.completed_roles:
                     self.assertEqual(records[role]["State"]["ExitCode"], 0)
                 script = "import os; print(os.stat('/run/secs/worker/.owner-session.lock').st_ino)"
