@@ -38,7 +38,19 @@ class NetworkInterfaceTests(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             docker = root / 'docker'
-            docker.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$RECEIPT"\n')
+            docker.write_text('''#!/bin/bash
+args=("$@")
+while [[ $1 != create && $1 != start && $1 != inspect && $1 != run && $1 != build && $1 != pull ]]; do shift; done
+case $1 in
+  create)
+    printf '%s\\n' "${args[@]}" > "$RECEIPT"
+    while [[ $1 != --cidfile ]]; do shift; done
+    printf '%064d' 0 > "$2"; printf '%064d\\n' 0 ;;
+  inspect) printf 'created false false true true no\\n' ;;
+  start) exit 0 ;;
+  *) printf '%s\\n' "${args[@]}" > "$RECEIPT" ;;
+esac
+''')
             docker.chmod(0o700)
             receipt = root / 'receipt'
             env = os.environ | {'PATH': f'{root}:/usr/bin:/bin', 'RECEIPT': str(receipt),
@@ -81,6 +93,12 @@ class NetworkInterfaceTests(unittest.TestCase):
                 result, receipt = self.invoke(['run', '--network', 'none', *option, 'image'])
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(receipt.splitlines(), ['--context', 'default', 'run', '--network', 'none', *option, 'image'])
+
+    def test_container_command_pull_argument_remains_data(self):
+        result, receipt = self.invoke(['run', '--network', 'bridge', 'image', 'command', '--pull=always'],
+                                      selection='system', origin='command line')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(receipt.splitlines()[-3:], ['image', 'command', '--pull=always'])
 
     def test_invalid_and_legacy_choices_fail_before_docker(self):
         for selection, origin, old in [('missing-device', 'command line', 'undefined'), ('', 'environment', 'undefined'),

@@ -30,6 +30,7 @@ fi
 if (( subcommand_index < 0 )); then
     exec docker "${arguments[@]}"
 fi
+readonly operation="${arguments[$subcommand_index]}"
 offline=0
 if [[ "$network" == none ]]; then
     [[ "${arguments[$subcommand_index]}" == run ]] || exec docker "${arguments[@]}"
@@ -65,6 +66,7 @@ proxy_starting=0
 proxy_pending=0
 docker_starting=0
 worker_pending=0
+worker_identity_verified=0
 pending_signal=0
 request_stop() {
     if [[ "$proxy_starting" == 1 || "$docker_starting" == 1 ]]; then
@@ -114,8 +116,12 @@ cleanup() {
         wait "$proxy_pid" 2>/dev/null || true
     fi
     if [[ "$worker_pending" == 1 ]]; then
-        if [[ "${arguments[$subcommand_index]}" == run ]]; then
-            retire_container worker || uncertain=1
+        if [[ "$operation" == run ]]; then
+            if [[ "$worker_identity_verified" == 1 ]]; then
+                retire_container worker || uncertain=1
+            else
+                uncertain=1
+            fi
         else
             uncertain=1
         fi
@@ -198,7 +204,7 @@ fi
 
 injected=()
 if [[ "${arguments[$subcommand_index]}" == run ]]; then
-    injected=(--cidfile "$scratch/worker.cid")
+    injected=(--cidfile "$scratch/worker.cid" --pull never)
     if [[ -n "$wlan_interface" ]]; then
         injected+=(
         --env "HTTP_PROXY=$proxy_url"
@@ -231,9 +237,44 @@ arguments=(
     "${arguments[@]:$((subcommand_index + 1))}"
 )
 
-docker_starting=1
-worker_pending=1
-docker "${arguments[@]}" <&0 &
+if [[ "$operation" == run ]]; then
+    create_arguments=("${arguments[@]}")
+    create_arguments[$subcommand_index]=create
+    docker_starting=1
+    worker_pending=1
+    docker "${create_arguments[@]}" </dev/null >"$scratch/worker.output" &
+    docker_pid=$!
+    docker_starting=0
+    [[ "$pending_signal" == 0 ]] || exit "$pending_signal"
+    if wait "$docker_pid"; then
+        docker_pid=''
+    else
+        status=$?
+        docker_pid=''
+        exit "$status"
+    fi
+    worker_cid=$(read_cid worker) || { printf '%s\n' 'Cannot verify the worker container identity.' >&2; exit 2; }
+    cmp -s "$scratch/worker.output" <(printf '%s\n' "$worker_cid") || {
+        printf '%s\n' 'Docker create output does not match its CID receipt.' >&2; exit 2;
+    }
+    worker_identity_verified=1
+    worker_settings=$(timeout --signal=TERM --kill-after=2 10 docker "${arguments[@]:0:$subcommand_index}" inspect \
+        --format '{{.State.Status}} {{.Config.OpenStdin}} {{.Config.AttachStdin}} {{.Config.AttachStdout}} {{.Config.AttachStderr}} {{.HostConfig.RestartPolicy.Name}}' "$worker_cid") || {
+        printf '%s\n' 'Cannot inspect the created worker container.' >&2; exit 2;
+    }
+    start_arguments=(--attach)
+    case "$worker_settings" in
+        'created true true true true no') start_arguments+=(--interactive) ;;
+        'created false false true true no') ;;
+        *) printf '%s\n' 'Created worker must be stopped, use default output streams, and have restart disabled.' >&2; exit 2 ;;
+    esac
+    docker_starting=1
+    docker "${arguments[@]:0:$subcommand_index}" start "${start_arguments[@]}" "$worker_cid" <&0 &
+else
+    docker_starting=1
+    worker_pending=1
+    docker "${arguments[@]}" <&0 &
+fi
 docker_pid=$!
 docker_starting=0
 [[ "$pending_signal" == 0 ]] || exit "$pending_signal"

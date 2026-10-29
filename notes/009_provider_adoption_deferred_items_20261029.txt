@@ -255,6 +255,17 @@ future acquisition owner must cover those paths and cancellation before CID
 publication without guessing an identity. Avoid
 broad cleanup of shared Docker or BuildKit state.
 
+Managed foreground runs now create a stopped worker, require Docker's create
+output to agree with its CID receipt, and only then dispatch start. A real
+Docker probe with the receipt deliberately withheld observed the container still
+in the created state and no worker start; the unknown stopped container and
+its evidence still need operator reconciliation. Once start is dispatched,
+failed or interrupted execution is retired by exact verified CID, or reported
+as unconfirmed. This does not settle proxy creation or BuildKit cancellation.
+The Make-owned foreground callers select `--pull never`; the wrapper is not a
+general Docker option parser and does not enforce that policy against an
+arbitrary later override supplied to a direct invocation.
+
 An isolated networkless BuildKit probe printed a start marker, slept for twelve
 seconds and printed a finish marker. After TERM at the start, its buildx client
 exited within an eight-second wait. A matching build-history record subsequently
