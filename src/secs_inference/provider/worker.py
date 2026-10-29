@@ -93,8 +93,10 @@ class WorkerClient:
             finally:
                 os.close(descriptor)
 
-    async def _open(self, deadline):
+    async def _open(self, deadline, require_execution):
         identity = await self._lease_identity(deadline)
+        if require_execution is not None:
+            require_execution()
         self.native = AsyncRunnerSession(RunnerSession(
             self.path, role="secs", expected_lock_identity=identity,
             startup_seconds=self.startup_seconds, retirement_seconds=self.retirement_seconds,
@@ -117,14 +119,14 @@ class WorkerClient:
         if ready.get("outcome") != "ready":
             raise WorkerError("The scientific child did not confirm that its configured model and candidate index loaded")
 
-    async def check_ready(self, *, deadline):
+    async def check_ready(self, *, deadline, require_execution=None):
         if self.stopped:
             # A fresh SDK owner is allowed only after this client's retirement
             # positively settled; a poisoned or pending read never reaches here.
             self._begin_lifetime()
         starting = self._opening is None
         if starting:
-            self._opening = self._own(self._open, deadline)
+            self._opening = self._own(self._open, deadline, require_execution)
         try:
             await _join(self._opening, deadline)
         except ScientificWorkerFailed:
@@ -154,12 +156,14 @@ class WorkerClient:
         except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError) as cause:
             await self._observe_exit(cause)
 
-    async def _exchange(self, command, deadline):
+    async def _exchange(self, command, deadline, require_execution):
         if self._stopping or self.stopped:
             raise WorkerError("The scientific request was stopped before dispatch")
         frame = encode(command)
         if monotonic() >= deadline:
             raise TimeoutError("Scientific request deadline elapsed before dispatch")
+        if require_execution is not None:
+            require_execution()
         try:
             self._writer.write(frame)
             await self._writer.drain()
@@ -167,12 +171,14 @@ class WorkerClient:
             await self._observe_exit(cause)
         return await self._receive_reply()
 
-    async def request(self, command, *, deadline):
+    async def request(self, command, *, deadline, require_execution=None):
+        if command.get("operation") in ("inspect", "prepare", "execute") and not callable(require_execution):
+            raise ValueError("Scientific work requires its active Attempt permission")
         if self._stopping or self.stopped or self._reader is None:
             raise WorkerError("The scientific worker is not available for another request")
         if self._pending is not None:
             raise WorkerError("The scientific worker still owns its original request; join or retire it before more work")
-        self._pending = self._own(self._exchange, command, deadline)
+        self._pending = self._own(self._exchange, command, deadline, require_execution)
         try:
             response = await _join(self._pending, deadline)
         except NativeWorkerExited:

@@ -4,8 +4,10 @@ import asyncio
 from copy import deepcopy
 import json
 from time import monotonic
+from types import SimpleNamespace
 import unittest
 
+from provider_core.execution import ObservationGapExpired
 from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
 from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession
 
@@ -38,6 +40,21 @@ class ScriptedCarrier:
 
 
 class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_observation_expiry_survives_interpreter_deadline(self):
+        expiry = ObservationGapExpired(1, executor=SimpleNamespace(_observation_read_started=False))
+        async def inspect(_source):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                raise expiry
+        chat = ScriptedCarrier([call("inspect_source", {
+            "source": {"upload_ref": "upload:chosen", "member": None}}, "inspect")])
+        session = self.session(chat, inspect)
+        session.deadline = monotonic() + 0.05
+        with self.assertRaises(ObservationGapExpired) as caught:
+            await session.select()
+        self.assertIs(caught.exception, expiry)
+
     def session(self, chat, inspect, turns=3):
         return InterpretationSession(chat, "Find C2H6O", (), inspect,
                                      deadline=monotonic() + 3, max_turns=turns)

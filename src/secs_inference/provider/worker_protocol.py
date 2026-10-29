@@ -96,7 +96,10 @@ def _length(header):
 
 
 def _document(raw):
-    document = json.loads(raw)
+    try:
+        document = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as cause:
+        raise WorkerError("Cannot decode the scientific worker message as JSON") from cause
     if type(document) is not dict:
         raise WorkerError("Scientific worker message is not an object")
     return document

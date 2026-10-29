@@ -65,6 +65,20 @@ files, interpreter work, scientific requests, and worker lease. Shared native
 supervision owns child exit and control-channel retirement. A SECS worker pool
 owns model readiness and qualified reuse of an idle loaded model/index.
 
+Each preparing or executing phase passes its shared permission to the native
+request. The worker checks it immediately before writing a scientific command;
+an interrupted or uncertain request requires original-worker retirement. Warmup
+before START is provider-owned and has no Attempt permission. A fresh runner
+started during preparation checks the phase before submitting its setup; once
+submitted, that setup remains owned even if a later stop is requested.
+
+A received, structurally admitted child failure can produce a public failure.
+During execution, a timeout, malformed reply, or communication loss without a
+confirmed outcome or original worker exit raises the shared unresolved marker.
+The controller retains the live claim and does not enqueue FAIL or repeat
+science. This live ownership is not reconstructed after process restart; the
+server owns Attempt expiry.
+
 One shared delivery binding for the API-origin/provider-ref pair accepts exact
 complete/fail bodies. The delivery service owns the persistent queue, publication,
 retry pacing, and held-report operator state. SECS retains the exact outcome

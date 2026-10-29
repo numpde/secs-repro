@@ -6,8 +6,13 @@ import os
 from pathlib import Path
 import signal
 import socket
+import struct
+import sys
 from time import sleep
 
+# The API test image keeps the provider under /opt; isolated Python ignores PYTHONPATH.
+if Path("/opt/secs_inference/provider/worker_protocol.py").is_file():
+    sys.path.insert(0, "/opt")
 from secs_inference.provider.worker_protocol import serve_scientific_session
 
 
@@ -42,6 +47,19 @@ def load():
     def handle(command):
         nonlocal calls
         calls += 1
+        if command["operation"] == "prepare" and options.mode == "unconfirmed_execute":
+            Path(options.pid_file + ".prepare_entered").touch()
+            return {"outcome": "prepared", "prepared_handle": 7}
+        if command["operation"] == "execute" and options.mode == "unconfirmed_execute":
+            Path(options.pid_file + ".entered").touch()
+            while True:
+                sleep(1)
+        if command["operation"] == "execute" and options.mode == "malformed_execute":
+            return {"outcome": "failed"}
+        if command["operation"] == "execute" and options.mode == "invalid_json_execute":
+            connection.sendall(struct.pack("!I", 1) + b"{")
+            while True:
+                sleep(1)
         if command["operation"] == "hang":
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
             Path(command["entered"]).touch()

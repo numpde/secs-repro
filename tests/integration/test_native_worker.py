@@ -20,6 +20,22 @@ from secs_inference.provider.worker_config_snapshot import capture
 
 
 class WorkerDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_denied_attempt_startup_does_not_construct_runner(self):
+        with TemporaryDirectory() as temporary:
+            worker = self.client(temporary)
+            worker._lease_identity = AsyncMock(return_value=(1, 2))
+            refusal = RuntimeError("fixture permission withdrawn")
+            def deny():
+                raise refusal
+            with patch("secs_inference.provider.worker.AsyncRunnerSession") as runner:
+                with self.assertRaises(RuntimeError) as caught:
+                    await worker.check_ready(deadline=monotonic() + 5, require_execution=deny)
+                self.assertIs(caught.exception, refusal)
+                runner.assert_not_called()
+                self.assertIsNone(worker.native)
+                await worker.stop()
+                self.assertTrue(worker.stopped)
+
     def client(self, directory):
         worker = WorkerClient(Path(directory) / "worker.sock", startup_seconds=10, retirement_seconds=10)
         worker._reader = object()
@@ -30,7 +46,8 @@ class WorkerDispatchTests(unittest.IsolatedAsyncioTestCase):
         worker._reader = asyncio.StreamReader()
         dispatched = asyncio.Event()
         worker._writer.write.side_effect = lambda _frame: dispatched.set()
-        request = asyncio.create_task(worker.request({"operation": "inspect"}, deadline=monotonic() + 5))
+        request = asyncio.create_task(worker.request({"operation": "inspect"}, deadline=monotonic() + 5,
+                                                     require_execution=lambda: None))
         await asyncio.wait_for(dispatched.wait(), 1)
         original = worker._pending
         original.add_done_callback(lambda _task: request.cancel("original caller interruption"))
@@ -82,7 +99,8 @@ class WorkerDispatchTests(unittest.IsolatedAsyncioTestCase):
             worker = self.client(temporary)
             try:
                 with self.assertRaises(TimeoutError):
-                    await worker.request({"operation": "inspect"}, deadline=monotonic() - 1)
+                    await worker.request({"operation": "inspect"}, deadline=monotonic() - 1,
+                                         require_execution=lambda: None)
                 worker._writer.write.assert_not_called()
             finally:
                 await worker.stop()
@@ -100,7 +118,8 @@ class WorkerDispatchTests(unittest.IsolatedAsyncioTestCase):
                 return own(delayed)
             worker._own = deferred
             try:
-                request = asyncio.create_task(worker.request({"operation": "inspect"}, deadline=monotonic() + 0.2))
+                request = asyncio.create_task(worker.request({"operation": "inspect"}, deadline=monotonic() + 0.2,
+                                                             require_execution=lambda: None))
                 await asyncio.wait_for(entered.wait(), 1)
                 with self.assertRaises(TimeoutError):
                     await request
@@ -157,6 +176,21 @@ class NativeWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(select.select([descriptor], [], [], 0)[0], "The original PID remains alive")
         self.assertTrue(self.worker.native.session.retirement.scratch_released)
         self.assertEqual(list((self.root / "scratch").iterdir()), [])
+
+    async def test_dispatched_execution_timeout_retires_original_native_owner(self):
+        await self.start("unconfirmed_execute")
+        await self.worker.check_ready(deadline=monotonic() + 10)
+        pid = int(self.pid_file.read_text())
+        descriptor = os.pidfd_open(pid)
+        try:
+            with self.assertRaises(TimeoutError):
+                await self.worker.request({"operation": "execute"}, deadline=monotonic() + 1,
+                                          require_execution=lambda: None)
+            self.assertTrue(Path(str(self.pid_file) + ".entered").exists())
+            await self.worker.stop()
+            self.assert_retired(descriptor)
+        finally:
+            os.close(descriptor)
 
     async def test_fresh_children_read_one_worker_config_snapshot(self):
         source, snapshot = self.root / "operator.toml", self.root / "snapshot.toml"

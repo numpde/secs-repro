@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -13,11 +14,13 @@ from unittest.mock import AsyncMock
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from provider_core.analysis import AnalysisSuccess, PreparedAnalysis
 from provider_core.api import ProviderAPI
-from provider_core.attempt_record import ProtectedEvidence, RecoveryScope
-from provider_core.controller import AttemptController, LiveStartPolicy
+from provider_core.attempt_record import ProtectedEvidence, RecoveryScope, StartPending
+from provider_core.attempt_request import start_body
+from provider_core.controller import AttemptController, ControllerFailed, LiveStartPolicy
 from provider_core.delivery_client import DeliveryClient, DeliveryEndpoint
 from provider_core.delivery_ipc import DeliveryInbox
 from provider_core.delivery_store import DeliveryFull, DeliveryQueue, QueueLimits
+from provider_core.execution import ExecutionStopRequested
 from provider_core.job_feed import DiscoveredJob, JobPage
 from provider_core.job_input import FeedInputFacts, VerifiedJobInput
 from provider_core.ownership import AttemptClaims, LiveAttemptLimits
@@ -27,6 +30,10 @@ from provider_core.transport import HttpResponse
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.config import HelloPolicy
 from secs_inference.provider.runtime import _drain_controller, run_services
+from secs_inference.provider.session import SecsSession
+from secs_inference.provider.worker import WorkerClient
+from test_async_interpretation import choice
+from test_sdk_session import Carrier, Sources, Worker
 
 
 ORIGIN, PROVIDER = "https://api.test", "provider:secs-test"
@@ -118,6 +125,202 @@ class Discovery:
 
 
 class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
+    async def test_controller_stop_before_worker_dispatch_blocks_first_execution(self):
+        await self._assert_stop_before_worker_dispatch("execute")
+
+    async def test_controller_stop_before_worker_dispatch_blocks_preparation(self):
+        await self._assert_stop_before_worker_dispatch("prepare")
+
+    async def _assert_stop_before_worker_dispatch(self, operation):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for part in ("ipc", "queue", "scratch", "status"):
+                (root / part).mkdir(mode=0o700)
+            worker_endpoint = root / "ipc/worker.sock"
+            (root / "ipc/.owner-session.lock").touch(mode=0o600)
+            fixture = Path(__file__).resolve().parents[1] / "integration/native_worker_fixture.py"
+            owner = await asyncio.create_subprocess_exec(
+                sys.executable, "-I", "-m", "provider_core.runner", "--role", "secs",
+                "--socket", str(worker_endpoint), "--scratch", str(root / "scratch"),
+                "--status-directory", str(root / "status"), "--owner-session-lifetime",
+                "--startup-seconds", "2", "--terminate-seconds", "2", "--kill-seconds", "2",
+                "--cleanup-seconds", "2", "--", sys.executable, "-I", str(fixture),
+                "--mode", "unconfirmed_execute", "--pid-file", str(root / "pid"),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            endpoint = DeliveryEndpoint(ORIGIN, PROVIDER, root / "ipc/delivery.sock")
+            queue = DeliveryQueue(root / "queue", limits=QueueLimits(1, 2097152, 1, 2097152))
+            inbox = DeliveryInbox(queue, (endpoint,), request_seconds=1,
+                                  on_accepted=lambda _endpoint: None, on_failure=lambda *_args: None,
+                                  binding_status=lambda _endpoint: {})
+            delivery = DeliveryClient(endpoint, exchange_seconds=1, retirement_seconds=1)
+            entered, release = asyncio.Event(), asyncio.Event()
+            events = []
+            class PausedWorker(WorkerClient):
+                async def _exchange(self, command, deadline, require_execution):
+                    if command["operation"] == operation:
+                        entered.set()
+                        await release.wait()
+                    return await super()._exchange(command, deadline, require_execution)
+            worker = PausedWorker(worker_endpoint, startup_seconds=10, retirement_seconds=10)
+            session = SecsSession(worker=worker, sources=Sources(events), chat=Carrier(events, [choice()]),
+                                  work_seconds=3, interpretation_seconds=1, startup_seconds=10, max_turns=3)
+            claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
+            scope = RecoveryScope(ORIGIN, PROVIDER, "secs", "runtime-one")
+            pending = StartPending(scope, ANALYSIS_KIND_REF, FACTS, start_body(FACTS.job_ref, "request-stop"))
+            identity = SigningIdentity(ORIGIN, "credential:test", Ed25519PrivateKey.generate())
+            controller = AttemptController.live(
+                ProviderAPI(identity, LifecycleTransport(), expected_topology="dev-local"), claims, session,
+                scope=scope, stopping=asyncio.Event(), admission_stopping=asyncio.Event(),
+                start_policy=LiveStartPolicy(0.001, lambda *_args: None, lambda *_args: None),
+                preverified_input=VerifiedJobInput(FACTS, PAYLOAD), delivery=delivery,
+                on_delivery_retry=lambda *_args: None, delivery_retry_initial_seconds=0.01,
+                delivery_retry_max_seconds=0.01, allowed_job_states=frozenset({"open", "closed"}),
+                poll_seconds=1, task_settle_seconds=15,
+            )
+            task = None
+            try:
+                await inbox.start()
+                task = asyncio.create_task(controller.run(pending))
+                await asyncio.wait_for(entered.wait(), 5)
+                controller.request_stop()
+                release.set()
+                result, = await asyncio.gather(task, return_exceptions=True)
+                marker = "pid.entered" if operation == "execute" else "pid.prepare_entered"
+                self.assertFalse((root / marker).exists(), f"The child entered {operation} after stop")
+                self.assertIs(type(result), ControllerFailed)
+                self.assertIs(type(result.cause.cause), ExecutionStopRequested)
+                self.assertTrue(worker.stopped)
+                self.assertIsNone(queue.next_pending(ORIGIN, PROVIDER))
+            finally:
+                release.set()
+                if task is not None and not task.done():
+                    controller.request_stop()
+                    await asyncio.gather(task, return_exceptions=True)
+                try:
+                    await delivery.retire()
+                    await inbox.close()
+                    queue.close()
+                finally:
+                    if owner.returncode is None:
+                        owner.terminate()
+                    await asyncio.wait_for(owner.wait(), 20)
+
+    async def test_real_dispatched_timeout_keeps_claim_without_terminal_handoff(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for part in ("ipc", "queue", "scratch", "status"):
+                (root / part).mkdir(mode=0o700)
+            worker_endpoint = root / "ipc/worker.sock"
+            (root / "ipc/.owner-session.lock").touch(mode=0o600)
+            fixture = Path(__file__).resolve().parents[1] / "integration/native_worker_fixture.py"
+            owner = await asyncio.create_subprocess_exec(
+                sys.executable, "-I", "-m", "provider_core.runner", "--role", "secs",
+                "--socket", str(worker_endpoint), "--scratch", str(root / "scratch"),
+                "--status-directory", str(root / "status"), "--owner-session-lifetime",
+                "--startup-seconds", "2", "--terminate-seconds", "2", "--kill-seconds", "2",
+                "--cleanup-seconds", "2", "--", sys.executable, "-I", str(fixture),
+                "--mode", "unconfirmed_execute", "--pid-file", str(root / "pid"),
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            endpoint = DeliveryEndpoint(ORIGIN, PROVIDER, root / "ipc/delivery.sock")
+            queue = DeliveryQueue(root / "queue", limits=QueueLimits(1, 2097152, 1, 2097152))
+            inbox = DeliveryInbox(queue, (endpoint,), request_seconds=1,
+                                  on_accepted=lambda _endpoint: None, on_failure=lambda *_args: None,
+                                  binding_status=lambda _endpoint: {})
+            delivery = DeliveryClient(endpoint, exchange_seconds=1, retirement_seconds=1)
+            events = []
+            worker = WorkerClient(worker_endpoint, startup_seconds=10, retirement_seconds=10)
+            session = SecsSession(worker=worker, sources=Sources(events), chat=Carrier(events, [choice()]),
+                                  work_seconds=1, interpretation_seconds=1, startup_seconds=10, max_turns=3)
+            claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
+            scope = RecoveryScope(ORIGIN, PROVIDER, "secs", "runtime-one")
+            pending = StartPending(scope, ANALYSIS_KIND_REF, FACTS, start_body(FACTS.job_ref, "request-held"))
+            identity = SigningIdentity(ORIGIN, "credential:test", Ed25519PrivateKey.generate())
+            controller = AttemptController.live(
+                ProviderAPI(identity, LifecycleTransport(), expected_topology="dev-local"), claims, session,
+                scope=scope, stopping=asyncio.Event(), admission_stopping=asyncio.Event(),
+                start_policy=LiveStartPolicy(0.001, lambda *_args: None, lambda *_args: None),
+                preverified_input=VerifiedJobInput(FACTS, PAYLOAD), delivery=delivery,
+                on_delivery_retry=lambda *_args: None, delivery_retry_initial_seconds=0.01,
+                delivery_retry_max_seconds=0.01, allowed_job_states=frozenset({"open", "closed"}),
+                poll_seconds=0.01, task_settle_seconds=15,
+            )
+            try:
+                await inbox.start()
+                try:
+                    await controller.run(pending)
+                except ControllerFailed as failure:
+                    from provider_core.analysis import AnalysisOutcomeUnresolved
+                    reason = failure.cause.cause
+                    self.assertIs(type(reason), AnalysisOutcomeUnresolved)
+                    self.assertIs(type(reason.__cause__), TimeoutError)
+                    self.assertIs(controller.require_held_failure(pending, failure), failure)
+                else:
+                    self.assertTrue((root / "pid.entered").exists(), "The child did not enter execution")
+                    self.assertIsNone(queue.next_pending(ORIGIN, PROVIDER), "Unknown result entered terminal delivery")
+                    self.fail("Unknown result did not retain a controller failure")
+                self.assertTrue((root / "pid.entered").exists(), "The child did not enter execution")
+                self.assertIsNone(queue.next_pending(ORIGIN, PROVIDER))
+                self.assertIn(controller, claims.live_owners())
+                self.assertTrue(worker.stopped)
+                self.assertIn(("sources-retire", True), events)
+            finally:
+                try:
+                    await delivery.retire()
+                    await inbox.close()
+                    queue.close()
+                finally:
+                    if owner.returncode is None:
+                        owner.terminate()
+                    await asyncio.wait_for(owner.wait(), 20)
+
+    async def test_unknown_science_keeps_claim_without_terminal_handoff(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ipc").mkdir(mode=0o700)
+            (root / "queue").mkdir(mode=0o700)
+            endpoint = DeliveryEndpoint(ORIGIN, PROVIDER, root / "ipc/delivery.sock")
+            queue = DeliveryQueue(root / "queue", limits=QueueLimits(1, 2097152, 1, 2097152))
+            inbox = DeliveryInbox(queue, (endpoint,), request_seconds=1,
+                                  on_accepted=lambda _endpoint: None, on_failure=lambda *_args: None,
+                                  binding_status=lambda _endpoint: {})
+            await inbox.start()
+            delivery = DeliveryClient(endpoint, exchange_seconds=1, retirement_seconds=1)
+            events = []
+            worker = Worker(events, {"outcome": "prepared", "prepared_handle": 7}, {"outcome": "unexpected"})
+            session = SecsSession(worker=worker, sources=Sources(events), chat=Carrier(events, [choice()]),
+                                  work_seconds=3, interpretation_seconds=1, startup_seconds=1, max_turns=3)
+            claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
+            scope = RecoveryScope(ORIGIN, PROVIDER, "secs", "runtime-one")
+            pending = StartPending(scope, ANALYSIS_KIND_REF, FACTS, start_body(FACTS.job_ref, "request-held"))
+            identity = SigningIdentity(ORIGIN, "credential:test", Ed25519PrivateKey.generate())
+            controller = AttemptController.live(
+                ProviderAPI(identity, LifecycleTransport(), expected_topology="dev-local"), claims, session,
+                scope=scope, stopping=asyncio.Event(), admission_stopping=asyncio.Event(),
+                start_policy=LiveStartPolicy(0.001, lambda *_args: None, lambda *_args: None),
+                preverified_input=VerifiedJobInput(FACTS, PAYLOAD), delivery=delivery,
+                on_delivery_retry=lambda *_args: None, delivery_retry_initial_seconds=0.01,
+                delivery_retry_max_seconds=0.01, allowed_job_states=frozenset({"open", "closed"}),
+                poll_seconds=0.01, task_settle_seconds=1,
+            )
+            try:
+                try:
+                    await controller.run(pending)
+                except ControllerFailed:
+                    pass
+                else:
+                    self.assertIsNone(queue.next_pending(ORIGIN, PROVIDER), "Unknown result entered terminal delivery")
+                    self.fail("Unknown result did not retain a controller failure")
+                self.assertIsNone(queue.next_pending(ORIGIN, PROVIDER))
+                self.assertIn(controller, claims.live_owners())
+                self.assertTrue(worker.stopped)
+                self.assertIn(("sources-retire", True), events)
+            finally:
+                await delivery.retire()
+                await inbox.close()
+                queue.close()
+
     async def test_observer_cancellation_during_a_blocked_drain_keeps_original_owners(self):
         blocked, release = asyncio.Event(), asyncio.Event()
         class Controller:

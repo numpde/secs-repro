@@ -4,9 +4,10 @@ from dataclasses import asdict
 import json
 from time import monotonic
 
-from provider_core.analysis import AnalysisFailure, AnalysisSuccess, ObservedWorkerCrash, PreparedAnalysis
+from provider_core.analysis import AnalysisFailure, AnalysisOutcomeUnresolved, AnalysisSuccess, ObservedWorkerCrash, PreparedAnalysis
 from provider_core.chat import ChatFailed
 from provider_core.diagnostics import failure_evidence
+from provider_core.execution import ObservationGapExpired
 from provider_core.attempt_record import ProtectedEvidence
 
 from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
@@ -75,7 +76,7 @@ class SecsSession:
             raise RuntimeError("Cannot prepare SECS input: this session was already used or retired")
         self._acknowledged = acknowledged
         try:
-            return await self._prepare(instructions)
+            return await self._prepare(instructions, report_condition.require_execution)
         except NativeWorkerExited as cause:
             raise self._worker_crash(cause, "preparing") from cause
         except (InterpretationFailed, ChatFailed) as cause:
@@ -84,31 +85,37 @@ class SecsSession:
             return self._failure("input_access_failed", str(cause), cause)
         except WorkerError as cause:
             return self._failure("scientific_execution_failed", str(cause), cause)
+        except ObservationGapExpired:
+            raise
         except TimeoutError as cause:
             return self._failure("work_deadline_exceeded", "Input preparation exceeded its operation deadline; no verified prepared input was returned.", cause)
 
-    async def _prepare(self, instructions):
+    async def _prepare(self, instructions, require_execution):
         self._quiescent = False
-        await self.worker.check_ready(deadline=monotonic() + self.startup_seconds)
+        require_execution()
+        await self.worker.check_ready(deadline=monotonic() + self.startup_seconds,
+                                      require_execution=require_execution)
         self._quiescent = True
+        require_execution()
         self._deadline = monotonic() + self.work_seconds
         await self.sources.open(deadline=self._deadline, readers_quiescent=self._quiescent)
         interpretation_deadline = min(self._deadline, monotonic() + self.interpretation_seconds)
         self._conversation = InterpretationSession(
-            self.chat, instructions.specification_text, self.sources.members, self._inspect,
+            self.chat, instructions.specification_text, self.sources.members,
+            lambda source: self._inspect(source, require_execution),
             deadline=interpretation_deadline, max_turns=self.max_turns,
         )
-        return await self._prepare_choice()
+        return await self._prepare_choice(require_execution)
 
-    async def _inspect(self, source):
+    async def _inspect(self, source, require_execution):
         await self.sources.acquire(source.upload_ref, deadline=self._conversation.deadline)
         response = await self._request({"operation": "inspect", "source": asdict(source)},
-                                       self._conversation.deadline)
+                                       self._conversation.deadline, require_execution=require_execution)
         if response["outcome"] == "input_rejected":
             raise InputReadError(response["reason"])
         return response["facts"]
 
-    async def _prepare_choice(self):
+    async def _prepare_choice(self, require_execution):
         while True:
             decision = await self._conversation.select()
             if isinstance(decision, CannotAnalyse):
@@ -122,7 +129,8 @@ class SecsSession:
                 choice["reading_error"] = str(change)
                 self._conversation.reject(str(change))
                 continue
-            response = await self._request({"operation": "prepare", "selection": choice}, self._deadline)
+            response = await self._request({"operation": "prepare", "selection": choice}, self._deadline,
+                                           require_execution=require_execution)
             if response["outcome"] == "input_rejected":
                 choice["reading_error"] = response["reason"]
                 self._conversation.reject(response["reason"])
@@ -141,13 +149,18 @@ class SecsSession:
         self._prepared = None
         handle, self._handle = self._handle, None
         try:
-            response = await self._request({"operation": "execute", "prepared_handle": handle}, self._deadline)
+            response = await self._request({"operation": "execute", "prepared_handle": handle}, self._deadline,
+                                           require_execution=report_condition.require_execution)
         except NativeWorkerExited as cause:
             raise self._worker_crash(cause, "running") from cause
-        except WorkerError as cause:
+        except ScientificWorkerFailed as cause:
             return self._failure("scientific_execution_failed", str(cause), cause)
+        except WorkerError as cause:
+            raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific execution outcome") from cause
+        except ObservationGapExpired:
+            raise
         except TimeoutError as cause:
-            return self._failure("work_deadline_exceeded", "Scientific execution exceeded its operation deadline; no verified result was returned.", cause)
+            raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific execution outcome") from cause
         self._choices[-1]["used"] = True
         if response["outcome"] == AnalysisOutcome.NO_STARTING_CANDIDATES:
             return self._failure(AnalysisOutcome.NO_STARTING_CANDIDATES.value, NO_STARTING_CANDIDATES_MESSAGE)
@@ -157,19 +170,43 @@ class SecsSession:
                   "acquired_uploads": self.sources.evidence(), "analysis": response["analysis"]}
         return AnalysisSuccess(RESULT_SCHEMA_ID, _document(report), self._evidence())
 
-    async def _request(self, request, deadline):
+    async def _request(self, request, deadline, *, require_execution=None):
         command = request | {"attempt_ref": self._acknowledged.admission.execution_attempt_ref}
         if request["operation"] != "execute":
             command |= self.sources.worker_inputs()
         self._quiescent = False
-        response = await self.worker.request(command, deadline=deadline)
+        response = await self.worker.request(command, deadline=deadline, require_execution=require_execution)
         if response.get("outcome") == "failed":
+            if (type(response.get("exception_id")) is not int or response["exception_id"] != 0
+                    or type(response.get("exception_type")) is not str or not response["exception_type"]
+                    or type(response.get("frames")) is not list):
+                raise WorkerError("Cannot confirm SECS scientific work: the worker returned an invalid failure envelope")
             raise ScientificWorkerFailed(response)
         expected = {"inspect": {"inspected", "input_rejected"},
                     "prepare": {"prepared", "input_rejected"},
                     "execute": {AnalysisOutcome.ANALYSED, AnalysisOutcome.NO_STARTING_CANDIDATES}}
-        if response.get("outcome") not in expected[request["operation"]]:
+        if type(response.get("outcome")) is not str or response["outcome"] not in expected[request["operation"]]:
             raise WorkerError("Cannot confirm SECS scientific work: the worker returned an unrecognized operation outcome")
+        if request["operation"] == "execute":
+            analysis = response.get("analysis")
+            if (type(analysis) is not dict or type(analysis.get("candidates")) is not list
+                    or any(type(analysis.get(field)) is not dict
+                           for field in ("retrieval", "search", "preparation", "inference"))):
+                raise WorkerError("Cannot confirm SECS scientific work: the worker returned an incomplete analysis")
+            search = analysis["search"].get("outcome")
+            if (response["outcome"] == AnalysisOutcome.NO_STARTING_CANDIDATES
+                    and (search != AnalysisOutcome.NO_STARTING_CANDIDATES or analysis["candidates"]
+                         or type(analysis["retrieval"].get("starting_candidates")) is not int
+                         or analysis["retrieval"]["starting_candidates"] != 0)):
+                raise WorkerError("Cannot confirm SECS scientific work: the worker returned inconsistent candidate evidence")
+            if (response["outcome"] == AnalysisOutcome.ANALYSED
+                    and (search != "optimized" or not analysis["candidates"]
+                         or type(analysis["retrieval"].get("starting_candidates")) is not int
+                         or analysis["retrieval"]["starting_candidates"] <= 0)):
+                raise WorkerError("Cannot confirm SECS scientific work: the worker returned inconsistent search evidence")
+            if any(type(candidate) is not dict or type(candidate.get("smiles")) is not str
+                   or type(candidate.get("score")) is not str for candidate in analysis["candidates"]):
+                raise WorkerError("Cannot confirm SECS scientific work: the worker returned invalid candidate evidence")
         if response["outcome"] == "prepared":
             if type(response.get("prepared_handle")) is not int or response["prepared_handle"] <= 0:
                 raise WorkerError("Cannot confirm SECS input preparation: the worker returned no valid prepared handle")

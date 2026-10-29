@@ -2,14 +2,31 @@
 
 import json
 import socket
+import struct
 import threading
 import unittest
 
 from secs_inference.provider.diagnostics import exception_evidence
-from secs_inference.provider.worker_protocol import receive, send, serve_scientific_session
+from secs_inference.provider.worker_protocol import WorkerError, receive, send, serve_scientific_session
 
 
 class WorkerFailureDeliveryTests(unittest.TestCase):
+    def test_invalid_json_frame_is_a_worker_error_with_original_cause(self):
+        for payload, cause_type in ((b'{"token":"private-fixture', json.JSONDecodeError),
+                                    (b"\xff", UnicodeDecodeError)):
+            with self.subTest(length=len(payload)):
+                reader, writer = socket.socketpair()
+                try:
+                    writer.sendall(struct.pack("!I", len(payload)) + payload)
+                    with self.assertRaises(WorkerError) as caught:
+                        receive(reader)
+                    self.assertIs(type(caught.exception.__cause__), cause_type)
+                    self.assertNotIn("private-fixture", str(caught.exception))
+                    self.assertNotIn("private-fixture", json.dumps(exception_evidence(caught.exception)))
+                finally:
+                    reader.close()
+                    writer.close()
+
     def test_disconnected_peer_retains_original_failure_without_private_text(self):
         client, server = socket.socketpair()
         entered, release = threading.Event(), threading.Event()

@@ -8,6 +8,8 @@ import select
 import sys
 from time import monotonic
 
+if Path("/opt/secs_inference/provider/worker.py").is_file():
+    sys.path.insert(0, "/opt")
 from secs_inference.provider.worker import WorkerClient
 
 
@@ -18,7 +20,7 @@ async def main():
     descriptor = os.pidfd_open(pid)
     original = SystemExit(0)
     mode = sys.argv[2]
-    async def fail(_command, _deadline):
+    async def fail(_command, _deadline, _require_execution):
         raise original
     try:
         if mode == "science":
