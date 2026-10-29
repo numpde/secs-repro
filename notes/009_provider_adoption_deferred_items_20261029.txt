@@ -63,7 +63,10 @@ hashing only the chunks requested by the parser does not establish the full
 manifest digest. Both complete artifacts must be bound to the same approved
 manifest, whose identity is anchored independently of the mutable bundle, and
 preserve the index-to-table row order; matching row counts alone
-does not establish that correspondence. The upstream loader's `allow_partial`
+does not establish that correspondence. An offline two-row probe of the actual
+loader accepted a replacement Parquet file with reversed rows and the same
+index and row count. It does not qualify the full bundle or runtime resources.
+The upstream loader's `allow_partial`
 behavior also needs an explicit identity contract rather than an assumed full
 file match. The local checkpoint loader still needs its first-child identity
 bound across replacement children.
