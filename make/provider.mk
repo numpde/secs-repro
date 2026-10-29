@@ -51,8 +51,12 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 	wheelhouse_parent="$(REPOSITORY_ROOT)/wheelhouse"
 	mkdir -p "$$wheelhouse_parent"
 	stage=$$(mktemp -d --tmpdir="$$wheelhouse_parent" .$$profile.XXXXXXXX)
-	trap 'rm -rf "$$stage"' EXIT
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=0
+	trap 'retain_uncertain_stage "$$stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	mkdir "$$stage/.tmp"
+	secs_engine_active=1
 	$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
 		--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
 		--pull never --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
@@ -62,6 +66,7 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 		"$(PROVIDER_PYTHON_BASE)" python -m pip download --require-hashes \
 		--only-binary=:all: --no-deps --index-url https://pypi.org/simple \
 		--find-links "$(PROVIDER_CORE_WHEEL_URL)" --dest /wheelhouse -r /input/requirements.lock
+	secs_engine_active=0
 	rm -rf "$$stage/.tmp"
 	( cd "$$stage" && sha256sum * | LC_ALL=C sort ) > "$$stage/.complete"
 	python3 tools/publish_wheelhouse.py "$$stage" "$$wheelhouse_parent/$$profile"

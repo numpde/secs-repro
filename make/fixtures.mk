@@ -19,8 +19,12 @@ fixtures/input/write:
 	fi
 	output_directory=$$(realpath -e -- tests/fixtures/input)
 	stage=$$(mktemp -d --tmpdir="$(REPOSITORY_ROOT)/tests/fixtures" .input-reference.XXXXXXXX)
-	trap 'rm -rf "$$stage"' EXIT
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=0
+	trap 'retain_uncertain_stage "$$stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	image=$$($(MAKE) --no-print-directory fixtures/frontend-reference/image)
+	secs_engine_active=1
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		--cap-drop ALL --security-opt no-new-privileges:true \
@@ -28,6 +32,7 @@ fixtures/input/write:
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
 		--mount "type=bind,src=$$stage,dst=/output" \
 		--entrypoint node "$$image" /opt/reference/generate_input_fixtures.mjs
+	secs_engine_active=0
 	# A failed reference read must not publish a partly generated corpus.
 	for artifact in "$$stage"/*; do mv -f -- "$$artifact" "$$output_directory/"; done
 
@@ -39,7 +44,10 @@ fixtures/frontend-reference/base-image/pull:
 fixtures/frontend-reference/image:
 	@build_context=$$(mktemp -d)
 	frontend_context=$$(mktemp -d)
-	trap 'rm -rf "$$build_context" "$$frontend_context"' EXIT
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=0
+	trap 'retain_uncertain_stage "$$build_context" "$$frontend_context"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	install -D -m 0644 "$(FRONTEND_REFERENCE_LOCK)" "$$build_context/contracts/upstream/frontend_reference.json"
 	install -D -m 0644 containers/frontend-reference/Dockerfile "$$build_context/containers/frontend-reference/Dockerfile"
 	install -D -m 0644 containers/frontend-reference/Dockerfile.dockerignore "$$build_context/containers/frontend-reference/Dockerfile.dockerignore"
@@ -57,6 +65,7 @@ fixtures/frontend-reference/image:
 	frontend_reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id frontend "$$build_context")
 	input_reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id input "$$build_context")
 	image_id=$$(python3 tools/frontend_reference_lock.py image-id "$$build_context")
+	secs_engine_active=1
 	$(DOCKER) build --quiet --network default --pull=false \
 		--build-arg NODE_IMAGE="$$node_image" \
 		--build-arg REFERENCE_BUILD_ID="$$frontend_reference_build_id" \
@@ -66,6 +75,7 @@ fixtures/frontend-reference/image:
 		--file "$$build_context/containers/frontend-reference/Dockerfile" \
 		--tag "$(FRONTEND_REFERENCE_IMAGE_TAG):inputs-$${image_id#sha256:}" \
 		"$$build_context"
+	secs_engine_active=0
 
 fixtures/frontend-reference/write:
 	@if test "$(HOST_UID)" -eq 0; then
@@ -74,7 +84,10 @@ fixtures/frontend-reference/write:
 	fi
 	output_directory=$$(realpath -e -- "$(dir $(FRONTEND_BRUKER_REFERENCE_OUTPUT))")
 	stage=$$(mktemp -d --tmpdir="$$output_directory" .frontend-reference.XXXXXXXX)
-	trap 'rm -rf "$$stage"' EXIT
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=0
+	trap 'retain_uncertain_stage "$$stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	stage=$$(realpath -e -- "$$stage")
 	image=$$($(MAKE) --no-print-directory fixtures/frontend-reference/image)
 	reference_container=(--rm --init --pull never --network none --read-only \
@@ -83,6 +96,7 @@ fixtures/frontend-reference/write:
 		--pids-limit 64 --cpus 2 --memory 2g --memory-swap 2g \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
 		--mount "type=bind,src=$$stage,dst=/output")
+	secs_engine_active=1
 	$(DOCKER) run "$${reference_container[@]}" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/$(FRONTEND_BRUKER_REFERENCE_INPUT),dst=/input,readonly" \
 		"$$image" \
@@ -101,6 +115,7 @@ fixtures/frontend-reference/write:
 		--input /input \
 		--output "/output/$(notdir $(FRONTEND_NTUPLES_REFERENCE_OUTPUT))" \
 		--path-prefix ethylvinylether
+	secs_engine_active=0
 	# Every conversion must succeed before any pinned reference is published.
 	mv -f "$$stage/$(notdir $(FRONTEND_BRUKER_REFERENCE_OUTPUT))" "$(FRONTEND_BRUKER_REFERENCE_OUTPUT)"
 	mv -f "$$stage/$(notdir $(FRONTEND_JCAMP_REFERENCE_OUTPUT))" "$(FRONTEND_JCAMP_REFERENCE_OUTPUT)"

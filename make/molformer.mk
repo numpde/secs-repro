@@ -14,7 +14,10 @@ molformer/cache:
 	mkdir -p "$$cache_parent"
 	# Stage beside the destination so publication is a same-filesystem rename.
 	stage=$$(mktemp -d --tmpdir="$$cache_parent" .molformer.XXXXXXXX)
-	trap 'rm -rf "$$stage"' EXIT
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=1
+	trap 'retain_uncertain_stage "$$stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	$(DOCKER) run --rm --init --pull never --network bridge --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		--cap-drop ALL --security-opt no-new-privileges:true \
@@ -26,6 +29,7 @@ molformer/cache:
 		--mount type=bind,src="$$stage",dst=/output \
 		--entrypoint python "$$packages_image" -P /opt/materialize.py \
 		--lock /input/molformer.lock.toml --output /output
+	secs_engine_active=0
 	chmod 0755 "$$stage"
 	rm -rf "$$cache_path"
 	mv -T "$$stage" "$$cache_path"

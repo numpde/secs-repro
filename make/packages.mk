@@ -29,12 +29,16 @@ packages/locks/write:
 	lock_image=$$($(MAKE) --no-print-directory packages/lock-image)
 	locks_directory="$(REPOSITORY_ROOT)/requirements"
 	stage=$$(mktemp -d --tmpdir="$$locks_directory" .packages-locks.XXXXXXXX)
-	trap 'rm -rf "$$stage"' EXIT
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=0
+	trap 'retain_uncertain_stage "$$stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	for variant in cpu gpu; do
 		case "$$variant" in
 			cpu) group=packages-cpu ;;
 			gpu) group=packages-gpu ;;
 		esac
+		secs_engine_active=1
 		$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
 			--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
 			--pull never --pids-limit 64 --cpus 2 --memory 1g --memory-swap 1g \
@@ -57,6 +61,7 @@ packages/locks/write:
 			--entrypoint python --mount type=bind,src="$$stage",dst=/output \
 			"$$lock_image" /usr/local/bin/normalize_lock.py \
 			"/output/packages-$$variant.raw" "/output/packages-$$variant.lock"
+		secs_engine_active=0
 		rm "$$stage/packages-$$variant.raw"
 	done
 	rm -rf "$$stage/.uv-cache"
@@ -85,9 +90,13 @@ packages/wheelhouse:
 	wheelhouse_path="$$wheelhouse_parent/packages-$(VARIANT)"
 	mkdir -p "$$wheelhouse_parent"
 	stage=$$(mktemp -d --tmpdir="$$wheelhouse_parent" .packages-$(VARIANT).XXXXXXXX)
-	trap 'rm -rf "$$stage"' EXIT
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=0
+	trap 'retain_uncertain_stage "$$stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	mkdir "$$stage/.tmp"
 	# The lock resolves antlr4-python3-runtime 4.9.3, which PyPI publishes only as source.
+	secs_engine_active=1
 	$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
 		--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
 		--pull never --pids-limit 64 --cpus 2 --memory 1g --memory-swap 1g \
@@ -98,6 +107,7 @@ packages/wheelhouse:
 		--only-binary=:all: --no-binary=antlr4-python3-runtime \
 		--no-deps --index-url https://pypi.org/simple --find-links "$$torch_wheels" \
 		--dest /wheelhouse -r /input/requirements.lock
+	secs_engine_active=0
 	rm -rf "$$stage/.tmp"
 	( cd "$$stage" && sha256sum * | LC_ALL=C sort ) > "$$stage/.complete"
 	python3 tools/publish_wheelhouse.py "$$stage" "$$wheelhouse_path"

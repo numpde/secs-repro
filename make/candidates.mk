@@ -46,7 +46,10 @@ candidates: checkpoint/image packages/gpu/image
 	stage=$$(mktemp -d "$$output_parent/.candidate-build.XXXXXX"); \
 	stage=$$(realpath -e -- "$$stage"); \
 	chmod 2770 "$$stage"; \
-	trap 'rm -rf -- "$$stage"' EXIT HUP INT TERM; \
+	source tools/retain_uncertain_stage.sh; \
+	secs_engine_active=0; \
+	trap 'retain_uncertain_stage "$$stage"' EXIT; \
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; \
 	run_consumer() { \
 		$(DOCKER) run --rm -i --pull never --network none --read-only \
 			--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 512 \
@@ -81,6 +84,7 @@ candidates: checkpoint/image packages/gpu/image
 			-P /opt/extract.py "$$@" --spec /input/checkpoint.toml \
 			--member-spec /input/candidates.toml --scratch-directory /scratch; \
 	}; \
+	secs_engine_active=1; \
 	if test -n "$${ARCHIVE_INPUT}"; then \
 		archive=$$(realpath -e -- "$${ARCHIVE_INPUT}"); \
 		$(DOCKER) run --rm --pull never --network none --read-only \
@@ -100,6 +104,7 @@ candidates: checkpoint/image packages/gpu/image
 	else \
 		run_network_extractor | run_consumer configured; \
 	fi; \
+	secs_engine_active=0; \
 	chmod g-s,u=rwx,go=rx "$$stage"; \
 	mv -T -- "$$stage" "$(CANDIDATE_DIRECTORY)"; \
 	trap - EXIT HUP INT TERM

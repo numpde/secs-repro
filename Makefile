@@ -171,7 +171,10 @@ checkpoint:
 		exit 2
 	fi
 	checkpoint_stage=$$(mktemp -d --tmpdir="$$output_dir" .checkpoint.XXXXXXXX)
-	trap 'rm -rf "$$checkpoint_stage"' EXIT
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=0
+	trap 'retain_uncertain_stage "$$checkpoint_stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	checkpoint_stage_dir=$$(realpath -e -- "$$checkpoint_stage")
 	converter_image=$$($(MAKE) --no-print-directory packages/cpu/image)
 	extractor_image=$$($(MAKE) --no-print-directory checkpoint/image)
@@ -204,6 +207,7 @@ checkpoint:
 		"--mount" "type=bind,src=$(REPOSITORY_ROOT)/$(CHECKPOINT_SPEC),dst=/input/checkpoint.toml,readonly"
 		"--entrypoint" python
 	)
+	secs_engine_active=1
 	$(DOCKER) run "$${extractor_args[@]}" "$$extractor_image" \
 		"$${archive_source_args[@]}" \
 		--spec /input/checkpoint.toml \
@@ -230,6 +234,7 @@ checkpoint:
 		--spec /input/checkpoint.toml \
 		--reference-repository "$(SECS_REPOSITORY)" \
 		--reference-revision "$(SECS_REVISION)"
+	secs_engine_active=0
 	chmod 0644 "$$checkpoint_stage/$(CHECKPOINT_WEIGHTS_FILENAME)"
 	# Publish weights last; their presence marks a complete checkpoint.
 	mv -f "$$checkpoint_stage/$(CHECKPOINT_MANIFEST_FILENAME)" "$(CHECKPOINT_MANIFEST)"
@@ -256,9 +261,13 @@ checkpoint/manifest:
 	fi
 	output_dir=$$(realpath -e -- "$(CHECKPOINT_DIRECTORY)")
 	manifest_stage=$$(mktemp -d --tmpdir="$$output_dir" .manifest.XXXXXXXX)
-	trap 'rm -rf "$$manifest_stage"' EXIT
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=0
+	trap 'retain_uncertain_stage "$$manifest_stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	manifest_stage_dir=$$(realpath -e -- "$$manifest_stage")
 	extractor_image=$$($(MAKE) --no-print-directory checkpoint/image)
+	secs_engine_active=1
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		--cap-drop ALL --security-opt no-new-privileges:true \
@@ -276,6 +285,7 @@ checkpoint/manifest:
 		--spec /input/checkpoint.toml \
 		--reference-repository "$(SECS_REPOSITORY)" \
 		--reference-revision "$(SECS_REVISION)"
+	secs_engine_active=0
 	mv -f "$$manifest_stage/$(CHECKPOINT_MANIFEST_FILENAME)" "$(CHECKPOINT_MANIFEST)"
 
 include make/packages.mk

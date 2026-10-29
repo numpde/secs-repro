@@ -129,9 +129,13 @@ candidates/qualification: checkpoint/image packages/gpu/image
 				esac
 			fi
 		done
-		if ! rm -rf -- "$$stage"; then
-			printf 'Failed to remove qualification staging directory: %s\n' "$$stage" >&2
-			cleanup_failed=1
+		if test "$$cleanup_failed" -eq 0; then
+			if ! rm -rf -- "$$stage"; then
+				printf 'Failed to remove qualification staging directory: %s\n' "$$stage" >&2
+				cleanup_failed=1
+			fi
+		else
+			printf 'Qualification container retirement is unconfirmed; retaining %s\n' "$$stage" >&2
 		fi
 		if test "$$original_status" -eq 0 && test "$$cleanup_failed" -ne 0; then
 			original_status=1
