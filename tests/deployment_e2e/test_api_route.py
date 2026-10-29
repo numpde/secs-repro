@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import ssl
-import stat
 from time import monotonic, sleep
 import unittest
 from urllib.request import urlopen
@@ -31,13 +30,13 @@ class ApiRouteProcessTests(unittest.TestCase):
         with lifecycle_workspace() as temporary:
             root = Path(temporary)
             name = "route-" + uuid4().hex[:12]
-            project = ComposeProject(root, "secs-" + name, ("provider", "api"))
+            project = ComposeProject(root, "secs-" + name, ("provider", "api", "api-init"), ("api-init",))
             peer, config = root / "peer", root / "config/deployments" / name
-            route = root / "secrets/deployments" / name / "api-route"
             state = root / "state"
-            for directory in (peer, config, route, state):
+            for directory in (peer, config, state):
                 directory.mkdir(mode=0o700, parents=True)
             peer_id = root / "peer.cid"
+            route_volume = None
             try:
                 project.command(
                     "run", "--detach", "--init", "--pull", "never", "--cidfile", str(peer_id),
@@ -76,7 +75,11 @@ retry_initial_seconds=0.1
                             "volumes": mounts}
                 plan = {"services": {"provider": provider}}
                 _apply_api_route(plan, project, config, str(definition), "secs")
+                self.assertEqual(len(plan["volumes"]), 1)
+                route_volume = next(iter(plan["volumes"]))
                 records = project.start(plan)
+                self.assertEqual(records["api-init"]["State"]["ExitCode"], 0)
+                self.assertEqual(records["api-init"]["State"]["Status"], "exited")
                 provider_id = records["provider"]["Id"]
                 proxy = records["api"]
                 self.assertEqual(records["provider"]["HostConfig"]["NetworkMode"], "none")
@@ -84,20 +87,19 @@ retry_initial_seconds=0.1
                 mount = next(mount for mount in records["provider"]["Mounts"]
                              if mount["Destination"] == str(Path(socket_path).parent))
                 self.assertFalse(mount["RW"])
+                self.assertEqual(mount["Name"], route_volume)
                 self.assertFalse(any(mount["Source"] == str(credential) for mount in proxy["Mounts"]))
                 def observed():
                     captured = json.loads((peer / "capture.json").read_text())
                     self.assertIsNone(captured["error"], "Synthetic peer rejected the actual signature or SNI")
                     return captured
                 self.wait_for(lambda: observed()["hellos"] > 0, "Provider did not send an authenticated Hello")
-                self.assertEqual(stat.S_IMODE(route.stat().st_mode), 0o700)
-                self.assertEqual(stat.S_IMODE((route / "proxy.sock").stat().st_mode), 0o600)
                 wrong_uid = 65532 if os.getuid() != 65532 else 65533
                 project.command(
                     "run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--cap-drop", "ALL",
                     "--security-opt", "no-new-privileges:true", "--user", f"{wrong_uid}:{os.getgid()}",
                     "--pids-limit", "16", "--memory", "64m", "--memory-swap", "64m", "--cpus", "1",
-                    "--mount", f"type=bind,src={route},dst=/route,readonly", "--entrypoint", "python", image, "-I", "-c",
+                    "--mount", f"type=volume,src={route_volume},dst=/route,readonly", "--entrypoint", "python", image, "-I", "-c",
                     "import errno,socket; s=socket.socket(socket.AF_UNIX);\n"
                     "try: s.connect('/route/proxy.sock')\n"
                     "except PermissionError as e: assert e.errno in (errno.EACCES,errno.EPERM)\n"
@@ -130,6 +132,9 @@ retry_initial_seconds=0.1
                 try:
                     for record in project.inventory().values():
                         project.command("rm", "--force", record["Id"])
+                    volumes = project.command("volume", "ls", "--quiet").decode().splitlines()
+                    if route_volume is not None and route_volume in volumes:
+                        project.command("volume", "rm", route_volume)
                 finally:
                     if peer_id.exists():
                         identity = peer_id.read_text().strip()

@@ -93,6 +93,22 @@ class ComposeTests(unittest.TestCase):
                     self.project.start({"services": {}})
         command.assert_not_called()
 
+    def test_start_requires_initializer_to_complete_successfully(self):
+        project = ComposeProject(Path("/workspace"), "example-prod", ("provider", "api-init"), ("api-init",))
+        plan = {"services": {role: {"image": "sha256:" + "a" * 64} for role in project.stop_order}}
+        provider = record(project, "provider", 1)
+        initializer = record(project, "api-init", 2, running=False)
+        for exit_code in (0, 1):
+            initializer["State"]["ExitCode"] = exit_code
+            with self.subTest(exit_code=exit_code), patch.object(
+                ComposeProject, "inventory", side_effect=({}, {"provider": provider, "api-init": initializer})
+            ), patch.object(ComposeProject, "command", return_value=b""):
+                if exit_code == 0:
+                    self.assertEqual(project.start(plan)["api-init"]["State"]["ExitCode"], 0)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "not running"):
+                        project.start(plan)
+
     def test_start_uses_rendered_snapshot_without_build_or_pull(self):
         plan = {"services": {"provider": {"image": "sha256:" + "a" * 64,
                                          "environment": {"LITERAL": "$not_a_variable"}}}}

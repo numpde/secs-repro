@@ -35,6 +35,7 @@ class ComposeProject:
     repository: Path
     name: str
     stop_order: tuple[str, ...]
+    completed_roles: tuple[str, ...] = ()
 
     def render(self, recipe: Path, env_file: Path, environment: dict[str, str]) -> dict:
         """Normalize the maintained recipe; do not build, pull, or start services."""
@@ -113,7 +114,9 @@ class ComposeProject:
                 )
             records = self.inventory()
             if set(records) != set(plan["services"]) or not all(
-                record["State"]["Running"] and record["Image"] == plan["services"][role]["image"]
+                record["Image"] == plan["services"][role]["image"]
+                and (record["State"]["Status"] == "exited" and record["State"]["ExitCode"] == 0
+                     if role in self.completed_roles else record["State"]["Running"])
                 for role, record in records.items()
             ):
                 raise RuntimeError("Expected containers are not running with the selected images.")

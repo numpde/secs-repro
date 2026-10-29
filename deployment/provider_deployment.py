@@ -211,7 +211,7 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
 def _project(repository: Path, name: str) -> ComposeProject:
     """SECS stops Job admission before its scientific worker."""
     configuration_directory(repository, name)
-    return ComposeProject(repository, f"secs-{name}", ("provider", "worker", "api"))
+    return ComposeProject(repository, f"secs-{name}", ("provider", "worker", "api", "api-init"), ("api-init",))
 
 
 def _private_directory(path: Path) -> None:
@@ -285,7 +285,7 @@ def start_deployment(repository: Path, name: str) -> dict:
     state = _state_root(repository, name)
     if (state / "state" / "journal").exists():
         raise ValueError("Legacy Attempt journal remains; drain its obligations under the old runtime before selecting a fresh SDK lifetime directory.")
-    for part in ("state", "sources", "socket", "api-route"):
+    for part in ("state", "sources", "socket"):
         _ensure_private_parent(state / part)
     lock = state / "socket/.owner-session.lock"
     try:
@@ -362,13 +362,12 @@ def _sdk_projection(project, image, definition, module, *arguments):
 
 def _apply_api_route(plan, project, config, definition, binding_name):
     """Merge SDK-owned API routing while keeping the scientific service isolated."""
-    directory = project.repository / "secrets/deployments" / config.name / "api-route"
     provider = plan["services"]["provider"]
     route = _sdk_projection(
         project, provider["image"], definition, "provider_core.deployment_route", "render",
         "--definition", definition, "--binding", binding_name, "--image", provider["image"],
         "--interpreter", "/usr/local/bin/python", "--namespace", project.name, "--service-name", "api",
-        "--uid", str(os.getuid()), "--gid", str(os.getgid()), "--directory", str(directory),
+        "--uid", str(os.getuid()), "--gid", str(os.getgid()), "--named-volume",
     )
     if type(route) is not dict or set(route) != {"compose", "client_socket", "client_mount", "client_depends_on"}:
         raise ValueError("Installed SDK did not return its complete API route grants.")
