@@ -1,46 +1,43 @@
-"""Real HTTPS and durable replay, with separate scientific and failure proofs.
+"""Real checkpoint science crosses shared native, HTTPS and durable IPC owners.
 
-API and Chat peers are deterministic fixtures. The scientific child runs in a
-separate networkless container with real checkpoint weights and eight candidate
-molecules. This proves the workflow, not full-index quality or live LLM choice.
-The failure-only lane uses a lightweight supervised child without scientific dependencies.
+Eight candidate molecules and one GA generation establish composition, not
+full-index quality or live interpreter behavior. A dropped local acknowledgement
+after SQLite acceptance must replay the same report without repeating science.
 """
 
+import asyncio
 from base64 import b64encode, b64decode
-from contextlib import ExitStack, contextmanager
-from functools import partial
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
-import errno
-import os
 from pathlib import Path
 import socket
-import shutil
 import ssl
 from tempfile import TemporaryDirectory
-from threading import Event, Thread, Timer
-from time import monotonic, sleep
+from threading import Thread
 import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from provider_core.api import ProviderAPI
+from provider_core.attempt_record import RecoveryScope
+from provider_core.chat import ChatEndpoint, ChatEndpointSpec
+from provider_core.controller import AttemptController, LiveStartPolicy
+from provider_core.delivery_client import DeliveryClient, DeliveryEndpoint
+from provider_core.delivery_ipc import DeliveryInbox
+from provider_core.delivery_store import DeliveryQueue, QueueLimits
+from provider_core.ownership import AttemptClaims, LiveAttemptLimits
+from provider_core.signing import SigningIdentity
+from provider_core.transport import HttpTransport
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
-from secs_inference.provider.api import ProviderApi
-from secs_inference.provider.attempt_state import ActiveAttempt, StartPending
-from secs_inference.provider.chat import ChatEndpoint
 from secs_inference.provider.config import ExecutionConfig, HelloPolicy, ProviderConfig
-from secs_inference.provider.http import HttpsEndpoint
-from secs_inference.provider.job_api import AttemptSnapshot, JobApi
-from secs_inference.provider.job_input import SelectedJobInput
-from secs_inference.provider.main import prepare_configured_hello
 from secs_inference.provider.runtime import run_services
-from secs_inference.provider.upload_download import UploadStore
-from secs_inference.provider.worker import _serve_session
+from secs_inference.provider.session import SecsSession
+from secs_inference.provider.sources import AttemptSources
+from secs_inference.provider.worker import WorkerClient
 from tls_fixture import _write_test_certificates
-
 
 UPLOAD = "upload:sha256:" + "a" * 64
 DISTRACTOR = "upload:sha256:" + "0" * 64
@@ -48,45 +45,16 @@ ATTEMPT = "execution_attempt:sha256:" + "b" * 64
 TEXT = b"Use the proton spectrum and formula C7H8ClN. The archive has several experiments."
 
 
-class WireScenarioTests(unittest.TestCase):
-    def test_wrong_method_target_query_or_body_is_not_answered(self):
-        wire = WireScenario(b"")
-        for method, path, body in (
-            ("POST", "/provider/v1/jobs/job:test/uploads", b""),
-            ("GET", "/wrong/jobs/job:test/uploads", b""),
-            ("GET", "/provider/v1/jobs/job:other/uploads", b""),
-            ("GET", "/provider/v1/jobs?analysis_kind_ref=wrong", b""),
-            ("GET", "/provider/v1/jobs/job:test/uploads", b"{}"),
-            ("POST", "/provider/v1/execution-attempts/start", b'{"schema_id":"wrong"}'),
-        ):
-            with self.subTest(method=method, path=path, body=body), self.assertRaises(AssertionError):
-                wire.reply(method, path, body, {})
-
-    def test_attempt_read_reports_the_observed_completion_stage(self):
-        wire = WireScenario(b"")
-        for completed_sends, state in ((0, "in_progress"), (1, "succeeded"), (2, "succeeded")):
-            with self.subTest(completed_sends=completed_sends):
-                wire.complete_bodies = [b"retained command"] * completed_sends
-                raw, media = wire.reply("GET", "/provider/v1/execution-attempts/" + ATTEMPT, b"", {})
-                self.assertEqual(media, "application/json")
-                self.assertEqual(json.loads(raw), {
-                    "schema_id": "nmr.provider.execution_attempt_read_response.v1",
-                    "execution_attempt_ref": ATTEMPT, "job_ref": "job:test",
-                    "job_state": "closed", "state": state,
-                })
-
-
-class ProviderEndToEndTests(unittest.TestCase):
-    def test_verified_upload_to_real_scientific_result_and_lost_delivery_replay(self):
+class ProviderEndToEndTests(unittest.IsolatedAsyncioTestCase):
+    async def test_verified_upload_real_search_and_exact_durable_handoff_after_lost_ack(self):
         raw = Path("/fixtures/jcamp/4-chlorobenzylamine/4-chlorobenzylamine.jdx").read_bytes()
-        archive_bytes = BytesIO()
-        with ZipFile(archive_bytes, "w") as archive:
-            archive.writestr("experiment1/carbon.jdx", raw.replace(b"^1H", b"^13C"))
-            archive.writestr("experiment2/proton.jdx", raw)
-        archive_bytes = archive_bytes.getvalue()
-        wire = WireScenario(archive_bytes)
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
+        archive = BytesIO()
+        with ZipFile(archive, "w") as output:
+            output.writestr("experiment1/carbon.jdx", raw.replace(b"^1H", b"^13C"))
+            output.writestr("experiment2/proton.jdx", raw)
+        wire = WireScenario(archive.getvalue())
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
             _write_test_certificates(root)
             server = ThreadingHTTPServer(("127.0.0.1", 0), wire.handler())
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -95,49 +63,91 @@ class ProviderEndToEndTests(unittest.TestCase):
             wire.origin = f"https://localhost:{server.server_port}"
             thread = Thread(target=server.serve_forever, daemon=True)
             thread.start()
-            watchdog = Timer(120, wire.stop.set)
-            watchdog.start()
+            apis = []
+            worker = inbox = queue = None
             try:
-                socket_path = Path("/run/secs/worker/worker.sock")
-                deadline = monotonic() + 300
-                while not socket_path.exists() and monotonic() < deadline:
-                    sleep(0.05)
-                provider = ProviderApi(HttpsEndpoint(wire.origin, "dev-local", 2, 5, root / "ca.pem"),
-                                       "provider:test", "credential:test", Ed25519PrivateKey.from_private_bytes(bytes(range(32))))
-                chat = ChatEndpoint(wire.origin + "/chat", "scripted-choice", "model-key", root / "ca.pem")
-                store = UploadStore(wire.origin, 128 * 1024 * 1024, ca_file=root / "ca.pem")
-                config = ProviderConfig(None, HelloPolicy("SECS test", "Local workflow proof", 3600, 1),
-                                        ExecutionConfig(chat.url, chat.model, store.origin, work_seconds=60,
-                                                        worker_startup_seconds=60, poll_seconds=0.01, max_turns=6))
-                run_services(api=provider, prepared=prepare_configured_hello(config), config=config,
-                             chat=chat, upload_store=store, stop=wire.stop)
-                self.assertFalse(Path("/state/journal/attempt.json").exists())
+                trust = ssl.create_default_context(cafile=str(root / "ca.pem"))
+                def transport():
+                    return HttpTransport(trust=trust, exchange_seconds=10, retirement_seconds=2)
+                identity = SigningIdentity(wire.origin, "credential:test", Ed25519PrivateKey.from_private_bytes(bytes(range(32))))
+                apis = []
+                def new_api():
+                    api = ProviderAPI(identity, transport(), expected_topology="dev-local")
+                    apis.append(api)
+                    return api
+                stop, science_stop = asyncio.Event(), asyncio.Event()
+                ipc, storage = root / "ipc", root / "queue"
+                ipc.mkdir(mode=0o700)
+                storage.mkdir(mode=0o700)
+                endpoint = DeliveryEndpoint(wire.origin, "provider:test", ipc / "delivery.sock")
+                limits = QueueLimits(1, 2097152, 1, 2097152)
+                queue = DeliveryQueue(storage, limits=limits)
+                inbox = DeliveryInbox(queue, (endpoint,), request_seconds=2,
+                                      on_accepted=lambda _endpoint: stop.set(), on_failure=lambda *_args: None,
+                                      binding_status=lambda _endpoint: {})
+                await inbox.start()
+                acknowledgements = []
+                respond = inbox._respond
+                async def lose_first_ack(connection, writer, status, document):
+                    acknowledgements.append(document)
+                    if len(acknowledgements) == 1:
+                        writer.close()
+                        return
+                    await respond(connection, writer, status, document)
+                claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
+                scope = RecoveryScope(wire.origin, "provider:test", "secs", "scientific-e2e")
+                worker = WorkerClient(Path("/run/secs/worker/worker.sock"), startup_seconds=300,
+                                      retirement_seconds=10, observation_seconds=2)
+                execution = ExecutionConfig(wire.origin + "/chat", "scripted-choice", wire.origin,
+                                            work_seconds=120, interpretation_seconds=60, worker_startup_seconds=300,
+                                            poll_seconds=0.1, max_turns=6)
+                config = ProviderConfig(root / "unused-definition", "fixture",
+                                        HelloPolicy("SECS test", "Local workflow proof", 3600, 1), execution)
+                controllers = []
+                def assemble(pending):
+                    sources = AttemptSources(job_ref=pending.input.job_ref, api=new_api(), store=transport(),
+                                             store_origin=wire.origin, directory=Path("/run/secs/sources/current"),
+                                             max_upload_bytes=execution.max_upload_bytes,
+                                             max_total_bytes=execution.max_total_bytes, retirement_seconds=2)
+                    spec = ChatEndpointSpec(configuration_id="e2e", model="scripted-choice", url=wire.origin + "/chat",
+                                            api_key="model-key", reasoning_effort=None)
+                    chat = ChatEndpoint(spec, transport=transport(), request_bytes=2097152, response_bytes=262144)
+                    science = SecsSession(worker=worker, sources=sources, chat=chat, work_seconds=120,
+                                          interpretation_seconds=60, startup_seconds=300, max_turns=6, secrets=("model-key",))
+                    client = DeliveryClient(endpoint, exchange_seconds=2, retirement_seconds=2)
+                    controller = AttemptController.live(
+                        new_api(), claims, science, scope=scope, stopping=science_stop, admission_stopping=stop,
+                        start_policy=LiveStartPolicy(0.1, lambda *_args: None, lambda *_args: None), delivery=client,
+                        on_delivery_retry=lambda *_args: None, delivery_retry_initial_seconds=0.01,
+                        delivery_retry_max_seconds=0.1, allowed_job_states=frozenset({"open", "closed"}),
+                        poll_seconds=0.1, task_settle_seconds=10)
+                    controllers.append(controller)
+                    return controller
+                with patch.object(inbox, "_respond", side_effect=lose_first_ack):
+                    await run_services(hello_api=new_api(), discovery_api=new_api(), provider_ref="provider:test",
+                                       config=config, scope=scope, claims=claims, stop=stop, assemble=assemble, worker=worker)
+                self.assertEqual(len(controllers), 1)
+                self.assertTrue(controllers[0].shutdown_ready)
+                self.assertFalse(claims.live_owners())
                 self.assertFalse(Path("/run/secs/sources/current").exists())
+                retained = queue.next_pending(wire.origin, "provider:test")
                 self.assertEqual(wire.starts, 1)
                 self.assertEqual(wire.turns, 3)
-                self.assertEqual(wire.hellos, 1)
-                self.assertEqual(len(wire.complete_bodies), 2)
-                retained = wire.complete_bodies[0]
-                self.assertEqual(wire.complete_bodies, [retained, retained])
-                # Exercise the wire read even when science finishes before the
-                # worker's periodic state check. No artificial model delay needed.
-                active = ActiveAttempt(StartPending("provider:test", SelectedJobInput(
-                    "job:test", "nmr.job.specification.text.v1",
-                    "sha256:" + sha256(TEXT).hexdigest(), len(TEXT),
-                ), wire.start_key), ATTEMPT)
-                self.assertEqual(JobApi(provider).snapshot(active), AttemptSnapshot("succeeded", "closed"))
                 self.assertEqual(wire.downloads, 1)
                 self.assertEqual(wire.capabilities, 1)
-                report = json.loads(b64decode(json.loads(retained)["canonical_result_base64"]))
+                self.assertEqual(wire.hellos, 1)
+                self.assertEqual(len(acknowledgements), 2)
+                self.assertEqual(acknowledgements[0], acknowledgements[1])
+                retained = queue.next_pending(wire.origin, "provider:test")
+                self.assertIsNotNone(retained)
+                self.assertEqual(retained.body_sha256, acknowledgements[1]["body_sha256"])
+                report = json.loads(b64decode(json.loads(retained.body)["canonical_result_base64"]))
                 self.assertEqual(report["outcome"], "analysed")
-                self.assertIn("proton", report["input_choices"][-1]["explanation"])
-                self.assertNotIn("explanation", report)
                 self.assertEqual(len(report["input_choices"]), 2)
                 self.assertIn("selected 13C spectrum", report["input_choices"][0]["reading_error"])
-                self.assertEqual(report["analysis"]["preparation"]["sources"], [
-                    {"upload_ref": UPLOAD, "member": "experiment2/proton.jdx"},
-                ])
-                self.assertEqual(report["acquired_uploads"][UPLOAD]["content_hash"], "sha256:" + sha256(archive_bytes).hexdigest())
+                self.assertIn("proton", report["input_choices"][-1]["explanation"])
+                self.assertEqual(report["analysis"]["preparation"]["sources"], [{"upload_ref": UPLOAD, "member": "experiment2/proton.jdx"}])
+                self.assertEqual(report["acquired_uploads"][UPLOAD]["content_hash"], "sha256:" + sha256(wire.archive).hexdigest())
                 self.assertTrue(report["analysis"]["candidates"])
                 retrieval = report["analysis"]["retrieval"]
                 self.assertEqual(retrieval["index_size"], 8)
@@ -145,26 +155,43 @@ class ProviderEndToEndTests(unittest.TestCase):
                 self.assertGreater(retrieval["starting_candidates"], 0)
                 self.assertEqual(retrieval["starting_candidates"], retrieval["formula_matches"])
                 self.assertEqual(report["analysis"]["search"]["generations"], 1)
-                self.assertEqual(report["analysis"]["inference"]["smiles_batch_size"], 8)
-                self.assertEqual(report["analysis"]["inference"]["retrieval_neighbours"], 8)
-                self.assertNotIn("model-key", retained.decode())
-                self.assertNotIn("store-bearer", retained.decode())
-                self.assertTrue(all(wire.provider_signed))
+                self.assertNotIn(b"model-key", retained.body)
+                self.assertNotIn(b"store-bearer", retained.body)
+                self.assertTrue(wire.provider_signed and all(wire.provider_signed))
+            except BaseException as failure:
+                from provider_core.diagnostics import failure_evidence
+                print(json.dumps(failure_evidence(failure, secrets=("model-key", "store-bearer"))), flush=True)
+                raise
             finally:
-                watchdog.cancel()
-                watchdog.join()
-                server.shutdown()
-                server.server_close()
-                thread.join()
+                failures = []
+                asynchronous = (() if worker is None else (worker.stop,)) + tuple(api.retire for api in apis)
+                if inbox is not None:
+                    asynchronous += (inbox.close,)
+                for operation in asynchronous:
+                    try:
+                        await operation()
+                    except BaseException as failure:
+                        failures.append(failure)
+                synchronous = (() if queue is None else (queue.close,)) + (server.shutdown, server.server_close, thread.join)
+                for operation in synchronous:
+                    try:
+                        operation()
+                    except BaseException as failure:
+                        failures.append(failure)
+                if failures:
+                    raise BaseExceptionGroup("Scientific fixture cleanup failed", failures)
+            reopened = DeliveryQueue(storage, limits=limits)
+            try:
+                self.assertEqual(reopened.next_pending(wire.origin, "provider:test").body, retained.body)
+            finally:
+                reopened.close()
 
 
 class WireScenario:
     def __init__(self, archive):
         self.archive = archive
-        self.complete_bodies = []
         self.downloads = self.capabilities = self.turns = 0
         self.provider_signed = []
-        self.stop = Event()
         self.starts = self.hellos = 0
 
     def handler(self):
@@ -173,6 +200,8 @@ class WireScenario:
             def do_GET(self):
                 self.handle_operation()
             def do_POST(self):
+                self.handle_operation()
+            def do_PUT(self):
                 self.handle_operation()
             def log_message(self, *args):
                 pass
@@ -222,7 +251,7 @@ class WireScenario:
                     "formula_evidence": {"kind": "job_specification", "quote": "C7H8ClN"}, "processing": "as_stored",
                     "explanation": "The selected experiment provides the proton spectrum for the supplied formula.",
                 }
-            document = {"choices": [{"message": {"role": "assistant", "tool_calls": [{"id": f"call-{self.turns}", "type": "function",
+            document = {"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "tool_calls": [{"id": f"call-{self.turns}", "type": "function",
                          "function": {"name": name, "arguments": json.dumps(arguments)}}]}}]}
         elif route == ("POST", "/provider/v1/hello"):
             assert json.loads(body)["schema_id"] == "nmr.provider.hello_request.v1"
@@ -233,7 +262,9 @@ class WireScenario:
             assert "Signature" not in headers
             self.downloads += 1
             return self.archive, "application/octet-stream"
-        elif route == ("GET", "/provider/v1/jobs?analysis_kind_ref=" + ANALYSIS_KIND_REF):
+        elif method == "GET" and path.startswith("/provider/v1/jobs?"):
+            assert "analysis_kind_ref=" + ANALYSIS_KIND_REF in path
+            assert "has_provider_execution_attempt=false" in path
             document = {"schema_id": "nmr.provider.jobs.list.response.v1", "analysis_kind_ref": ANALYSIS_KIND_REF,
                         "has_provider_execution_attempt": False, "next_cursor": None, "jobs": [{"job_ref": "job:test", "analysis_kind_ref": ANALYSIS_KIND_REF,
                         "input_schema_id": "nmr.job.specification.text.v1", "input_fingerprint": "sha256:" + sha256(TEXT).hexdigest(), "input_byte_length": len(TEXT),
@@ -258,212 +289,15 @@ class WireScenario:
             self.capabilities += 1
             document = {"schema_id": "nmr.upload.read_capability.response.v1", "upload_ref": UPLOAD, "method": "GET", "download_url": self.origin + "/upload/v1/uploads/" + UPLOAD + "/bytes",
                         "byte_length": len(self.archive), "content_hash": "sha256:" + sha256(self.archive).hexdigest(), "expires_at": "2030-01-01T00:00:00Z", "capability": "store-bearer"}
-        elif route == ("POST", "/provider/v1/execution-attempts/complete"):
+        elif route == ("PUT", "/provider/v1/execution-attempts/" + ATTEMPT + "/progress"):
             command = json.loads(body)
-            assert command["schema_id"] == "nmr.provider.execution_attempt_complete_request.v1"
-            assert command["execution_attempt_ref"] == ATTEMPT
-            retained = json.loads(Path("/state/journal/attempt.json").read_bytes())
-            assert b64decode(retained["body_base64"]) == body
-            self.complete_bodies.append(body)
-            if len(self.complete_bodies) == 1:
-                return None, None
-            self.stop.set()
-            result = b64decode(command["canonical_result_base64"])
-            document = {"schema_id": "nmr.provider.execution_attempt_complete_response.v1", "execution_attempt_ref": ATTEMPT,
-                        "result_schema_id": command["result_schema_id"], "result_byte_length": len(result), "result_fingerprint": "sha256:" + sha256(result).hexdigest(),
-                        "analysis_result_ref": "analysis_result:sha256:" + "c" * 64, "committed_at": "2026-09-08T12:30:00Z", "replayed": True}
+            document = {"schema_id": "nmr.provider.execution_attempt_progress_response.v1",
+                        "execution_attempt_ref": ATTEMPT, "phase": command["phase"],
+                        "condition_code": command["condition_code"], "updated_at": "2026-10-29T00:00:00Z"}
         elif route == ("GET", "/provider/v1/execution-attempts/" + ATTEMPT):
             document = {"schema_id": "nmr.provider.execution_attempt_read_response.v1", "execution_attempt_ref": ATTEMPT,
                         "job_ref": "job:test", "job_state": "closed",
-                        "state": "succeeded" if self.complete_bodies else "in_progress"}
+                        "state": "in_progress"}
         else:
             raise AssertionError(f"Unexpected test request: {method} {path}")
         return json.dumps(document).encode(), "application/json"
-
-
-def load_no_science_handler(root):
-    """The real child proves readiness, but any scientific call fails this test."""
-    (root / "child.pid").write_text(str(os.getpid()))
-    def unexpected(command):
-        (root / "science-called").touch()
-        raise AssertionError("No scientific operation is allowed after model rejection")
-    return unexpected
-
-
-def load_failed_inspection_handler(root):
-    """Raise an operation failure for the production child boundary to serialize."""
-    (root / "child.pid").write_text(str(os.getpid()))
-    def inspect(command):
-        assert command["operation"] == "inspect"
-        assert Path(command["files"][UPLOAD]).read_bytes() == b"unread fixture bytes"
-        # Exclusive creation makes an accidental second inspection fail.
-        with (root / "inspection-called").open("x"):
-            pass
-        try:
-            raise OSError(errno.EIO, "private-worker-source")
-        except OSError as cause:
-            raise RuntimeError("private-worker-wrapper") from cause
-    return inspect
-
-
-class FailedAttemptScenario(WireScenario):
-    """The API loses its first failure receipt after retaining the command."""
-
-    def __init__(self, journal):
-        super().__init__(b"unread fixture bytes")
-        self.journal = journal
-        self.failure_bodies = []
-
-    def reply(self, method, path, body, headers):
-        if (method, path) == ("GET", "/provider/v1/execution-attempts/" + ATTEMPT):
-            raw, media = super().reply(method, path, body, headers)
-            document = json.loads(raw)
-            document["state"] = "failed" if self.failure_bodies else "in_progress"
-            return json.dumps(document).encode(), media
-        if (method, path) != ("POST", "/provider/v1/execution-attempts/fail"):
-            return super().reply(method, path, body, headers)
-        command = json.loads(body)
-        assert command["schema_id"] == "nmr.provider.execution_attempt_fail_request.v1"
-        assert command["execution_attempt_ref"] == ATTEMPT
-        retained = json.loads((self.journal / "attempt.json").read_bytes())
-        assert b64decode(retained["body_base64"]) == body
-        self.failure_bodies.append(body)
-        if len(self.failure_bodies) == 1:
-            return None, None
-        self.stop.set()
-        receipt = {name: command[name] for name in ("execution_attempt_ref", "failure_code", "failure_message")}
-        receipt.update(schema_id="nmr.provider.execution_attempt_fail_response.v1", replayed=True,
-                       committed_at="2026-09-10T00:00:00Z")
-        return json.dumps(receipt).encode(), "application/json"
-
-
-class RejectedInterpretationScenario(FailedAttemptScenario):
-    """Reject interpretation before the provider acquires or inspects any Upload."""
-
-    def handler(self):
-        scenario = self
-        class Handler(super().handler()):
-            def do_POST(self):
-                if self.path != "/chat":
-                    return super().do_POST()
-                assert self.headers["Authorization"] == "Bearer model-key"
-                body = self.rfile.read(int(self.headers["Content-Length"]))
-                assert json.loads(body)["model"] == "scripted-failure"
-                scenario.turns += 1
-                reply = b'{"error":{"message":"private incomplete model detail"}}'
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("x-request-id", "model-rejection-request")
-                self.send_header("Content-Length", str(len(reply) + 1))
-                self.end_headers()
-                self.wfile.write(reply)
-        return Handler
-
-
-class ProviderFailureWireTests(unittest.TestCase):
-    def test_model_rejection_is_failed_and_replayed_without_scientific_work(self):
-        """Prove controller composition, not model inference or scientific quality."""
-        with self.failure_lane(RejectedInterpretationScenario, load_no_science_handler) as (wire, root, evidence, failure):
-            self.assertEqual((wire.downloads, wire.capabilities), (0, 0))
-            self.assertEqual(failure["failure_code"], "interpretation_failed")
-            self.assertIn("scripted-failure", failure["failure_message"])
-            self.assertIn("HTTP 400", failure["failure_message"])
-            self.assertFalse((root / "science-called").exists())
-            self.assertEqual(evidence["interpreter"]["request_id"], "model-rejection-request")
-            self.assertIn("declared bytes", evidence["interpreter"]["detail_unavailable"])
-
-    def test_verified_upload_and_worker_failure_survive_lost_publication_receipt(self):
-        """The child fails inspection; verified input identity and both causes survive."""
-        remove = shutil.rmtree
-        removals = []
-        def remove_after_exit(path, *args, **kwargs):
-            source = Path(path)
-            if source.name == "current":
-                self.assertTrue(source.is_dir())
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(int((source.parent / "child.pid").read_text()), 0)
-                removals.append(source)
-            return remove(path, *args, **kwargs)
-        with patch("secs_inference.provider.analysis_run.shutil.rmtree", side_effect=remove_after_exit), \
-             self.failure_lane(FailedAttemptScenario, load_failed_inspection_handler) as (wire, root, evidence, failure):
-            self.assertEqual((wire.downloads, wire.capabilities), (1, 1))
-            self.assertTrue((root / "inspection-called").exists())
-            self.assertEqual(failure["failure_code"], "scientific_execution_failed")
-            self.assertIn("input inspection", failure["failure_message"])
-            self.assertEqual(evidence["worker"]["exception_type"], "RuntimeError")
-            self.assertEqual(evidence["worker"]["cause"]["exception_type"], "OSError")
-            self.assertEqual(evidence["worker"]["cause"]["errno"], errno.EIO)
-            self.assertEqual(evidence["worker"]["cause"]["reason"], "Input/output error")
-            self.assertEqual(evidence["analysis"]["acquired_uploads"], {
-                UPLOAD: {"byte_length": len(wire.archive), "content_hash": "sha256:" + sha256(wire.archive).hexdigest()},
-            })
-            self.assertEqual(removals, [root / "current"])
-
-    @contextmanager
-    def failure_lane(self, scenario_type, load_handler):
-        """Exercise real HTTPS, a spawned child, durable failure and exact replay."""
-        with TemporaryDirectory() as directory, socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener, ExitStack() as cleanup:
-            root = Path(directory)
-            socket_path = root / "worker.sock"
-            listener.bind(str(socket_path))
-            listener.listen(1)
-            listener.settimeout(5)
-            worker_errors = []
-            def serve():
-                try:
-                    connection, _ = listener.accept()
-                    with connection:
-                        _serve_session(connection, partial(load_handler, root))
-                except BaseException as error:
-                    worker_errors.append(error)
-            worker_thread = Thread(target=serve, daemon=True)
-            worker_thread.start()
-            cleanup.callback(worker_thread.join, 6)
-            _write_test_certificates(root)
-            wire = scenario_type(root / "journal")
-            server = ThreadingHTTPServer(("127.0.0.1", 0), wire.handler())
-            cleanup.callback(server.server_close)
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            context.load_cert_chain(root / "server.pem", root / "server-key.pem")
-            server.socket = context.wrap_socket(server.socket, server_side=True)
-            wire.origin = f"https://localhost:{server.server_port}"
-            server_thread = Thread(target=server.serve_forever, daemon=True)
-            server_thread.start()
-            cleanup.callback(server_thread.join, 5)
-            cleanup.callback(server.shutdown)
-            watchdog = Timer(15, wire.stop.set)
-            watchdog.start()
-            try:
-                provider = ProviderApi(HttpsEndpoint(wire.origin, "dev-local", 2, 3, root / "ca.pem"),
-                    "provider:test", "credential:test", Ed25519PrivateKey.from_private_bytes(bytes(range(32))))
-                chat = ChatEndpoint(wire.origin + "/chat", "scripted-failure", "model-key", root / "ca.pem")
-                store = UploadStore(wire.origin, 1024, ca_file=root / "ca.pem")
-                config = ProviderConfig(None, HelloPolicy("Test", "Controller failure proof", 3600, 1),
-                    ExecutionConfig(chat.url, chat.model, store.origin, worker_startup_seconds=5, poll_seconds=0.01))
-                with patch("secs_inference.provider.runtime.WORKER_SOCKET", socket_path), \
-                     patch("secs_inference.provider.runtime.SOURCE_DIRECTORY", root / "current"), \
-                     patch("secs_inference.provider.runtime.JOURNAL_DIRECTORY", wire.journal):
-                    run_services(api=provider, prepared=prepare_configured_hello(config), config=config,
-                                 chat=chat, upload_store=store, stop=wire.stop)
-                self.assertEqual((wire.starts, wire.turns), (1, 1))
-                self.assertEqual(len(wire.failure_bodies), 2)
-                self.assertEqual(wire.failure_bodies[0], wire.failure_bodies[1])
-                failure = json.loads(wire.failure_bodies[0])
-                self.assertFalse((root / "current").exists())
-                self.assertFalse((wire.journal / "attempt.json").exists())
-                active = ActiveAttempt(StartPending("provider:test", SelectedJobInput(
-                    "job:test", "nmr.job.specification.text.v1", "sha256:" + sha256(TEXT).hexdigest(), len(TEXT),
-                ), wire.start_key), ATTEMPT)
-                self.assertEqual(JobApi(provider).snapshot(active), AttemptSnapshot("failed", "closed"))
-                evidence = json.loads(next(wire.journal.glob("*.diagnostic.json")).read_bytes())
-                for secret in ("model-key", "store-bearer", "private incomplete model detail", "private-worker"):
-                    self.assertNotIn(secret, json.dumps(evidence) + failure["failure_message"])
-                worker_thread.join(5)
-                self.assertFalse(worker_thread.is_alive())
-                self.assertEqual(worker_errors, [])
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(int((root / "child.pid").read_text()), 0)
-                yield wire, root, evidence, failure
-            finally:
-                watchdog.cancel()
-                watchdog.join()

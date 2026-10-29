@@ -1,297 +1,290 @@
-"""Keep scientific work in a supervised, warm, offline process.
+"""Borrow one resident scientific channel from the shared native lifecycle owner."""
 
-Only the supervisor acknowledges a stop, after reaping its child. Socket EOF
-or a cancelled controller wait is never proof that parsing or GPU work stopped.
-Deployment owns the container and its devices; this module cannot launch Docker.
-"""
-
-import json
-import logging
-import fcntl
-import math
+import asyncio
 import os
-import multiprocessing
-from multiprocessing.connection import wait
 from pathlib import Path
-import socket
 import stat
 from time import monotonic
 
-from secs_inference.provider.socket_deadline import socket_deadline
-from secs_inference.provider.diagnostics import exception_evidence
-from secs_inference.provider.worker_protocol import FrameBuffer, WorkerError, send, serve_scientific_session
+from provider_core.async_runner_session import AsyncRunnerSession
+from provider_core.task_boundary import contain_task_exit
+from provider_core.runner_session import RunnerSession, RunnerStartupStopped, RunnerStartupUnavailable
 
-
-_LOG = logging.getLogger(__name__)
+from secs_inference.provider.worker_protocol import ScientificWorkerFailed, WorkerError, encode, receive_async
 
 
 class WorkerStopUnconfirmed(WorkerError):
-    """Keep source files and stop admission until the supervisor confirms exit."""
+    """Retain sources and admission until original native retirement is proved."""
 
 
-def _close_socket(transport, role: str) -> None:
-    """Socket cleanup cannot revise the supervisor's process-exit evidence."""
-    try:
-        transport.close()
-    except OSError as error:
-        _LOG.error("Cannot close %s; worker-exit confirmation is unchanged: %s", role, json.dumps(exception_evidence(error)))
+class NativeWorkerExited(WorkerError):
+    """Carry an actual original exit to the owning Attempt's scientific session."""
+
+    def __init__(self, runner, cause):
+        super().__init__("The scientific worker exited before returning its operation outcome")
+        self.runner, self.cause = runner, cause
+
+
+async def _join(task, deadline):
+    if task.done():
+        return task.result()
+    async with asyncio.timeout_at(deadline):
+        return await asyncio.shield(task)
+
+
+def _observed(task):
+    if not task.cancelled():
+        task.exception()
 
 
 class WorkerClient:
-    """Wait for a loaded child, then share it across serial healthy Attempts.
+    """Keep scientific framing and warm reuse separate from native process facts.
 
-    Deadlines are absolute monotonic seconds, shared by the controller and
-    supervisor on the same host, not wall-clock timestamps or durations.
+    Only this channel's original request reads scientific frames. Shared SDK
+    owners retain setup and control reads across cancellation. No API operation
+    runs inside scientific I/O, so the operation's own deadline remains effective.
     """
 
-    def __init__(self, path: Path, *, startup_deadline: float, check_running=None):
-        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.socket.settimeout(max(0.01, startup_deadline - monotonic()))
-        try:
-            self.socket.connect(str(path))
-        except BaseException:
-            _close_socket(self.socket, "the controller's scientific-worker socket")
-            raise
-        self.stopped = False
-        self._incoming = FrameBuffer()
-        self._messages = []
-        try:
-            ready = self._receive_next(startup_deadline, check_running)
-            self._accept_stop(ready)
-            if ready.get("outcome") != "ready":
-                error = WorkerError("The SECS scientific worker could not finish loading its configured model and candidate index; inspect worker diagnostics")
-                error.diagnostic = ready
-                raise error
-        except BaseException:
-            self.stop()
-            raise
+    def __init__(self, path: Path, *, startup_seconds, retirement_seconds, observation_seconds=2):
+        if not path.is_absolute() or path.parent.resolve() != path.parent:
+            raise ValueError("SECS native endpoint requires a canonical absolute parent")
+        if not 0 < observation_seconds < retirement_seconds:
+            raise ValueError("Native exit observation must leave part of the retirement allowance for stopping")
+        self.path, self.startup_seconds = path, startup_seconds
+        self.retirement_seconds, self.observation_seconds = retirement_seconds, observation_seconds
+        self._begin_lifetime()
 
-    def request(self, command: dict, *, deadline: float, check_active=None) -> dict:
-        """On deadline/failure, require stop confirmation before unwinding files."""
-        if self.stopped:
-            raise WorkerError("The scientific worker has stopped; reconnect before accepting work")
-        try:
-            self.socket.settimeout(_remaining(deadline))
-            send(self.socket, command | {"deadline": deadline})
-            response = self._receive_next(deadline, check_active)
-            self._accept_stop(response)
-            return response
-        except BaseException:
-            self.stop()
-            raise
+    def _begin_lifetime(self):
+        self.native = self.proof = None
+        self._opening = self._pending = self._retirement = None
+        self._reader = self._writer = None
+        self._stopping = self.stopped = False
+        self._science_close_failure = None
 
-    def check_ready(self, *, deadline: float, check_running=None) -> None:
-        """Require a loaded-child reply before admitting another Attempt."""
-        response = self.request({"operation": "ready"}, deadline=deadline, check_active=check_running)
-        if response.get("outcome") != "ready":
+    def _own(self, operation, *arguments):
+        coroutine = contain_task_exit(operation, *arguments)
+        try:
+            task = asyncio.create_task(coroutine)
+        except BaseException:
+            coroutine.close()
+            raise
+        task.add_done_callback(_observed)
+        return task
+
+    async def _lease_identity(self, deadline):
+        while True:
+            if self._stopping:
+                raise RunnerStartupStopped("SECS native startup was stopped before lease admission")
             try:
-                raise WorkerError("The scientific child did not confirm readiness before Attempt admission")
-            except WorkerError:
-                self.stop()
+                descriptor = os.open(self.path.parent / ".owner-session.lock",
+                                     os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+            except FileNotFoundError:
+                if monotonic() >= deadline:
+                    raise RunnerStartupUnavailable("SECS native lifetime lock did not appear within its startup allowance") from None
+                await asyncio.sleep(min(0.02, deadline - monotonic()))
+                continue
+            try:
+                facts = os.fstat(descriptor)
+                if (not stat.S_ISREG(facts.st_mode) or facts.st_uid != os.geteuid()
+                        or stat.S_IMODE(facts.st_mode) != 0o600):
+                    raise PermissionError("SECS native lifetime lock must be a caller-owned mode 0600 regular file")
+                return facts.st_dev, facts.st_ino
+            finally:
+                os.close(descriptor)
+
+    async def _open(self, deadline):
+        identity = await self._lease_identity(deadline)
+        self.native = AsyncRunnerSession(RunnerSession(
+            self.path, role="secs", expected_lock_identity=identity,
+            startup_seconds=self.startup_seconds, retirement_seconds=self.retirement_seconds,
+        ), setup_not_after=deadline)
+        if self._stopping:
+            self.native.request_stop()
+        await self.native.connect(wait_seconds=max(0.001, deadline - monotonic()))
+        if self._stopping:
+            raise WorkerError("SECS native startup was interrupted before scientific channel adoption")
+        channel = self.native.session.science
+        channel.setblocking(False)
+        self._reader, self._writer = await asyncio.open_connection(sock=channel)
+        self.native.session.science = None
+        if self._stopping:
+            self._request_stop()
+            raise WorkerError("SECS native startup was interrupted during scientific channel adoption")
+        ready = await self._receive_reply()
+        if ready.get("outcome") == "failed":
+            raise ScientificWorkerFailed(ready)
+        if ready.get("outcome") != "ready":
+            raise WorkerError("The scientific child did not confirm that its configured model and candidate index loaded")
+
+    async def check_ready(self, *, deadline):
+        if self.stopped:
+            # A fresh SDK owner is allowed only after this client's retirement
+            # positively settled; a poisoned or pending read never reaches here.
+            self._begin_lifetime()
+        if self._opening is None:
+            self._opening = self._own(self._open, deadline)
+            await _join(self._opening, deadline)
+            return
+        await _join(self._opening, deadline)
+        response = await self.request({"operation": "ready"}, deadline=deadline)
+        if response.get("outcome") != "ready":
+            self._request_stop()
+            raise WorkerError("The resident scientific worker did not confirm readiness")
+
+    async def _observe_exit(self, cause):
+        try:
+            await self.native.observe_retirement(wait_seconds=self.observation_seconds)
+        except Exception:
+            # Caller expiry retains the same SDK reader; it is never exit proof.
+            if self.native.session.original_exit is None:
+                raise WorkerError("Scientific communication ended without confirmed original worker exit") from cause
+        if self.native.session.original_exit is not None:
+            raise NativeWorkerExited(self.native.session, cause) from cause
+        raise WorkerError("Scientific communication ended without an operation outcome") from cause
+
+    async def _receive_reply(self):
+        try:
+            return await receive_async(self._reader)
+        except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError) as cause:
+            await self._observe_exit(cause)
+
+    async def _exchange(self, command, deadline):
+        if self._stopping or self.stopped:
+            raise WorkerError("The scientific request was stopped before dispatch")
+        frame = encode(command)
+        if monotonic() >= deadline:
+            raise TimeoutError("Scientific request deadline elapsed before dispatch")
+        try:
+            self._writer.write(frame)
+            await self._writer.drain()
+        except (ConnectionResetError, BrokenPipeError) as cause:
+            await self._observe_exit(cause)
+        return await self._receive_reply()
+
+    async def request(self, command, *, deadline):
+        if self._stopping or self.stopped or self._reader is None:
+            raise WorkerError("The scientific worker is not available for another request")
+        if self._pending is not None:
+            raise WorkerError("The scientific worker still owns its original request; join or retire it before more work")
+        self._pending = self._own(self._exchange, command, deadline)
+        try:
+            response = await _join(self._pending, deadline)
+        except NativeWorkerExited:
+            raise
+        except BaseException:
+            self._request_stop()
+            raise
+        else:
+            self._pending = None
+            return response
+
+    def _request_stop(self):
+        self._stopping = True
+        if self.native is not None:
+            try:
+                self.native.request_stop()
+            except OSError:
+                # Shared ownership retains this failure; still join its original
+                # reader because a queued receipt can establish actual retirement.
+                pass
+        if self._writer is not None:
+            try:
+                self._writer.close()
+            except OSError as cause:
+                if self._science_close_failure is None:
+                    self._science_close_failure = cause
+
+    async def _prove_retirement(self, deadline):
+        if monotonic() >= deadline:
+            raise TimeoutError("SECS native cleanup allowance expired before proof-session acquisition")
+        generation = self.native.session.generation
+        if generation is None:
+            raise WorkerStopUnconfirmed("Original runner generation was not admitted; its scratch cleanup remains unconfirmed")
+        self.native.session.close()
+        remaining = deadline - monotonic()
+        self.proof = AsyncRunnerSession(RunnerSession(
+            self.path, role="secs", expected_lock_identity=self.native.session.expected_lock_identity,
+            startup_seconds=remaining, retirement_seconds=remaining,
+        ), not_after=deadline)
+        try:
+            await self.proof.connect(wait_seconds=max(0.001, deadline - monotonic()))
+            self.proof.request_stop()
+            await self.proof.join_retirement(wait_seconds=max(0.001, deadline - monotonic()))
+        except BaseException:
+            try:
+                self.proof.request_stop()
+            except OSError:
+                # The proof owner retains its original stop failure and futures.
+                pass
+            raise
+        self.proof.session.close()
+        if self.proof.session.generation != generation:
+            raise WorkerStopUnconfirmed("A replacement runner cannot confirm cleanup of the original runner's scratch")
+
+    async def _join_science(self, task, deadline, fatal_failures):
+        try:
+            await _join(task, deadline)
+        except Exception:
+            if not task.done():
+                raise
+        except BaseExceptionGroup as cause:
+            fatal_failures.append(cause)
+            if not task.done():
                 raise
 
-    def _accept_stop(self, response):
-        if response.get("outcome") != "stopped":
-            return
-        self.stopped = True
-        _close_socket(self.socket, "the controller's scientific-worker socket")
-        if response.get("reason") == "deadline":
-            raise TimeoutError("The scientific work deadline elapsed and its child was stopped")
-        if response.get("reason") == "relay_failure":
-            error = WorkerError("Scientific worker communication failed; its analysis process was confirmed stopped")
-            error.diagnostic = response.get("diagnostic")
-            raise error
-        raise WorkerError("The scientific analysis process exited before completing its operation; its exit was confirmed")
-
-    def stop(self) -> None:
-        """Discard a raced result; only a supervisor acknowledgement permits cleanup."""
-        if self.stopped:
-            return
-        cancel_failure = None
+    async def _retire_native(self, deadline, fatal_failures):
         try:
-            deadline = monotonic() + 10
-            self.socket.settimeout(10)
-            try:
-                send(self.socket, {"operation": "cancel"})
-            except OSError as error:
-                # The supervisor may already have stopped and closed its write
-                # side. Its queued acknowledgement is still the needed proof.
-                cancel_failure = exception_evidence(error)
-            while True:
-                response = self._receive_next(deadline)
-                if response.get("outcome") == "stopped":
-                    break
-            self.stopped = True
-        except BaseException:
-            error = WorkerStopUnconfirmed("Scientific worker exit could not be confirmed; retain its source files and stop accepting Jobs")
-            if cancel_failure is not None:
-                error.diagnostic = {"cancel_request": cancel_failure}
-            raise error from None
-        finally:
-            _close_socket(self.socket, "the controller's scientific-worker socket")
-        if response.get("diagnostic") is not None:
-            _LOG.error("Scientific worker exit was confirmed after a relay failure: %s", json.dumps(response["diagnostic"]))
+            await contain_task_exit(self.native.join_retirement, wait_seconds=max(0.001, deadline - monotonic()))
+        except (RunnerStartupStopped, RunnerStartupUnavailable):
+            # These exact SDK setup outcomes exclude any control connection.
+            if self.native.session.control_connected:
+                raise
+        except (Exception, BaseExceptionGroup) as cause:
+            if not isinstance(cause, Exception):
+                fatal_failures.append(cause)
+            original = self.native.reader if self.native.reader is not None else self.native.setup
+            failure = (self.native.retirement_failure if self.native.reader is not None
+                       else self.native.setup_failure)
+            if original is None or not original.done() or original.cancelled() or failure is None:
+                raise
+            await self._prove_retirement(deadline)
 
-    def _receive_next(self, deadline, check_active=None):
-        """Keep partial frames across timeout so a raced result cannot hide stop."""
-        next_check = monotonic() + 5
-        while True:
-            remaining = _remaining(deadline)
-            if self._messages:
-                return self._messages.pop(0)
-            ready = wait([self.socket], timeout=min(5, remaining))
-            if ready:
-                self.socket.settimeout(_remaining(deadline))
-                chunk = self.socket.recv(64 * 1024)
-                if not chunk:
-                    raise WorkerError("Scientific worker disconnected before completing its operation")
-                self._messages.extend(self._incoming.feed(chunk))
-            if check_active is not None and monotonic() >= next_check:
-                check_active()
-                next_check = monotonic() + 5
-
-
-def serve_worker(path: Path, load_handler) -> None:
-    """Serve serial sessions; the container must kill children if its owner dies."""
-    owner = os.open(path.parent / "owner.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
-    try:
-        if not stat.S_ISREG(os.fstat(owner).st_mode):
-            raise WorkerError("Cannot start the worker: its ownership lock is not a regular file")
-        fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        # Only the sole supervisor may remove a socket left by its stopped
-        # container. A second supervisor must not displace a live listener.
-        if path.exists():
-            if not stat.S_ISSOCK(path.lstat().st_mode):
-                raise WorkerError("Cannot start the worker: its socket path contains a non-socket file")
-            path.unlink()
-        _listen(path, load_handler)
-    except BaseException:
+    async def _retire(self):
+        deadline = monotonic() + self.retirement_seconds if self.native is None else self.native.retirement_deadline
+        fatal_failures = []
         try:
-            os.close(owner)
-        except OSError as cleanup:
-            _LOG.error("Cannot release the scientific supervisor's ownership lock after failure: %s", json.dumps(exception_evidence(cleanup)))
-        raise
-    else:
-        os.close(owner)
-
-
-def _listen(path, load_handler):
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    bound = False
-    try:
-        listener.bind(str(path))
-        bound = True
-        path.chmod(0o600)
-        listener.listen(1)
-        while True:
-            client, _ = listener.accept()
-            try:
-                _serve_session(client, load_handler)
-            finally:
-                _close_socket(client, "the supervisor's accepted controller socket")
-    finally:
-        _close_socket(listener, "the scientific supervisor's listening socket")
-        # A failed bind grants no ownership of an existing pathname.
-        if bound:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError as cleanup:
-                _LOG.error("Cannot remove the scientific supervisor's socket pathname after closing its listener: %s", json.dumps(exception_evidence(cleanup)))
-
-
-def _serve_session(client: socket.socket, load_handler) -> None:
-    """Read frames incrementally so a partial child response cannot block cancel."""
-    parent, child_socket = socket.socketpair()
-    child = None
-    reason = None
-    diagnostic = None
-    try:
-        context = multiprocessing.get_context("spawn")
-        child = context.Process(target=serve_scientific_session, args=(child_socket, load_handler))
-        child.start()
-        _close_socket(child_socket, "the supervisor's child-side socket")
-        child_socket = None
-        try:
-            reason = _relay(client, parent, child)
-        except (OSError, ValueError, WorkerError) as error:
-            reason = "relay_failure"
-            diagnostic = {"relay": exception_evidence(error)}
-    finally:
-        try:
-            if child is not None and child.pid is not None:
-                _reap(child)
-        except BaseException:
-            if diagnostic is not None:
-                _LOG.error("Scientific worker relay failed before child exit could be confirmed: %s", json.dumps(diagnostic))
-            raise
-        finally:
-            _close_socket(parent, "the supervisor's relay socket")
-            if child_socket is not None:
-                _close_socket(child_socket, "the supervisor's child-side socket")
-            if child is not None and not child.is_alive():
+            if self._opening is not None:
+                await self._join_science(self._opening, deadline, fatal_failures)
+            if self.native is not None:
+                await self._retire_native(deadline, fatal_failures)
+            if self._pending is not None:
+                await self._join_science(self._pending, deadline, fatal_failures)
+            if self._writer is not None:
                 try:
-                    child.close()
-                except OSError as error:
-                    _LOG.error("Cannot release the supervisor's process handle: %s", json.dumps(exception_evidence(error)))
-    if reason is not None:
+                    await _join(self._own(self._writer.wait_closed), deadline)
+                except (BrokenPipeError, ConnectionResetError):
+                    # The close waiter reports the earlier stream error only
+                    # after connection_lost; native retirement was proved above.
+                    pass
+            if self.native is not None:
+                self.native.session.close()
+        except BaseException as cleanup:
+            if fatal_failures and all(cleanup is not cause for cause in fatal_failures):
+                raise BaseExceptionGroup("Native retirement retained fatal observations and cleanup failure",
+                                         (*fatal_failures, cleanup)) from None
+            raise
+        self.stopped = True
+        if len(fatal_failures) == 1:
+            raise fatal_failures[0]
+        if fatal_failures:
+            raise BaseExceptionGroup("Native retirement retained fatal observations", fatal_failures)
+
+    async def stop(self):
+        if not self.stopped:
+            self._request_stop()
+        if self._retirement is None:
+            self._retirement = self._own(self._retire)
         try:
-            with socket_deadline(client, monotonic() + 2):
-                send(client, {"outcome": "stopped", "reason": reason,
-                               **({"diagnostic": diagnostic} if diagnostic is not None else {})})
-        except OSError as error:
-            _LOG.error("Scientific child exit was confirmed, but its acknowledgement could not be delivered: %s",
-                       json.dumps({"delivery": exception_evidence(error), **(diagnostic or {})}))
-
-
-def _relay(client, parent, child):
-    """Return a stop reason; only the enclosing process owner may acknowledge it."""
-    buffers = {client: FrameBuffer(), parent: FrameBuffer()}
-    deadline = None
-    while True:
-        timeout = None if deadline is None else max(0, deadline - monotonic())
-        ready = wait([client, parent, child.sentinel], timeout=timeout)
-        if deadline is not None and monotonic() >= deadline:
-            return "deadline"
-        # Read cancellation before forwarding a simultaneously ready result.
-        for incoming in (client, parent):
-            if incoming not in ready:
-                continue
-            chunk = incoming.recv(64 * 1024)
-            if not chunk:
-                return "child_exit" if incoming is parent else None
-            for message in buffers[incoming].feed(chunk):
-                if incoming is parent and message.get("outcome") == "stopped":
-                    raise WorkerError("Only the supervisor may acknowledge child termination")
-                if incoming is client and message.get("operation") == "cancel":
-                    return "cancel"
-                if incoming is client:
-                    deadline = message.get("deadline")
-                    if type(deadline) not in {int, float} or not math.isfinite(deadline):
-                        raise WorkerError("The scientific request has no finite work deadline")
-                else:
-                    deadline = None
-                outgoing = parent if incoming is client else client
-                with socket_deadline(outgoing, monotonic() + 2):
-                    send(outgoing, message)
-        if child.sentinel in ready:
-            return "child_exit"
-
-
-def _reap(child) -> None:
-    """Use the sibling supervisor's terminate/kill/join ordering."""
-    if child.is_alive():
-        child.terminate()
-        child.join(2)
-    if child.is_alive():
-        child.kill()
-        child.join(2)
-    if child.is_alive():
-        raise WorkerStopUnconfirmed("The scientific child has not exited after termination; the supervisor cannot accept another session")
-    child.join()
-
-
-def _remaining(deadline: float) -> float:
-    remaining = deadline - monotonic()
-    if remaining <= 0:
-        raise TimeoutError("The deadline for the scientific worker response has elapsed")
-    return remaining
+            await asyncio.shield(self._retirement)
+        except Exception as cause:
+            raise WorkerStopUnconfirmed("Scientific worker retirement is unconfirmed; retain its sources and stop admission") from cause

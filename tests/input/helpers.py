@@ -1,10 +1,15 @@
 """Arrange uploaded bytes and observe production boundaries; never decode them."""
 
+from dataclasses import asdict
+from hashlib import sha256
 from pathlib import Path
-from tempfile import TemporaryDirectory, mkdtemp
+import shutil
+from tempfile import NamedTemporaryFile, TemporaryDirectory, mkdtemp
 import unittest
 from unittest.mock import Mock
 from zipfile import ZipFile
+
+from provider_core.upload_file import VerifiedUploadFile
 
 from secs_inference.provider.worker_model import ScientificHandler, ScientificWorkerConfig
 
@@ -44,8 +49,21 @@ class WorkerCase(unittest.TestCase):
         return ref
 
     def request(self, operation, *, attempt_ref=ATTEMPT_REF, **arguments):
-        return self.worker({'operation': operation, 'files': dict(self.files),
-                            'directory': str(self.root), 'attempt_ref': attempt_ref, **arguments})
+        receipts = {}
+        for ref, filename in self.files.items():
+            path = Path(filename)
+            if path.parent != self.root:
+                with NamedTemporaryFile(dir=self.root, prefix="source-", delete=False) as output:
+                    destination = Path(output.name)
+                shutil.copyfile(path, destination)
+                self.files[ref] = str(path := destination)
+            contents = path.read_bytes()
+            receipts[ref] = asdict(VerifiedUploadFile("job:fixture", ref, len(contents),
+                "sha256:" + sha256(contents).hexdigest(), path.name))
+        return self.worker({'operation': operation, 'receipts': receipts,
+                            'directory': str(self.root), 'attempt_ref': attempt_ref,
+                            'max_upload_bytes': 128 * 1024 * 1024,
+                            'max_total_bytes': 256 * 1024 * 1024, **arguments})
 
     def search(self, *, attempt_ref=ATTEMPT_REF, selection):
         prepared = self.request('prepare', attempt_ref=attempt_ref, selection=selection)

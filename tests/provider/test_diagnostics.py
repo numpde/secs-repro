@@ -4,15 +4,9 @@ import errno
 import json
 import socket
 import ssl
-from pathlib import Path
-from tempfile import TemporaryDirectory
 import unittest
 
 from secs_inference.provider.diagnostics import exception_evidence
-from secs_inference.provider.attempt_store import AttemptStore
-from secs_inference.provider.outcomes import WorkDeadlineExceeded
-from secs_inference.provider.upload_download import UploadUnavailable
-from test_execution import ACTIVE
 
 
 class DiagnosticTests(unittest.TestCase):
@@ -64,29 +58,3 @@ class DiagnosticTests(unittest.TestCase):
                 self.assertEqual(len(evidence["exceptions"]), 63)
                 self.assertEqual(evidence["omitted_exception_count"], 937)
                 self.assertNotIn("private", json.dumps(evidence))
-
-    def test_acquisition_deadline_retains_the_owned_transport_cause(self):
-        try:
-            try:
-                raise UploadUnavailable("the connection was reset", diagnostic={
-                    "phase": "receiving the selected Upload's bytes", "errno": errno.ECONNRESET,
-                })
-            except UploadUnavailable as cause:
-                raise WorkDeadlineExceeded("Analysis stopped while obtaining the selected Upload: the input acquisition deadline elapsed") from cause
-        except WorkDeadlineExceeded as failure:
-            with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as journal:
-                journal.diagnose(ACTIVE, failure)
-                evidence = json.loads(next(journal.directory.glob("*.diagnostic.json")).read_bytes())
-        self.assertEqual(evidence["execution_attempt_ref"], ACTIVE.execution_attempt_ref)
-        self.assertEqual(evidence["cause"]["upload"]["errno"], errno.ECONNRESET)
-        self.assertIn("receiving", evidence["cause"]["upload"]["phase"])
-
-    def test_attempt_diagnostics_do_not_adopt_third_party_diagnostic_attributes(self):
-        error = ValueError("private-message")
-        error.diagnostic = {"private": "third-party-value"}
-        error.analysis_context = {"private": "third-party-value"}
-        with TemporaryDirectory() as directory, AttemptStore(Path(directory) / "journal") as journal:
-            journal.diagnose(ACTIVE, error)
-            evidence = json.loads(next(journal.directory.glob("*.diagnostic.json")).read_bytes())
-        self.assertNotIn("private", json.dumps(evidence))
-        self.assertNotIn("worker", evidence)

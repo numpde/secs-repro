@@ -154,9 +154,10 @@ test/provider test/provider/diagnostics:
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777 \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/config/provider.toml.example",dst=/workspace/config/provider.toml.example,readonly \
 		--mount type=bind,src="$$tests_dir",dst=/workspace/tests/provider,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/integration/native_worker_fixture.py",dst=/workspace/tests/integration/native_worker_fixture.py,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/contracts",dst=/workspace/contracts,readonly \
 		--entrypoint python "$$provider_image" \
-		-m unittest discover -v -s /workspace/tests/provider -p '$(if $(filter test/provider/diagnostics,$@),test_problem_diagnostics.py,test_*.py)'
+		-m unittest discover -v -s /workspace/tests/provider -p '$(if $(filter test/provider/diagnostics,$@),test_diagnostics.py,test_*.py)'
 
 test/qualification-tools:
 	@if test "$(HOST_UID)" -eq 0; then
@@ -242,6 +243,9 @@ test/provider/e2e:
 	}
 	trap cleanup EXIT
 	mkdir -m 700 "$$stage/sources" "$$stage/socket" "$$stage/state"
+
+	touch "$$stage/socket/.owner-session.lock"
+	chmod 600 "$$stage/socket/.owner-session.lock"
 	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")
 	checkpoint_dir=$$(realpath -e "$(CHECKPOINT_DIRECTORY)")
 	worker_started=1
@@ -263,14 +267,14 @@ test/provider/e2e:
 		--mount type=bind,src="$$stage/sources",dst=/run/secs/sources \
 		--mount type=bind,src="$$stage/socket",dst=/run/secs/worker \
 		--entrypoint /bin/sh "$$cpu_image" \
-		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && exec python -m worker_fixture' >/dev/null
+		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && mkdir -m 700 /tmp/native-scratch /tmp/native-status && exec python -I -m provider_core.runner --role secs --socket /run/secs/worker/worker.sock --scratch /tmp/native-scratch --status-directory /tmp/native-status --owner-session-lifetime --startup-seconds 2 --terminate-seconds 2 --kill-seconds 2 --cleanup-seconds 2 -- python -I /tests/worker_fixture.py' >/dev/null
 	controller_started=1
 	$(DOCKER) run --cidfile "$$stage/controller.cid" --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" --cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 64 --cpus 1 --memory 512m --memory-swap 512m \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777 \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/e2e/test_provider_e2e.py",dst=/tests/e2e/test_provider_e2e.py,readonly \
-		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/provider/test_http.py",dst=/tests/e2e/tls_fixture.py,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/e2e/tls_fixture.py",dst=/tests/e2e/tls_fixture.py,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/fixtures",dst=/fixtures,readonly \
 		--mount type=bind,src="$$stage/sources",dst=/run/secs/sources \
 		--mount type=bind,src="$$stage/socket",dst=/run/secs/worker,readonly \

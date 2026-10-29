@@ -1,5 +1,10 @@
 """A discovered representation reaches the real reader and scientific search."""
 
+from dataclasses import asdict
+from hashlib import sha256
+from tempfile import NamedTemporaryFile
+from provider_core.upload_file import VerifiedUploadFile
+
 from pathlib import Path
 import shutil
 from tempfile import TemporaryDirectory
@@ -26,8 +31,28 @@ JCAMP = FIXTURES / "jcamp/4-chlorobenzylamine/4-chlorobenzylamine.jdx"
 ATTEMPT = "execution_attempt:sha256:" + "1" * 64
 
 
+def _request(handler, document):
+    if "files" not in document:
+        return handler(document)
+    directory = Path(document["directory"])
+    receipts = {}
+    for ref, filename in document["files"].items():
+        path = Path(filename)
+        if path.parent != directory:
+            with NamedTemporaryFile(dir=directory, prefix="source-", delete=False) as output:
+                destination = Path(output.name)
+            shutil.copyfile(path, destination)
+            path = destination
+        contents = path.read_bytes()
+        receipts[ref] = asdict(VerifiedUploadFile("job:fixture", ref, len(contents),
+            "sha256:" + sha256(contents).hexdigest(), path.name))
+    command = {key: value for key, value in document.items() if key != "files"}
+    return handler(command | {"receipts": receipts, "max_upload_bytes": 128 * 1024 * 1024,
+                              "max_total_bytes": 256 * 1024 * 1024})
+
+
 def _selection(handler, files, directory, formula="C7H8ClN"):
-    inspected = handler({"operation": "inspect", "files": files, "directory": str(directory),
+    inspected = _request(handler, {"operation": "inspect", "files": files, "directory": str(directory),
                          "attempt_ref": ATTEMPT,
                          "source": {"upload_ref": "upload:chosen", "member": None}})
     choices = [item for item in inspected["facts"]["representations"]
@@ -70,7 +95,7 @@ class SelectedSpectrumTests(unittest.TestCase):
             files = {"upload:chosen": str(source)}
             choice = _selection(handler, files, directory)
             with patch.object(handler.input_adapter, "prepare", side_effect=observe_prepare):
-                prepared = handler({"operation": "prepare", "files": files,
+                prepared = _request(handler, {"operation": "prepare", "files": files,
                     "directory": directory, "attempt_ref": ATTEMPT, "selection": choice})
             self.assertEqual(prepared["outcome"], "prepared")
             self.assertEqual(inference.spectra, [])
@@ -81,14 +106,14 @@ class SelectedSpectrumTests(unittest.TestCase):
             choice["formula"] = "C30H62"
             command = {"operation": "execute", "attempt_ref": ATTEMPT,
                        "prepared_handle": prepared["prepared_handle"]}
-            response = handler(command)
+            response = _request(handler, command)
             self.assertEqual(response["outcome"], "no_starting_candidates")
             self.assertEqual(len(inference.spectra), 1)
             self.assertEqual(candidates.propose.call_args.args[1], "C7H8ClN")
             np.testing.assert_array_equal(inference.spectra[0], observed["spectrum"])
             self.assertIsNone(observed["prepared"](), "Completed response retains prepared input")
             with self.assertRaisesRegex(ValueError, "prepared"):
-                handler(command)
+                _request(handler, command)
             self.assertEqual(len(inference.spectra), 1)
 
     def test_wrong_attempt_cannot_consume_prepared_input(self):
@@ -96,10 +121,10 @@ class SelectedSpectrumTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             files = {"upload:chosen": str(JCAMP)}
             choice = _selection(handler, files, directory)
-            prepared = handler({"operation": "prepare", "files": files,
+            prepared = _request(handler, {"operation": "prepare", "files": files,
                 "directory": directory, "attempt_ref": ATTEMPT, "selection": choice})
             with self.assertRaisesRegex(ValueError, "prepared"):
-                handler({"operation": "execute", "attempt_ref": "another-attempt",
+                _request(handler, {"operation": "execute", "attempt_ref": "another-attempt",
                          "prepared_handle": prepared["prepared_handle"]})
             handler.inference.embed_spectrum.assert_not_called()
 
@@ -110,15 +135,15 @@ class SelectedSpectrumTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             files = {"upload:chosen": str(JCAMP)}
             choice = _selection(handler, files, directory)
-            prepared = handler({"operation": "prepare", "files": files,
+            prepared = _request(handler, {"operation": "prepare", "files": files,
                 "directory": directory, "attempt_ref": ATTEMPT, "selection": choice})
             command = {"operation": "execute", "attempt_ref": ATTEMPT,
                        "prepared_handle": prepared["prepared_handle"]}
             with self.assertRaises(ValueError) as caught:
-                handler(command)
+                _request(handler, command)
             self.assertIs(caught.exception, failure)
             with self.assertRaisesRegex(ValueError, "prepared"):
-                handler(command)
+                _request(handler, command)
             handler.inference.embed_spectrum.assert_called_once()
             candidates.propose.assert_called_once()
 
@@ -129,7 +154,7 @@ class SelectedSpectrumTests(unittest.TestCase):
             choice = _selection(handler, files, directory)
             choice["formula"] = "C7H8ClN followed by prose"
             choice["formula_evidence"]["quote"] = choice["formula"]
-            response = handler({"operation": "prepare", "files": files,
+            response = _request(handler, {"operation": "prepare", "files": files,
                 "directory": directory, "attempt_ref": ATTEMPT, "selection": choice})
             self.assertEqual(response["outcome"], "input_rejected")
             handler.inference.embed_spectrum.assert_not_called()
@@ -144,12 +169,12 @@ class SelectedSpectrumTests(unittest.TestCase):
                                    initial_population_size=2))
 
     def request(self, handler, directory, selection):
-        prepared = handler({"operation": "prepare", "files": {"upload:chosen": str(JCAMP)},
+        prepared = _request(handler, {"operation": "prepare", "files": {"upload:chosen": str(JCAMP)},
                         "directory": str(directory), "attempt_ref": ATTEMPT,
                         "selection": selection})
         if prepared["outcome"] == "input_rejected":
             return prepared
-        return handler({"operation": "execute", "attempt_ref": ATTEMPT,
+        return _request(handler, {"operation": "execute", "attempt_ref": ATTEMPT,
                         "prepared_handle": prepared["prepared_handle"]})
 
     def test_empty_or_nonfinite_optimizer_output_is_a_scientific_fault(self):
@@ -224,7 +249,7 @@ class SelectedSpectrumTests(unittest.TestCase):
                         for name in ("1r", "procs"):
                             archive.write(PDATA / name, "chosen/pdata/7/" + name)
                         member = "chosen/pdata/7/1r"
-                access = SourceAccess({"upload:chosen": upload}, root)
+                access = SourceAccess({"upload:chosen": upload.read_bytes()}, root)
                 facts = adapter.discover(access, ATTEMPT, SourceRef("upload:chosen", member))
                 choice = next(item for item in facts["representations"] if item["kind"] == "spectrum")
                 formula = "C7H8ClN" if kind == "jcamp" else "C2H6O"
@@ -259,7 +284,7 @@ class SelectedSpectrumTests(unittest.TestCase):
         adapter = InputAdapter(token_key=b"test" * 8)
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            access = SourceAccess({"upload:chosen": JCAMP}, root)
+            access = SourceAccess({"upload:chosen": JCAMP.read_bytes()}, root)
             choice = adapter.discover(access, ATTEMPT, SourceRef("upload:chosen"))["representations"][0]
             with patch("secs_inference.provider.input_formats.prepare_secs_spectrum",
                        side_effect=ValueError("program fault")):

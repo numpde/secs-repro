@@ -65,12 +65,8 @@ help:
 	'      One GPU model and full index load are shared across the cases.' \
 	'  make test/integration/challenges/bruker CANDIDATE_GPU=GPU-<uuid>' \
 	'      Run only the Bruker GA test; still loads the GPU model and full index.' \
-	'  make provider/deployment/journal/inspect DEPLOYMENT=<name>' \
-	'      Inspect retained work after stopping the deployment; no reports are sent.' \
-	'  make provider/deployment/journal/archive-closed DEPLOYMENT=<name> ATTEMPT_REF=<ref> RECORD_DIGEST=<sha256:digest> REASON=<text>' \
-	'      Archive a reviewed held record only after a fresh API read proves closure; see notes/005_closed_attempt_archival.txt.' \
 	'  make test/provider' \
-	'      Verify input selection, signed API transport, recovery and cancellation offline.' \
+	'      Verify input selection and shared SDK lifecycle composition offline.' \
 	'  make provider/support/check' \
 	'      Verify that public support documentation matches the code-owned support catalog.' \
 	'  make provider/support/write' \
@@ -92,9 +88,9 @@ help:
 	'  make provider/deployment/status DEPLOYMENT=<name>' \
 	'  make provider/logs DEPLOYMENT=<name>' \
 	'  make provider/deployment/down DEPLOYMENT=<name>' \
-	'      Down stops provider then worker; containers, configuration and state remain.' \
+	'      Down drains provider, then stops worker and API proxy; state and containers remain.' \
 	'  make test/provider/e2e' \
-	'      Prove hello, verified input, real model/FAISS/GA and result retry in two offline containers.' \
+	'      Prove hello, verified input, real model/FAISS/GA and durable handoff retry offline.' \
 	'      Uses eight fixture candidates, not the full index; see notes/004_provider_execution.txt.' \
 	'  make interpreter/model-behavior CONFIG_DIR=<provider-config-dir> KEY_FILE=<interpreter-key>' \
 	'      Opt-in paid live interpreter tests; no Job API or GPU work.' \
@@ -120,8 +116,8 @@ help:
 	'' \
 	'Dependency maintenance' \
 		'' \
-		'  make provider/lock/write provider/wheelhouse provider/image' \
-		'      Lock, download, and build the networked provider independently of scientific packages.' \
+		'  make provider/wheelhouse provider/native-wheelhouse provider/image' \
+		'      Install the issued API and native SDK profiles; build the API provider separately.' \
 		'  make checkpoint/manifest' \
 		'      Recreate manifest.json only if its recorded specification and weight hashes still match.' \
 		'  make packages/base-images/pull packages/locks/write' \

@@ -100,8 +100,8 @@ packages/wheelhouse:
 		--dest /wheelhouse -r /input/requirements.lock
 	rm -rf "$$stage/.tmp"
 	( cd "$$stage" && sha256sum * | LC_ALL=C sort ) > "$$stage/.complete"
-	rm -rf "$$wheelhouse_path"
-	mv -T "$$stage" "$$wheelhouse_path"
+	python3 tools/publish_wheelhouse.py "$$stage" "$$wheelhouse_path"
+	rm -rf "$$stage"
 	trap - EXIT
 
 packages/cpu/image:
@@ -119,14 +119,14 @@ packages/image:
 		cpu|gpu) ;;
 		*) printf '%s\n' 'VARIANT must be cpu or gpu.' >&2; exit 2 ;;
 	esac
-	@test -f "$(PROVIDER_WHEELHOUSE)/.complete" || { \
-		printf '%s\n' 'Native SDK wheelhouse is absent; run make provider/wheelhouse.' >&2; exit 2; }
+	@test -f "$(NATIVE_WHEELHOUSE)/.complete" || { \
+		printf '%s\n' 'Native SDK wheelhouse is absent; run make provider/native-wheelhouse.' >&2; exit 2; }
 	id=$$( {
 		printf '%s\n' "$(PYTHON_BASE)" "$(VARIANT)"
 		cat containers/packages/Dockerfile.dockerignore \
 			requirements/packages-$(VARIANT).lock containers/packages/Dockerfile \
 			pyproject.toml secs/pyproject.toml secs/README.md wheelhouse/packages-$(VARIANT)/.complete \
-			requirements/provider.lock "$(PROVIDER_WHEELHOUSE)/.complete"
+			requirements/native.lock "$(NATIVE_WHEELHOUSE)/.complete"
 		find src -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
 		find secs/src -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
 	} | sha256sum | cut -d' ' -f1 )
@@ -135,7 +135,7 @@ packages/image:
 		--build-arg PACKAGES_INPUT_ID="$$id" \
 		--build-arg PACKAGES_VARIANT="$(VARIANT)" \
 		--build-context "wheelhouse=$(REPOSITORY_ROOT)/wheelhouse/packages-$(VARIANT)" \
-		--build-context "native_wheelhouse=$(PROVIDER_WHEELHOUSE)" \
+		--build-context "native_wheelhouse=$(NATIVE_WHEELHOUSE)" \
 		--file containers/packages/Dockerfile \
 		--tag "secs-repro/packages-$(VARIANT):inputs-$$id" \
 		--tag "$(call packages_image_tag,$(VARIANT))" .

@@ -1,2 +1,0 @@
-cryptography==50.0.0
-provider-core @ https://github.com/numpde/nmr-provider-tools/releases/download/v0.4.0/provider_core-0.4.0-py3-none-any.whl#sha256=1a741c14664d2f849d3dad48f287e2179d6c5e2c076a9e9db4057787c1d77561

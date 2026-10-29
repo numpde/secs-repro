@@ -13,18 +13,17 @@ from secs_inference.provider.source_access import InputReadError, ScopeLimitErro
 
 
 class SourceAccessTests(unittest.TestCase):
-    def test_scope_reader_enforces_growth_during_streaming_and_exhausts_the_scope(self):
+    def test_snapshot_does_not_follow_file_changes_and_repeated_reads_spend_scope_budget(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / "upload"
             path.write_bytes(b"x")
-            access = SourceAccess({"upload:chosen": path}, root,
+            access = SourceAccess({"upload:chosen": path.read_bytes()}, root,
                                   max_member_bytes=16, max_scope_bytes=2)
             with access.scope_reader(SourceRef("upload:chosen")) as reader:
                 path.write_bytes(b"grown")
-                with self.assertRaises(ScopeLimitError):
-                    reader.read(SourceRef("upload:chosen"))
-                path.write_bytes(b"x")
+                self.assertEqual(reader.read(SourceRef("upload:chosen")).contents, b"x")
+                self.assertEqual(reader.read(SourceRef("upload:chosen")).contents, b"x")
                 with self.assertRaises(ScopeLimitError):
                     reader.read(SourceRef("upload:chosen"))
 
@@ -35,7 +34,7 @@ class SourceAccessTests(unittest.TestCase):
             with ZipFile(path, "w") as archive:
                 for index in range(4096):
                     archive.writestr(str(index), b"")
-            access = SourceAccess({"upload:chosen": path}, root)
+            access = SourceAccess({"upload:chosen": path.read_bytes()}, root)
             with patch.object(access, "_archive", wraps=access._archive) as opened:
                 with patch.object(access, "_member", wraps=access._member) as scanned:
                     with access.scope_reader(SourceRef("upload:chosen")) as reader:
@@ -53,7 +52,7 @@ class SourceAccessTests(unittest.TestCase):
                 for index in range(33):
                     member = "x" * 64000 + str(index)
                     archive.writestr(member, "spectrum")
-            access = SourceAccess({"upload:chosen": path}, root)
+            access = SourceAccess({"upload:chosen": path.read_bytes()}, root)
             with self.assertRaisesRegex(InputReadError, "262144-byte inspection limit"):
                 access.scope(SourceRef("upload:chosen"))
             self.assertEqual(access.read(SourceRef("upload:chosen", member)).contents, b"spectrum")
@@ -71,7 +70,7 @@ class SourceAccessTests(unittest.TestCase):
                 raw[payload + offset] ^= 255
                 path = root / "upload"
                 path.write_bytes(raw)
-                access = SourceAccess({"upload:chosen": path}, root)
+                access = SourceAccess({"upload:chosen": path.read_bytes()}, root)
                 source = SourceRef("upload:chosen", "spectrum.jdx")
                 with self.assertRaises(InputReadError):
                     access.read(source)
@@ -96,7 +95,7 @@ class SourceAccessTests(unittest.TestCase):
                 name_start = raw.index("é.jdx".encode(), raw.index(damaged_header))
                 raw[name_start] = 0xff
                 path.write_bytes(raw)
-                access = SourceAccess({"upload:chosen": path}, root)
+                access = SourceAccess({"upload:chosen": path.read_bytes()}, root)
                 with self.assertRaises(InputReadError):
                     access.read(SourceRef("upload:chosen", "é.jdx"))
 
@@ -107,7 +106,7 @@ class SourceAccessTests(unittest.TestCase):
             with ZipFile(path, "w") as archive:
                 for index in range(4097):
                     archive.writestr(str(index), "spectrum")
-            access = SourceAccess({"upload:chosen": path}, root)
+            access = SourceAccess({"upload:chosen": path.read_bytes()}, root)
             with self.assertRaisesRegex(InputReadError, "inspection limit"):
                 access.scope(SourceRef("upload:chosen"))
             with self.assertRaisesRegex(InputReadError, "inspection limit"):
@@ -120,7 +119,7 @@ class SourceAccessTests(unittest.TestCase):
             with ZipFile(archive_path, "w") as archive:
                 archive.writestr("first/pdata/1/procs", "carbon")
                 archive.writestr("second/pdata/1/procs", "proton")
-            access = SourceAccess({"upload:chosen": archive_path}, root)
+            access = SourceAccess({"upload:chosen": archive_path.read_bytes()}, root)
             entries = access.scope(SourceRef("upload:chosen"))
             self.assertEqual([item.source.member for item in entries], [
                 "first/pdata/1/procs", "second/pdata/1/procs",
@@ -133,7 +132,7 @@ class SourceAccessTests(unittest.TestCase):
             path = root / "upload"
             with ZipFile(path, "w") as archive:
                 archive.writestr("../../escape", "selected bytes")
-            access = SourceAccess({"upload:chosen": path}, root)
+            access = SourceAccess({"upload:chosen": path.read_bytes()}, root)
             self.assertEqual(access.read(SourceRef("upload:chosen", "../../escape")).contents, b"selected bytes")
             self.assertEqual(set(root.iterdir()), {path})
 
@@ -146,7 +145,7 @@ class SourceAccessTests(unittest.TestCase):
                 link.external_attr = 0o120777 << 16
                 archive.writestr(link, "/etc/passwd")
                 archive.writestr("large", "x" * 20)
-            access = SourceAccess({"upload:chosen": path}, root, max_member_bytes=10)
+            access = SourceAccess({"upload:chosen": path.read_bytes()}, root, max_member_bytes=10)
             for member in ("link", "large", "missing"):
                 with self.subTest(member=member), self.assertRaises(InputReadError) as caught:
                     access.read(SourceRef("upload:chosen", member))
@@ -159,7 +158,7 @@ class SourceAccessTests(unittest.TestCase):
             path = root / "upload"
             with ZipFile(path, "w") as archive:
                 archive.writestr("member", "text")
-            access = SourceAccess({"upload:chosen": path}, root)
+            access = SourceAccess({"upload:chosen": path.read_bytes()}, root)
             with self.assertRaisesRegex(RuntimeError, "consumer bug"):
                 with access.open(SourceRef("upload:chosen", "member")):
                     raise RuntimeError("consumer bug")

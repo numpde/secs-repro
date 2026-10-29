@@ -1,8 +1,11 @@
 """Load warm scientific state in the offline child, not the API controller."""
 
+import argparse
 from dataclasses import MISSING, asdict, dataclass, fields
 import json
 import math
+import os
+import socket
 from pathlib import Path
 import sys
 import tomllib
@@ -110,7 +113,7 @@ class ScientificHandler:
         if self._prepared is not None:
             raise ValueError("Cannot prepare or inspect input: this worker still owns an unconsumed prepared request")
         try:
-            access = SourceAccess({ref: Path(path) for ref, path in command["files"].items()}, Path(command["directory"]))
+            access = SourceAccess(_read_upload_snapshots(command), Path(command["directory"]))
             if command["operation"] == "inspect":
                 facts = self.input_adapter.discover(
                     access,
@@ -181,9 +184,36 @@ class ScientificHandler:
         }
 
 
-def main() -> int:
-    """Report worker startup/supervision failures without controller credentials."""
-    from secs_inference.provider.worker import WorkerError, serve_worker
+def _read_upload_snapshots(command):
+    """Read each granted file once per request; parsers receive checked immutable bytes."""
+    from provider_core.upload_file import VerifiedUploadFile, read_upload_file
+
+    receipts = {ref: VerifiedUploadFile(**document) for ref, document in command["receipts"].items()}
+    if any(ref != receipt.upload_ref for ref, receipt in receipts.items()):
+        raise ValueError("Scientific source receipt does not match its Upload reference")
+    maximum_total = command["max_total_bytes"]
+    if type(maximum_total) is not int or maximum_total <= 0:
+        raise ValueError("Scientific sources require an explicit positive aggregate byte limit")
+    if sum(receipt.byte_length for receipt in receipts.values()) > maximum_total:
+        raise ValueError("Scientific source receipts exceed the Attempt's aggregate byte limit")
+    descriptor = os.open(command["directory"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        return {ref: read_upload_file(receipt, directory_fd=descriptor,
+                                      maximum_bytes=command["max_upload_bytes"]).data
+                for ref, receipt in receipts.items()}
+    finally:
+        os.close(descriptor)
+
+
+def main(arguments=None) -> int:
+    """Serve science on inherited descriptors; the SDK owns the child lifetime."""
+    from secs_inference.provider.worker_protocol import WorkerError, serve_scientific_session
+
+    parser = argparse.ArgumentParser(description="Serve SECS scientific requests on the SDK-granted socket")
+    parser.add_argument("--session-fd", type=int, required=True)
+    parser.add_argument("--lease-fd", type=int, required=True)
+    parser.add_argument("--operation", required=True)
+    options = parser.parse_args(arguments)
 
     path = Path("/run/config/worker/worker.toml")
     operation = f"reading scientific worker configuration from {path}"
@@ -202,10 +232,17 @@ def main() -> int:
             required = ", ".join(setting.name for setting in settings if setting.default is MISSING)
             allowed = ", ".join(setting.name for setting in settings)
             raise ConfigurationError(f"Worker configuration requires {required}; supported fields are: {allowed}") from error
-        operation = "running the scientific worker supervisor"
-        serve_worker(Path("/run/secs/worker/worker.sock"), config)
+        operation = "adopting the inherited scientific socket and lifetime lease"
+        if options.session_fd < 0 or options.lease_fd < 0 or options.session_fd == options.lease_fd:
+            raise ConfigurationError("Scientific session and lifetime lease require distinct open descriptors")
+        # Keep the inherited lease open until process exit, including model work.
+        # It grants no controller/API authority and is never a scientific message.
+        os.fstat(options.lease_fd)
+        connection = socket.socket(fileno=options.session_fd)
+        operation = "serving the loaded scientific handler"
+        serve_scientific_session(connection, config)
     except Exception as error:
-        # Configuration and supervisor errors own their explanations. Parser
+        # Configuration and scientific protocol errors own their explanations. Parser
         # and library exception text can instead echo arbitrary supplied values.
         def owned_details(cause):
             return {"message": str(cause)} if isinstance(cause, (ConfigurationError, WorkerError)) else {}
@@ -213,7 +250,7 @@ def main() -> int:
         reason = evidence.get("message") or evidence.get("reason") or "an unexpected internal error occurred"
         print(f"Scientific worker stopped while {operation}: {reason}.", file=sys.stderr)
         print(json.dumps(evidence), file=sys.stderr)
-        print("Correct the failure before restarting the worker; no model work will be accepted by this supervisor.", file=sys.stderr)
+        print("Correct the failure before restarting the worker; no scientific requests will be accepted by this child.", file=sys.stderr)
         return 1
     return 0
 

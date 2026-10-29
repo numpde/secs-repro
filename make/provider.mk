@@ -1,6 +1,8 @@
 PROVIDER_IMAGE_TAG := secs-repro/provider:local
 PROVIDER_WHEELHOUSE := $(REPOSITORY_ROOT)/wheelhouse/provider
-override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.4.0/provider_core-0.4.0-py3-none-any.whl
+NATIVE_WHEELHOUSE := $(REPOSITORY_ROOT)/wheelhouse/native
+override PROVIDER_PYTHON_BASE := docker.io/library/python:3.12.16-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
+override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.0/provider_core-0.5.0-py3-none-any.whl
 
 # Initialization is a host filesystem operation, not a build or API operation.
 # Pass the literal name through the environment to keep shell syntax out of it.
@@ -10,23 +12,6 @@ provider/deployment/init provider/deployment/config provider/deployment/up provi
 provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/logs:
 	@cd "$(REPOSITORY_ROOT)"
 	python3 -m deployment.provider_deployment "$(@F)" "$${DEPLOYMENT_INPUT}"
-
-.PHONY: provider/deployment/journal/inspect
-provider/deployment/journal/inspect: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
-provider/deployment/journal/inspect:
-	@cd "$(REPOSITORY_ROOT)"
-	python3 -m deployment.provider_deployment inspect "$${DEPLOYMENT_INPUT}"
-
-.PHONY: provider/deployment/journal/archive-closed
-provider/deployment/journal/archive-closed: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
-provider/deployment/journal/archive-closed: private export ATTEMPT_REF_INPUT := $(value ATTEMPT_REF)
-provider/deployment/journal/archive-closed: private export RECORD_DIGEST_INPUT := $(value RECORD_DIGEST)
-provider/deployment/journal/archive-closed: private export ARCHIVE_REASON_INPUT := $(value REASON)
-provider/deployment/journal/archive-closed:
-	@cd "$(REPOSITORY_ROOT)"
-	python3 -m deployment.provider_deployment archive-closed "$${DEPLOYMENT_INPUT}" \
-		--execution-attempt-ref "$${ATTEMPT_REF_INPUT}" --expected-record-digest "$${RECORD_DIGEST_INPUT}" \
-		--reason "$${ARCHIVE_REASON_INPUT}"
 
 .PHONY: provider/credential/install provider/interpreter-key/install
 provider/credential/install provider/interpreter-key/install: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
@@ -45,25 +30,7 @@ test/deployment/e2e:
 	image=$$($(MAKE) --no-print-directory provider/image)
 	DEPLOYMENT_TEST_IMAGE="$$image" python3 -m unittest discover -v -s tests/deployment_e2e -p 'test_*.py'
 
-.PHONY: provider/contracts/check provider/contracts/write
-provider/contracts/check provider/contracts/write: private export NMR_API_V1_DIRECTORY_INPUT = $(value NMR_API_V1_DIR)
-provider/contracts/check provider/contracts/write:
-	@test -n "$${NMR_API_V1_DIRECTORY_INPUT}" || { \
-		printf '%s\n' 'Set NMR_API_V1_DIR to the API checkout containing the pinned release.' >&2; exit 2; }
-	python3 -I tools/provider_contract.py $(notdir $@) "$${NMR_API_V1_DIRECTORY_INPUT}"
-
-# Shared client provenance is separate from the historical provider contract release.
-.PHONY: provider/client/check provider/client/write
-provider/client/check provider/client/write: private export NMR_API_V1_DIRECTORY_INPUT = $(value NMR_API_V1_DIR)
-provider/client/check provider/client/write:
-	@test -n "$${NMR_API_V1_DIRECTORY_INPUT}" || { \
-		printf '%s\n' 'Set NMR_API_V1_DIR to the API checkout containing the recorded client revisions.' >&2; exit 2; }
-	python3 -B "$${NMR_API_V1_DIRECTORY_INPUT}/clients/provider_python/project.py" $(notdir $@) \
-		--api-repository "$${NMR_API_V1_DIRECTORY_INPUT}" \
-		--package "$(REPOSITORY_ROOT)/src/secs_inference/provider" \
-		--manifest "$(REPOSITORY_ROOT)/contracts/upstream/provider_client.json"
-
-.PHONY: provider/lock/write provider/wheelhouse provider/image
+.PHONY: provider/wheelhouse provider/native-wheelhouse provider/image
 .PHONY: provider/support/check provider/support/write
 
 provider/support/check:
@@ -73,73 +40,38 @@ provider/support/check:
 provider/support/write:
 	@python3 -B tools/project_support_catalog.py write docs/index.html
 
-# Upgrade provider.in and the qualified provider.lock together for a new SDK.
-# Regeneration reuses that lock as a constraint; it does not refresh dependencies.
-provider/lock/write:
+# Both install profiles are exact issuer locks from the selected SDK release.
+provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requirements/native.lock
 	@if test "$(HOST_UID)" -eq 0; then
-		printf '%s\n' 'Cannot write the provider lock as host UID 0.' >&2
+		printf '%s\n' 'Cannot materialize SDK wheelhouses as host UID 0.' >&2
 		exit 2
 	fi
-	lock_image=$$($(MAKE) --no-print-directory packages/lock-image)
-	locks_directory="$(REPOSITORY_ROOT)/requirements"
-	stage=$$(mktemp -d --tmpdir="$$locks_directory" .provider-lock.XXXXXXXX)
-	trap 'rm -rf "$$stage"' EXIT
-	$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
-		--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
-		--pull never --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
-		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
-		--env UV_CACHE_DIR=/output/.uv-cache \
-		--mount type=bind,src="$$locks_directory/provider.in",dst=/input/provider.in,readonly \
-		--mount type=bind,src="$$locks_directory/provider.lock",dst=/input/provider.lock,readonly \
-		--mount type=bind,src="$$stage",dst=/output \
-		"$$lock_image" /input/provider.in \
-		--constraint /input/provider.lock \
-		--python-version "$(PACKAGES_PYTHON_VERSION)" \
-		--python-platform x86_64-manylinux_2_28 \
-		--generate-hashes --index-url https://pypi.org/simple \
-		--output-file /output/provider.raw
-	$(DOCKER) run --rm --network none --read-only --cap-drop ALL \
-		--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
-		--pull never --pids-limit 16 --cpus 1 --memory 64m --memory-swap 64m \
-		--entrypoint python --mount type=bind,src="$$stage",dst=/output \
-		"$$lock_image" /usr/local/bin/normalize_lock.py \
-		/output/provider.raw /output/provider.lock
-	rm "$$stage/provider.raw"
-	rm -rf "$$stage/.uv-cache"
-	chmod 0644 "$$stage/provider.lock"
-	mv -f "$$stage/provider.lock" "$$locks_directory/provider.lock"
-
-provider/wheelhouse: requirements/provider.lock
-	@if test "$(HOST_UID)" -eq 0; then
-		printf '%s\n' 'Cannot materialize the provider wheelhouse as host UID 0.' >&2
-		exit 2
-	fi
+	profile="$(if $(filter provider/native-wheelhouse,$@),native,provider)"
 	wheelhouse_parent="$(REPOSITORY_ROOT)/wheelhouse"
 	mkdir -p "$$wheelhouse_parent"
-	stage=$$(mktemp -d --tmpdir="$$wheelhouse_parent" .provider.XXXXXXXX)
+	stage=$$(mktemp -d --tmpdir="$$wheelhouse_parent" .$$profile.XXXXXXXX)
 	trap 'rm -rf "$$stage"' EXIT
 	mkdir "$$stage/.tmp"
 	$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
 		--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
 		--pull never --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--env PIP_NO_CACHE_DIR=1 --env TMPDIR=/wheelhouse/.tmp \
-		--mount type=bind,src="$(REPOSITORY_ROOT)/requirements/provider.lock",dst=/input/requirements.lock,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/requirements/$$profile.lock",dst=/input/requirements.lock,readonly \
 		--mount type=bind,src="$$stage",dst=/wheelhouse \
-		"$(PYTHON_BASE)" python -m pip download --require-hashes \
+		"$(PROVIDER_PYTHON_BASE)" python -m pip download --require-hashes \
 		--only-binary=:all: --no-deps --index-url https://pypi.org/simple \
-		--find-links "$(PROVIDER_CORE_WHEEL_URL)" \
-		--dest /wheelhouse -r /input/requirements.lock
+		--find-links "$(PROVIDER_CORE_WHEEL_URL)" --dest /wheelhouse -r /input/requirements.lock
 	rm -rf "$$stage/.tmp"
 	( cd "$$stage" && sha256sum * | LC_ALL=C sort ) > "$$stage/.complete"
-	rm -rf "$(PROVIDER_WHEELHOUSE)"
-	mv -T "$$stage" "$(PROVIDER_WHEELHOUSE)"
+	python3 tools/publish_wheelhouse.py "$$stage" "$$wheelhouse_parent/$$profile"
+	rm -rf "$$stage"
 	trap - EXIT
 
 provider/image:
 	@test -f "$(PROVIDER_WHEELHOUSE)/.complete" || { \
 		printf '%s\n' 'Provider wheelhouse is absent; run make provider/wheelhouse.' >&2; exit 2; }
 	id=$$( {
-		printf '%s\n' "$(PYTHON_BASE)"
+		printf '%s\n' "$(PROVIDER_PYTHON_BASE)"
 		cat containers/provider/Dockerfile containers/provider/Dockerfile.dockerignore \
 			requirements/provider.lock "$(PROVIDER_WHEELHOUSE)/.complete"
 		sha256sum src/secs_inference/__init__.py
@@ -148,7 +80,7 @@ provider/image:
 			| LC_ALL=C sort -z | xargs -0 sha256sum
 	} | sha256sum | cut -d' ' -f1 )
 	$(DOCKER) build --quiet --network none --pull=false \
-		--build-arg PYTHON_BASE="$(PYTHON_BASE)" \
+		--build-arg PYTHON_BASE="$(PROVIDER_PYTHON_BASE)" \
 		--build-arg PROVIDER_INPUT_ID="$$id" \
 		--build-context "wheelhouse=$(PROVIDER_WHEELHOUSE)" \
 		--file containers/provider/Dockerfile \

@@ -8,14 +8,11 @@ import math
 from pathlib import Path
 import tomllib
 
-from secs_inference.provider.http import HttpsEndpoint, validate_endpoint_config
 from secs_inference.provider.configuration_error import ConfigurationError
 
 
-SCHEMA_ID = "secs.provider.config.v1"
+SCHEMA_ID = "secs.provider.config.v2"
 CONFIG_PATH = Path("/run/config/provider/provider.toml")
-CA_PATH = Path("/run/config/provider/api-ca.crt")
-CREDENTIAL_PATH = Path("/run/secrets/provider/signing.private.json")
 INTERPRETER_KEY_PATH = Path("/run/secrets/provider/interpreter.key")
 
 
@@ -52,36 +49,6 @@ class ExecutionConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class EndpointConfig:
-    """Validated API facts that do not acquire TLS trust material."""
-
-    origin: str
-    expected_topology: str
-    connect_timeout_seconds: float
-    io_deadline_seconds: float
-    ca_file: Path | None
-
-    def __post_init__(self) -> None:
-        validate_endpoint_config(
-            self.origin,
-            self.expected_topology,
-            self.connect_timeout_seconds,
-            self.io_deadline_seconds,
-        )
-
-    def materialize(self) -> HttpsEndpoint:
-        """Load configured TLS trust when the process acquires transport."""
-
-        return HttpsEndpoint(
-            origin=self.origin,
-            expected_topology=self.expected_topology,
-            connect_timeout_seconds=self.connect_timeout_seconds,
-            io_deadline_seconds=self.io_deadline_seconds,
-            ca_file=self.ca_file,
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class HelloPolicy:
     """Configured provider presentation and publication cadence."""
 
@@ -105,7 +72,8 @@ class HelloPolicy:
 class ProviderConfig:
     """The execution table is absent for an explicitly hello-only deployment."""
 
-    endpoint: EndpointConfig
+    binding_definition: Path
+    binding_name: str
     hello: HelloPolicy
     execution: ExecutionConfig | None = None
 
@@ -119,26 +87,19 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
         document = tomllib.loads(raw.decode("utf-8"))
     except (UnicodeError, tomllib.TOMLDecodeError) as error:
         raise ConfigurationError("Provider config is not valid TOML") from error
-    _require_fields("top level", document, {"api", "hello", "schema_id"}, {"execution"})
+    _require_fields("top level", document, {"binding", "hello", "schema_id"}, {"execution"})
     if document["schema_id"] != SCHEMA_ID:
         raise ConfigurationError(f"Cannot load provider configuration: schema_id must be {SCHEMA_ID!r}")
 
-    api = _require_table(
-        document,
-        "api",
-        {"connect_timeout_seconds", "io_deadline_seconds", "origin", "topology"},
-        {"use_private_ca"},
-    )
-    use_private_ca = api.get("use_private_ca", False)
-    if type(use_private_ca) is not bool:
-        raise ConfigurationError("Provider API private-CA selection must be a boolean")
-    endpoint = EndpointConfig(
-        origin=api["origin"],
-        expected_topology=api["topology"],
-        connect_timeout_seconds=api["connect_timeout_seconds"],
-        io_deadline_seconds=api["io_deadline_seconds"],
-        ca_file=CA_PATH if use_private_ca else None,
-    )
+    binding = _require_table(document, "binding", {"definition_file", "name"})
+    definition_file, binding_name = binding["definition_file"], binding["name"]
+    if (type(definition_file) is not str or not definition_file.startswith("/")
+            or any(char in definition_file for char in ("\0", "\r", "\n", ","))
+            or not Path(definition_file).name or ".." in Path(definition_file).parts
+            or str(Path(definition_file)) != definition_file):
+        raise ConfigurationError("Binding definition_file must be one normalized absolute path")
+    if type(binding_name) is not str:
+        raise ConfigurationError("Binding name must be text selecting a binding from the shared definition")
 
     hello = _require_table(
         document,
@@ -162,7 +123,7 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
         table = _require_table(document, "execution", required,
                                set(ExecutionConfig.__dataclass_fields__) - required)
         execution = ExecutionConfig(**table)
-    return ProviderConfig(endpoint=endpoint, hello=policy, execution=execution)
+    return ProviderConfig(binding_definition=Path(definition_file), binding_name=binding_name, hello=policy, execution=execution)
 
 
 def _require_table(

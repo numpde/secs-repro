@@ -80,7 +80,7 @@ class NmriumResourceTests(WorkerCase):
             ('state.json', state),
             ('data/authored-proton/proton.jdx', proton),
         ])
-        access = SourceAccess({'upload:sample': Path(self.files['upload:sample'])}, self.root,
+        access = SourceAccess({'upload:sample': Path(self.files['upload:sample']).read_bytes()}, self.root,
                               max_scope_bytes=len(state) + len(proton) - 1)
         with patch.object(access, '_read_member', wraps=access._read_member) as read:
             facts = InputAdapter(token_key=b'test' * 8).discover(
@@ -107,7 +107,7 @@ class NmriumResourceTests(WorkerCase):
             ('data/authored-proton/proton.jdx', proton),
             ('data/second-proton/proton.jdx', proton),
         ])
-        access = SourceAccess({'upload:sample': Path(self.files['upload:sample'])}, self.root,
+        access = SourceAccess({'upload:sample': Path(self.files['upload:sample']).read_bytes()}, self.root,
                               max_scope_bytes=len(state) + 2 * len(proton) - 1)
         actual_read = access._read_member
 

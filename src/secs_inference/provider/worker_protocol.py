@@ -18,6 +18,14 @@ class WorkerError(RuntimeError):
     """The scientific worker did not complete its requested operation."""
 
 
+class ScientificWorkerFailed(WorkerError):
+    """Retain the child's bounded structural failure frame for protected evidence."""
+
+    def __init__(self, diagnostic):
+        super().__init__("Cannot finish SECS scientific work: the worker encountered an internal error; inspect protected diagnostics")
+        self.diagnostic = diagnostic
+
+
 def serve_scientific_session(connection: socket.socket, load_handler) -> None:
     """Load scientific state once, then execute requests without network inputs."""
     with connection:
@@ -55,35 +63,46 @@ class FrameBuffer:
         self.bytes.extend(chunk)
         messages = []
         while len(self.bytes) >= 4:
-            length = struct.unpack("!I", self.bytes[:4])[0]
-            if not 1 <= length <= _MAX_MESSAGE_BYTES:
-                raise WorkerError("Scientific worker message exceeds its framing limit")
+            length = _length(self.bytes[:4])
             if len(self.bytes) < length + 4:
                 break
-            document = json.loads(self.bytes[4:length + 4])
+            document = _document(self.bytes[4:length + 4])
             del self.bytes[:length + 4]
-            if type(document) is not dict:
-                raise WorkerError("Scientific worker message is not an object")
             messages.append(document)
         return messages
 
 
-def send(connection: socket.socket, document: dict) -> None:
+def encode(document: dict) -> bytes:
     raw = json.dumps(document, ensure_ascii=False, allow_nan=False).encode("utf-8")
     if len(raw) > _MAX_MESSAGE_BYTES:
         raise WorkerError("Scientific worker message exceeds its framing limit")
-    connection.sendall(struct.pack("!I", len(raw)) + raw)
+    return struct.pack("!I", len(raw)) + raw
 
 
-def receive(connection: socket.socket) -> dict:
-    header = _exact(connection, 4)
+def send(connection: socket.socket, document: dict) -> None:
+    connection.sendall(encode(document))
+
+
+def _length(header):
     length = struct.unpack("!I", header)[0]
     if not 1 <= length <= _MAX_MESSAGE_BYTES:
         raise WorkerError("Scientific worker message exceeds its framing limit")
-    document = json.loads(_exact(connection, length))
+    return length
+
+
+def _document(raw):
+    document = json.loads(raw)
     if type(document) is not dict:
         raise WorkerError("Scientific worker message is not an object")
     return document
+
+
+def receive(connection: socket.socket) -> dict:
+    return _document(_exact(connection, _length(_exact(connection, 4))))
+
+
+async def receive_async(reader) -> dict:
+    return _document(await reader.readexactly(_length(await reader.readexactly(4))))
 
 
 def _exact(connection: socket.socket, length: int) -> bytes:

@@ -1,140 +1,143 @@
-"""Compose one durable Attempt owner with hello and an offline scientific worker."""
+"""Select serial SECS Jobs and retain shared controllers through orderly drain."""
 
-import logging
+import asyncio
 import json
-from pathlib import Path
-import shutil
-from threading import Thread
+import logging
+from provider_core.task_boundary import contain_task_exit
+from secrets import token_hex
 from time import monotonic
 
-from secs_inference.provider.analysis_run import run_analysis
-from secs_inference.provider.attempt_store import AttemptStore, provider_error_details
-from secs_inference.provider.diagnostics import exception_evidence
-from secs_inference.provider.execution import ExecutionLoop, ProviderStopping
-from secs_inference.provider.job_api import ApiUnavailable, JobApi
-from secs_inference.provider.process import publish_hello_until_stopped
-from secs_inference.provider.worker import WorkerClient, WorkerError, WorkerStopUnconfirmed
+from provider_core.api import ApiFailure
+from provider_core.attempt_record import StartPending
+from provider_core.attempt_request import start_body
+from provider_core.execution import AttemptExecutor, ExecutionRefused
+from provider_core.diagnostics import failure_evidence
+
+from secs_inference.provider.analysis import ANALYSIS_KIND_REF
+from secs_inference.provider.process import publish_hello_until_stopped, wait_until_stopped
+from secs_inference.provider.worker import NativeWorkerExited
 
 
-WORKER_SOCKET = Path("/run/secs/worker/worker.sock")
-SOURCE_DIRECTORY = Path("/run/secs/sources/current")
-JOURNAL_DIRECTORY = Path("/state/journal")
 _LOG = logging.getLogger(__name__)
 
 
-def run_execution(*, api, config, chat, upload_store, stop, journal):
-    """Keep terminal replay independent of model startup and the work deadline.
-
-    Only this thread touches the worker and journal. A new ready connection
-    proves the supervisor reaped its previous child before leftover source
-    files are removed. Interrupted inference is reported, never resumed.
-    """
-    jobs = JobApi(api)
-    worker = None
-
-    def check_running():
-        if stop.is_set():
-            raise ProviderStopping("The provider is shutting down")
-
-    def before_start(start):
-        nonlocal worker
-        check_running()
-        started = monotonic()
-        deadline = started + config.worker_startup_seconds
-        if worker is not None and not worker.stopped:
-            try:
-                worker.check_ready(deadline=deadline, check_running=check_running)
-            except WorkerStopUnconfirmed:
-                raise
-            except (WorkerError, OSError, TimeoutError) as error:
-                if not worker.stopped:
-                    raise
-                _LOG.warning("Job %s: idle scientific worker stopped; loading a replacement before Attempt admission | %s",
-                             start.selected.job_ref, json.dumps(exception_evidence(error, boundary_details=provider_error_details)))
-        if worker is None or worker.stopped:
-            _LOG.info("Job %s: waiting for scientific worker readiness; startup budget %g seconds",
-                      start.selected.job_ref, config.worker_startup_seconds)
-            while True:
-                check_running()
-                if monotonic() >= deadline:
-                    raise WorkerError("Scientific worker readiness timed out; the pending start intent is retained for restart recovery")
-                try:
-                    worker = WorkerClient(WORKER_SOCKET, startup_deadline=deadline, check_running=check_running)
-                    break
-                except (FileNotFoundError, ConnectionRefusedError):
-                    if monotonic() >= deadline:
-                        raise WorkerError("Cannot start analysis: the offline worker socket remained unavailable; the pending start intent is retained for restart recovery") from None
-                    stop.wait(min(1, max(0, deadline - monotonic())))
-            _LOG.info("Job %s: scientific worker readiness confirmed after %.2f seconds",
-                      start.selected.job_ref, monotonic() - started)
-        else:
-            _LOG.info("Job %s: reusing the ready scientific worker", start.selected.job_ref)
-        # A completed operation also establishes idleness. Retry any cleanup
-        # left by that operation before another remote Attempt can be started.
-        if SOURCE_DIRECTORY.exists():
-            shutil.rmtree(SOURCE_DIRECTORY)
-
-    def analyse(active):
-        check_running()
-        return run_analysis(
-            api=jobs, active=active, chat=chat, worker=worker, store=upload_store,
-            directory=SOURCE_DIRECTORY, work_deadline=monotonic() + config.work_seconds,
-            interpretation_seconds=config.interpretation_seconds, max_turns=config.max_turns,
-            max_total_bytes=config.max_total_bytes, check_running=check_running,
-            execution_entered=loop.mark_execution_entered,
-        )
-
-    loop = ExecutionLoop(jobs, journal, analyse, journal.diagnose, before_start, retry_pending=lambda: not stop.is_set())
-    retry_seconds = config.poll_seconds
-    stop_unconfirmed = False
-    try:
-        while not stop.is_set():
-            try:
-                worked = loop.step()
-            except ApiUnavailable as error:
-                _LOG.warning("Retrying the unavailable Provider API operation in %g seconds; any pending Attempt state is retained: %s | %s",
-                             retry_seconds, error, json.dumps(exception_evidence(error, boundary_details=provider_error_details)))
-                stop.wait(retry_seconds)
-                retry_seconds = min(300, retry_seconds * 2)
-            else:
-                retry_seconds = config.poll_seconds
-                if not worked:
-                    stop.wait(config.poll_seconds)
-    except ProviderStopping:
-        pass
-    except WorkerStopUnconfirmed:
-        stop_unconfirmed = True
-        raise
-    finally:
-        if worker is not None and not worker.stopped and not stop_unconfirmed:
-            worker.stop()
-
-
-def run_services(*, api, prepared, config, chat, upload_store, stop):
-    """Join hello before releasing Attempt ownership; relay its fatal errors."""
-    hello_errors = []
-
-    def hello():
+async def _drain_controller(controller, *, poll_seconds):
+    """Join the original driver before settlement; retain every unaccepted report."""
+    fatal_failures = []
+    while True:
+        observer = asyncio.current_task()
+        cancellations = observer.cancelling()
         try:
-            publish_hello_until_stopped(api=api, prepared=prepared, policy=config.hello, stop=stop)
-        except BaseException as error:
-            hello_errors.append(error)
+            await controller.join()
+            break
+        except asyncio.CancelledError:
+            if observer.cancelling() > cancellations:
+                # Further observer cancellation cannot abandon this drain's
+                # original driver or transfer its report ownership elsewhere.
+                continue
+            _LOG.error("Attempt driver was interrupted; settling its retained original owners")
+            break
+        except (Exception, BaseExceptionGroup) as cause:
+            if not isinstance(cause, Exception):
+                fatal_failures.append(cause)
+            _LOG.error("Attempt driver failed; settling its retained original owners and protected diagnostic evidence")
+            break
+    while not controller.shutdown_ready:
+        try:
+            await controller.settle()
+        except (Exception, BaseExceptionGroup, asyncio.CancelledError) as cause:
+            if (isinstance(cause, BaseExceptionGroup) and not isinstance(cause, Exception)
+                    and all(cause is not retained for retained in fatal_failures)):
+                fatal_failures.append(cause)
+            operation = controller.operation
+            if isinstance(operation, AttemptExecutor) and operation.work_settled and not operation.shutdown_ready:
+                try:
+                    await operation.retain_suppressed_disposition()
+                except ExecutionRefused:
+                    # A selected report cannot acquire a suppression disposition.
+                    # Its unchanged handoff stays owned until delivery accepts it.
+                    pass
+            if not controller.shutdown_ready:
+                _LOG.error("Provider drain is blocked by retained Attempt work or reporting; lifetime ownership remains held")
+                try:
+                    await asyncio.sleep(poll_seconds)
+                except asyncio.CancelledError:
+                    continue
+    if len(fatal_failures) == 1:
+        raise fatal_failures[0]
+    if fatal_failures:
+        raise BaseExceptionGroup("Attempt drain observed independent fatal failures", fatal_failures)
+
+
+async def run_execution(*, api, scope, claims, stop, poll_seconds, assemble, worker, startup_seconds):
+    """Discover fresh unattempted Jobs; the SDK alone admits and drives Attempts."""
+    retry_seconds = poll_seconds
+    while not stop.is_set():
+        try:
+            page = await api.jobs(analysis_kind_ref=ANALYSIS_KIND_REF,
+                                  has_provider_execution_attempt=False, limit=1, cursor=None)
+        except ApiFailure as cause:
+            await api.retire()
+            if not api.can_retry_job_discovery(cause):
+                raise
+            _LOG.warning("Job discovery unavailable; retrying in %g seconds (HTTP %s; request %s)",
+                         retry_seconds, cause.status, cause.request_id)
+            await wait_until_stopped(stop, retry_seconds)
+            retry_seconds = min(300, retry_seconds * 2)
+            continue
+        retry_seconds = poll_seconds
+        if not page.jobs:
+            await wait_until_stopped(stop, poll_seconds)
+            continue
+        selected = page.jobs[0]
+        if stop.is_set():
+            break
+        startup_deadline = monotonic() + startup_seconds
+        try:
+            await worker.check_ready(deadline=startup_deadline)
+        except NativeWorkerExited as cause:
+            _LOG.warning("Idle scientific worker exited; retiring it before a new Attempt is admitted; evidence=%s",
+                         json.dumps({"returncode": cause.runner.original_exit.returncode,
+                                     "failure": failure_evidence(cause, secrets=())}))
+            await worker.stop()
+            if stop.is_set():
+                break
+            await worker.check_ready(deadline=startup_deadline)
+        if stop.is_set():
+            break
+        pending = StartPending(scope, ANALYSIS_KIND_REF, selected.input,
+                               start_body(selected.input.job_ref, token_hex(16)))
+        controller = assemble(pending)
+        try:
+            await controller.run(pending)
+        finally:
+            if not controller.shutdown_ready:
+                stop.set()
+                await _drain_controller(controller, poll_seconds=poll_seconds)
+        if claims.live_owners():
+            # A lost START reply can leave a passive owned Job after cleanup.
+            # One resident scientific worker has no capacity for another owner.
+            stop.set()
+            _LOG.error("Admission stopped: the shared controller retains unresolved START or Attempt ownership")
+
+
+async def run_services(*, hello_api, discovery_api, provider_ref, config, scope, claims, stop, assemble, worker):
+    """Close admission on sibling failure and drain the original SDK driver."""
+    async def hello():
+        try:
+            await publish_hello_until_stopped(api=hello_api, provider_ref=provider_ref,
+                                             policy=config.hello, stop=stop)
+        finally:
             stop.set()
 
-    with AttemptStore(JOURNAL_DIRECTORY) as journal:
-        thread = Thread(target=hello, name="provider-hello")
-        thread.start()
+    async def execution():
         try:
-            try:
-                run_execution(api=api, config=config.execution, chat=chat,
-                              upload_store=upload_store, stop=stop, journal=journal)
-            finally:
-                stop.set()
-                thread.join()
-        except BaseException:
-            if hello_errors:
-                _LOG.error("Provider hello also failed while execution was stopping: %s",
-                           json.dumps(exception_evidence(hello_errors[0], boundary_details=provider_error_details)))
-            raise
-        if hello_errors:
-            raise hello_errors[0]
+            await run_execution(api=discovery_api, scope=scope, claims=claims, stop=stop,
+                                poll_seconds=config.execution.poll_seconds, assemble=assemble, worker=worker,
+                                startup_seconds=config.execution.worker_startup_seconds)
+        finally:
+            stop.set()
+
+    async with asyncio.TaskGroup() as group:
+        group.create_task(contain_task_exit(hello))
+        group.create_task(contain_task_exit(execution))

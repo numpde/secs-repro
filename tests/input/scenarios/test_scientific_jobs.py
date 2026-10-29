@@ -2,27 +2,27 @@
 
 from dataclasses import asdict
 import json
+import unittest
 from time import monotonic
 
 import numpy as np
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 from secs.elucidation import StaticCandidateSource
 from support_evidence import qualification_evidence
 from secs_inference.provider.interpreter import InterpretationSession
-from secs_inference.provider.job_input import JobSpecification
 
 from input.helpers import FIXTURES, WorkerCase
 
 
-class ScientificJobScenarios(WorkerCase):
+class ScientificJobScenarios(WorkerCase, unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         super().setUp()
         self.inference.embed_spectrum.return_value = np.array([1., 0.], dtype=np.float32)
         self.candidates = Mock(wraps=StaticCandidateSource([]))
         self.worker.candidates = self.candidates
 
-    def test_formatted_job_formula_reaches_retrieval_with_its_original_evidence(self):
+    async def test_formatted_job_formula_reaches_retrieval_with_its_original_evidence(self):
         self.upload('proton.jdx')
         spectrum = self.one(self.discover())
         for formula, quote in (
@@ -37,12 +37,13 @@ class ScientificJobScenarios(WorkerCase):
                           'formula_evidence': {'kind': 'job_specification', 'quote': quote},
                           'processing': 'as_stored', 'explanation': 'Use the supplied proton spectrum and formula.'}
                 chat = Mock()
+                chat.complete = AsyncMock()
                 chat.complete.return_value = {'tool_calls': [{'id': 'selection', 'type': 'function',
                     'function': {'name': 'select_representation', 'arguments': json.dumps(choice)}}]}
                 session = InterpretationSession(chat,
-                    JobSpecification('job:sample', f'Molecular formula: {quote}.'), [], Mock(),
+                    f'Molecular formula: {quote}.', [], Mock(),
                     deadline=monotonic() + 10, max_turns=1)
-                decision = asdict(session.select())
+                decision = asdict(await session.select())
                 self.assertEqual(decision, choice)
                 response = self.search(selection=decision)
                 self.assertEqual(response['outcome'], 'no_starting_candidates')

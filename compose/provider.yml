@@ -27,11 +27,6 @@ services:
         read_only: true
         bind: {create_host_path: false}
       - type: bind
-        source: "${PROVIDER_CREDENTIAL_FILE:?set the provider signing credential file}"
-        target: /run/secrets/provider/signing.private.json
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
         source: "${INTERPRETER_KEY_FILE:?set the interpreter API key file}"
         target: /run/secrets/provider/interpreter.key
         read_only: true
@@ -125,7 +120,14 @@ services:
         bind: {create_host_path: false}
     entrypoint: [/bin/sh, -c]
     command:
-      - python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && exec python -P -m secs_inference.provider.worker_model
+      - >-
+        python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache &&
+        mkdir -m 700 /tmp/native-scratch /tmp/native-status &&
+        exec python -I -m provider_core.runner --role secs
+        --socket /run/secs/worker/worker.sock --scratch /tmp/native-scratch
+        --status-directory /tmp/native-status --owner-session-lifetime
+        --startup-seconds 2 --terminate-seconds 2 --kill-seconds 2 --cleanup-seconds 2
+        -- python -I -m secs_inference.provider.worker_model
     logging:
       driver: json-file
       options: {max-file: "3", max-size: 10m}

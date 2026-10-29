@@ -12,22 +12,23 @@ import unittest
 from secs_inference.provider.config import CONFIG_PATH, decode_provider_config
 from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
 from secs_inference.provider.interpreter import InterpretationSession
-from secs_inference.provider.job_input import JobSpecification
-from secs_inference.provider.job_upload import JobUpload
-from secs_inference.provider.main import _read_regular_file, load_chat_endpoint
+from provider_core.upload_response import UploadMember as JobUpload
+from provider_core.chat import ChatEndpoint
+from provider_core.startup_file import read_startup_file
+from secs_inference.provider.main import _read_chat_settings
 from secs_inference.provider.source_access import InputReadError
 
 
-class LiveInterpreterTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.execution = decode_provider_config(_read_regular_file(CONFIG_PATH, 65536)).execution
-        if cls.execution is None:
+class LiveInterpreterTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.execution = decode_provider_config(read_startup_file(
+            CONFIG_PATH, maximum_bytes=65536, label="SECS provider configuration")).execution
+        if self.execution is None:
             raise ValueError("Live interpreter tests require an execution configuration.")
-        cls.chat = load_chat_endpoint(cls.execution)
-        print(f"Live interpreter: model={cls.chat.model!r}, reasoning_effort={cls.chat.reasoning_effort!r}", flush=True)
-
-    def setUp(self):
+        spec, http = _read_chat_settings(self.execution, 10)
+        self.chat = ChatEndpoint(spec, transport=http.new_transport(), request_bytes=2097152, response_bytes=262144)
+        self.addAsyncCleanup(self.chat.retire)
+        print(f"Live interpreter: model={spec.model!r}, reasoning_effort={spec.reasoning_effort!r}", flush=True)
         self.representations = {}
         self.catalog = {
             "upload:fixture": (
@@ -52,11 +53,11 @@ class LiveInterpreterTests(unittest.TestCase):
 
     def session(self, text, uploads):
         """Keep each observation within the deployment's own turn and time limits."""
-        return InterpretationSession(self.chat, JobSpecification("job:fixture", text), uploads,
+        return InterpretationSession(self.chat, text, uploads,
             self.inspect, deadline=monotonic() + min(120, self.execution.interpretation_seconds),
             max_turns=min(8, self.execution.max_turns))
 
-    def inspect(self, source):
+    async def inspect(self, source):
         """Return fixed discovery facts at the production inspection callback seam."""
         try:
             representations = self.catalog[source.upload_ref]
@@ -73,18 +74,18 @@ class LiveInterpreterTests(unittest.TestCase):
         self.representations.update({item["id"]: item for item in result["representations"]})
         return result
 
-    def test_missing_input_is_explained_not_invented(self):
-        outcome = self.session("Please elucidate this molecule.", ()).select()
+    async def test_missing_input_is_explained_not_invented(self):
+        outcome = await self.session("Please elucidate this molecule.", ()).select()
         self.assertIsInstance(outcome, CannotAnalyse)
         self.assertTrue(outcome.explanation.strip())
         self.assertIn("formula", outcome.explanation.lower())
         self.assertTrue(any(word in outcome.explanation.lower() for word in ("spectrum", "spectra", "nmr")))
 
-    def test_selects_proton_experiment_among_distractors(self):
+    async def test_selects_proton_experiment_among_distractors(self):
         session = self.session("Find the structure with molecular formula C7H8ClN.", self.uploads)
-        self.assert_proton_selection(session.select())
+        self.assert_proton_selection(await session.select())
 
-    def test_selects_bruker_processed_pair(self):
+    async def test_selects_bruker_processed_pair(self):
         """Require a processed Bruker pair selection; reader tests own decoding."""
         self.catalog["upload:bruker"] = (
             self.representation("upload:bruker", "representation-c", "NMR-test-1/pdata/1/1r", "1H", 65536,
@@ -92,14 +93,14 @@ class LiveInterpreterTests(unittest.TestCase):
         )
         uploads = (JobUpload("upload:bruker", "Archive of an NMR experiment; inspect the processed data.", 8192, None),)
         session = self.session("Find the structure with molecular formula C21H22N2O2.", uploads)
-        outcome = session.select()
+        outcome = await session.select()
         self.assertIsInstance(outcome, SelectedRepresentation, session.rejections)
         sources = {source["member"] for source in self.representations[outcome.representation_id]["sources"]}
         self.assertEqual(sources, {"NMR-test-1/pdata/1/1r", "NMR-test-1/pdata/1/procs"})
         self.assertEqual(outcome.formula, "C21H22N2O2")
         self.assertTrue(outcome.explanation.strip())
 
-    def test_reader_rejection_is_explained_in_the_same_conversation(self):
+    async def test_reader_rejection_is_explained_in_the_same_conversation(self):
         """Inject a structural rejection, not an outage that the worker would fail.
 
         SECS may explain that no usable input remains; unlike Magnet's
@@ -107,10 +108,10 @@ class LiveInterpreterTests(unittest.TestCase):
         resubmitting the same selection. No scientific reader runs here.
         """
         session = self.session("Find the structure with molecular formula C7H8ClN.", self.uploads)
-        self.assert_proton_selection(session.select())
+        self.assert_proton_selection(await session.select())
         remaining = session.remaining_turns
         session.reject("Cannot read the processed JCAMP-DX spectrum because the file does not contain an XYDATA table.")
-        outcome = session.select()
+        outcome = await session.select()
         self.assertIsInstance(outcome, CannotAnalyse)
         self.assertIn("xydata", outcome.explanation.lower())
         self.assertLess(session.remaining_turns, remaining)

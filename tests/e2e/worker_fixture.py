@@ -1,8 +1,10 @@
 """Real checkpoint and a tiny, explicitly non-production candidate index."""
 
-from pathlib import Path
+import argparse
+import os
+import socket
 
-from secs_inference.provider.worker import serve_worker
+from secs_inference.provider.worker_protocol import serve_scientific_session
 
 
 def load_fixture():
@@ -33,4 +35,10 @@ def load_fixture():
 
 
 if __name__ == "__main__":
-    serve_worker(Path("/run/secs/worker/worker.sock"), load_fixture)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--session-fd", type=int, required=True)
+    parser.add_argument("--lease-fd", type=int, required=True)
+    parser.add_argument("--operation", required=True)
+    options = parser.parse_args()
+    os.fstat(options.lease_fd)
+    serve_scientific_session(socket.socket(fileno=options.session_fd), load_fixture)

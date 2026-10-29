@@ -1,10 +1,10 @@
-schema_id = "secs.provider.config.v1"
+schema_id = "secs.provider.config.v2"
 
-[api]
-origin = "https://api.example.test"
-topology = "web"
-connect_timeout_seconds = 5
-io_deadline_seconds = 30
+# Use the same operator-owned definition as shared delivery.
+# API identity, trust, routing and the delivery socket are defined there once.
+[binding]
+definition_file = "/private/nmr/delivery-bindings.toml"
+name = "secs"
 
 [hello]
 display_name = "SECS"

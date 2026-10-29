@@ -1,1 +1,2 @@
+# Interpreter and upload-store egress only; binding.route owns the control API.
 mode = "standard"

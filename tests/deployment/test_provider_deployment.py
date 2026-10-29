@@ -9,13 +9,13 @@ from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from deployment.compose import ComposeProject
 from deployment.provider_deployment import (
     _apply_provider_network,
     _admit_provider_network,
-    _bind_attempt_owner,
+    _apply_delivery_binding,
     _host_gpu_uuid,
     _provider_network,
     _status,
@@ -27,6 +27,23 @@ from deployment.templates import _locked_parent
 
 
 class ProviderDeploymentTests(unittest.TestCase):
+    def test_shared_grants_cannot_shadow_scientific_or_configuration_mounts(self):
+        for socket_path, inputs in (("/run/secs/delivery.sock", ["/private/credential"]),
+                                    ("/run/delivery/delivery.sock", ["/run/secs/sources/credential"])):
+            with self.subTest(socket=socket_path, inputs=inputs), TemporaryDirectory() as temporary:
+                config = Path(temporary)
+                (config / "provider.toml").write_text('[binding]\ndefinition_file="/private/bindings.toml"\nname="secs"\n')
+                (config / "provider.toml").chmod(0o600)
+                projection = {"ipc_volume": "fixture-ipc", "socket_path": socket_path,
+                              "socket_group_id": 1000, "input_paths": inputs}
+                project = Mock()
+                project.command.return_value = json.dumps(projection).encode()
+                mounts = [{"type": "bind", "target": "/run/secs/sources", "source": "/owned/sources"}]
+                plan = {"services": {"provider": {"image": "sha256:" + "a" * 64, "volumes": mounts.copy()}}}
+                with self.assertRaisesRegex(ValueError, "overlap"):
+                    _apply_delivery_binding(plan, project, config)
+                self.assertEqual(plan["services"]["provider"]["volumes"], mounts)
+
     def test_host_gpu_is_one_strict_shared_input(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -61,10 +78,10 @@ class ProviderDeploymentTests(unittest.TestCase):
             network.write_text('mode = "standard"\n')
             network.chmod(0o600)
             self.assertEqual(_provider_network(root, "example"), {"mode": "standard"})
-            network.write_text('mode = "forwarded-api"\nhost_address = "172.22.0.1"\n')
+            network.write_text('mode = "forwarded-services"\nhost_address = "172.22.0.1"\n')
             self.assertEqual(
                 _provider_network(root, "example"),
-                {"mode": "forwarded-api", "host_address": "172.22.0.1"},
+                {"mode": "forwarded-services", "host_address": "172.22.0.1"},
             )
 
     def test_network_configuration_rejects_ambiguous_or_unsafe_values(self):
@@ -74,11 +91,11 @@ class ProviderDeploymentTests(unittest.TestCase):
             'mode = "unknown"\n',
             'mode = "standard"\nhost_address = "172.22.0.1"\n',
             'mode = "standard"\nextra = true\n',
-            'mode = "forwarded-api"\n',
-            'mode = "forwarded-api"\nhost_address = "host-gateway"\n',
-            'mode = "forwarded-api"\nhost_address = "::1"\n',
-            'mode = "forwarded-api"\nhost_address = "127.0.0.1:443"\n',
-            'mode = "forwarded-api"\nhost_address = "0.0.0.0"\n',
+            'mode = "forwarded-services"\n',
+            'mode = "forwarded-services"\nhost_address = "host-gateway"\n',
+            'mode = "forwarded-services"\nhost_address = "::1"\n',
+            'mode = "forwarded-services"\nhost_address = "127.0.0.1:443"\n',
+            'mode = "forwarded-services"\nhost_address = "0.0.0.0"\n',
             'mode = ["standard"]\n',
         )
         with TemporaryDirectory() as temporary:
@@ -106,7 +123,7 @@ class ProviderDeploymentTests(unittest.TestCase):
         _apply_provider_network(
             plan,
             "example",
-            {"mode": "forwarded-api", "host_address": "172.22.0.1"},
+            {"mode": "forwarded-services", "host_address": "172.22.0.1"},
         )
         self.assertEqual(plan["services"]["provider"]["extra_hosts"], ["nmr.localhost=172.22.0.1"])
         self.assertEqual(
@@ -144,7 +161,7 @@ class ProviderDeploymentTests(unittest.TestCase):
                 project,
                 root,
                 "example",
-                {"mode": "forwarded-api", "host_address": "172.22.0.1"},
+                {"mode": "forwarded-services", "host_address": "172.22.0.1"},
             )
             project.command.assert_called_once_with("network", "inspect", "secs-example-egress")
 
@@ -184,7 +201,7 @@ class ProviderDeploymentTests(unittest.TestCase):
                         project,
                         Path("/repository"),
                         "example",
-                        {"mode": "forwarded-api", "host_address": "172.22.0.1"},
+                        {"mode": "forwarded-services", "host_address": "172.22.0.1"},
                     )
 
     def test_start_rejects_foreign_network_before_runtime_state_or_containers(self):
@@ -197,7 +214,7 @@ class ProviderDeploymentTests(unittest.TestCase):
                     "PROVIDER_IMAGE_REF=a\nWORKER_IMAGE_REF=b\n"
                     "CHECKPOINT_DIRECTORY=/checkpoint\nMOLFORMER_CACHE_DIRECTORY=/cache\n"
                 ),
-                "network.toml": 'mode = "forwarded-api"\nhost_address = "172.22.0.1"\n',
+                "network.toml": 'mode = "forwarded-services"\nhost_address = "172.22.0.1"\n',
                 "provider.toml": '[api]\norigin = "https://api.example.test"\n',
                 "worker.toml": "worker = true\n",
             }
@@ -261,7 +278,7 @@ class ProviderDeploymentTests(unittest.TestCase):
             )
             deployment.chmod(0o600)
             network = config / "network.toml"
-            network.write_text('mode = "forwarded-api"\n')
+            network.write_text('mode = "forwarded-services"\n')
             network.chmod(0o600)
             host = root / "config/host.toml"
             host.write_text('worker_gpu_uuid = "GPU-00000000-0000-0000-0000-000000000000"\n')
@@ -351,27 +368,6 @@ class ProviderDeploymentTests(unittest.TestCase):
                         observed = pool.submit(main, [operation, "production"])
                         self.assertEqual(observed.result(timeout=5), 0)
 
-    def test_failed_owner_write_does_not_poison_the_next_start(self):
-        with TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            provider, credential = root / "provider.toml", root / "provider.signing.private.json"
-            provider.write_text('[api]\norigin="https://api.example.test"\n')
-            credential.write_text('{"principal_ref": "provider:test"}')
-            for path in (provider, credential):
-                path.chmod(0o600)
-
-            def interrupted_write(output, content):
-                """Simulate a disk write failure after the first byte reaches the file."""
-                output.write_bytes(content[:1])
-                raise OSError("disk full")
-
-            with patch("deployment.templates._write_new_file", side_effect=interrupted_write):
-                with self.assertRaisesRegex(OSError, "disk full"):
-                    _bind_attempt_owner(root, root)
-            self.assertFalse((root / "attempt-owner.json").exists())
-            _bind_attempt_owner(root, root)
-            self.assertEqual(json.loads((root / "attempt-owner.json").read_bytes()),
-                             {"origin": "https://api.example.test", "provider_ref": "provider:test"})
 
     def test_credential_install_is_private_and_never_replaces_existing_input(self):
         with TemporaryDirectory() as temporary:
@@ -388,30 +384,6 @@ class ProviderDeploymentTests(unittest.TestCase):
                 install_secret(root, "production", "provider.signing.private.json", source)
             self.assertTrue(source.exists())
 
-    def test_attempt_state_allows_key_rotation_but_not_another_api_or_provider(self):
-        with TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            state, config = root / "state", root / "config"
-            state.mkdir(mode=0o700)
-            config.mkdir(mode=0o700)
-            provider = config / "provider.toml"
-            credential = state / "provider.signing.private.json"
-            provider.write_text('[api]\norigin="https://api.example.test"\n')
-            provider.chmod(0o600)
-            credential.write_text(json.dumps({"principal_ref": "provider:test", "credential_ref": "first"}))
-            credential.chmod(0o600)
-            _bind_attempt_owner(state, config)
-            credential.write_text(json.dumps({"principal_ref": "provider:test", "credential_ref": "rotated"}))
-            _bind_attempt_owner(state, config)
-            binding = (state / "attempt-owner.json").read_bytes()
-            provider.write_text('[api]\norigin="https://another.example.test"\n')
-            with self.assertRaisesRegex(ValueError, "another API or provider"):
-                _bind_attempt_owner(state, config)
-            provider.write_text('[api]\norigin="https://api.example.test"\n')
-            credential.write_text(json.dumps({"principal_ref": "provider:other"}))
-            with self.assertRaisesRegex(ValueError, "another API or provider"):
-                _bind_attempt_owner(state, config)
-            self.assertEqual((state / "attempt-owner.json").read_bytes(), binding)
 
 
 if __name__ == "__main__":

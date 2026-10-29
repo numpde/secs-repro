@@ -9,29 +9,18 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
-import importlib.util
 import os
 from pathlib import Path
 import re
 import stat
 import sys
 import tomllib
-import uuid
 
 from deployment.compose import ComposeProject
 from deployment.templates import (
     configuration_directory, initialize_configuration, _ensure_private_parent,
     _locked_parent, _publish_new_file,
 )
-
-
-# Load the producer's dependency-free presentation contract from its owning source.
-_inspection_spec = importlib.util.spec_from_file_location("secs_inspection_document", Path(__file__).resolve().parents[1] / "src/secs_inference/provider/inspection_document.py")
-_inspection_contract = importlib.util.module_from_spec(_inspection_spec)
-_inspection_spec.loader.exec_module(_inspection_contract)
-_archive_spec = importlib.util.spec_from_file_location("secs_archive_document", Path(__file__).resolve().parents[1] / "src/secs_inference/provider/archive_document.py")
-_archive_contract = importlib.util.module_from_spec(_archive_spec)
-_archive_spec.loader.exec_module(_archive_contract)
 
 
 TEMPLATES = {
@@ -72,7 +61,7 @@ def _provider_network(repository: Path, name: str) -> dict:
     mode = document.get("mode")
     if mode == "standard" and set(document) == {"mode"}:
         return document
-    if mode == "forwarded-api" and set(document) == {"mode", "host_address"}:
+    if mode == "forwarded-services" and set(document) == {"mode", "host_address"}:
         address = document["host_address"]
         try:
             parsed = ipaddress.IPv4Address(address) if type(address) is str else None
@@ -82,13 +71,13 @@ def _provider_network(repository: Path, name: str) -> dict:
                 and not parsed.is_multicast and not parsed.is_link_local):
             return document
     raise ValueError(
-        "network.toml must select exactly mode='standard', or mode='forwarded-api' "
+        "network.toml must select exactly mode='standard', or mode='forwarded-services' "
         "with one unicast IPv4 host_address."
     )
 
 
 def _apply_provider_network(plan: dict, name: str, network: dict) -> None:
-    """Apply the finite forwarded-API grant to the normalized Compose plan."""
+    """Grant forwarded interpreter/store access independently of the shared API route."""
     if network["mode"] == "standard":
         return
     provider = plan["services"]["provider"]
@@ -105,7 +94,7 @@ def _apply_provider_network(plan: dict, name: str, network: dict) -> None:
 
 
 def _admit_provider_network(project: ComposeProject, repository: Path, name: str, network: dict) -> None:
-    """Admit the exact externally owned route required by forwarded API access."""
+    """Admit the externally owned bridge for configured interpreter/store access."""
     if network["mode"] == "standard":
         return
     expected_name = f"secs-{name}-egress"
@@ -196,7 +185,6 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
     environment = {
         "PROVIDER_UID": str(os.getuid()), "PROVIDER_GID": str(os.getgid()),
         "PROVIDER_CONFIG_DIRECTORY": str(config),
-        "PROVIDER_CREDENTIAL_FILE": str(state / "provider.signing.private.json"),
         "INTERPRETER_KEY_FILE": str(state / "interpreter.key"),
         "ATTEMPT_STATE_DIRECTORY": str(state / "state"),
         "SOURCE_DIRECTORY": str(state / "sources"),
@@ -206,10 +194,13 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
         "CACHE_VERIFIER_FILE": str(repository / "tools/materialize_molformer_cache.py"),
         "SECS_HOST_WORKER_GPU_UUID": gpu_uuid,
     }
-    plan = _project(repository, name).render(
+    project = _project(repository, name)
+    base_recipe = ComposeProject(repository, project.name, ("provider", "worker"))
+    plan = base_recipe.render(
         repository / "compose/provider.yml", config / "deployment.env", environment,
     )
     _apply_provider_network(plan, name, network)
+    _apply_delivery_binding(plan, project, config)
     devices = plan["services"]["worker"]["deploy"]["resources"]["reservations"]["devices"]
     identifiers = devices[0]["device_ids"]
     if identifiers != [gpu_uuid]:
@@ -220,7 +211,7 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
 def _project(repository: Path, name: str) -> ComposeProject:
     """SECS stops Job admission before its scientific worker."""
     configuration_directory(repository, name)
-    return ComposeProject(repository, f"secs-{name}", ("provider", "worker"))
+    return ComposeProject(repository, f"secs-{name}", ("provider", "worker", "api"))
 
 
 def _private_directory(path: Path) -> None:
@@ -231,13 +222,18 @@ def _private_directory(path: Path) -> None:
         raise ValueError(f"Deployment directory must be operator-owned mode 0700: {path}")
 
 
-def _private_file(path: Path) -> bytes:
-    """Read bounded owner-only input; never include its contents in diagnostics."""
+def _private_input(path: Path) -> None:
+    """Admit a bounded private mount without reading its secret contents."""
     metadata = path.lstat()
     if (path.resolve() != path or not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) not in {0o400, 0o600}
             or not 0 < metadata.st_size <= 65536):
         raise ValueError(f"Deployment input must be a nonempty owner-only file of at most 64 KiB: {path}")
+
+
+def _private_file(path: Path) -> bytes:
+    """Read a bounded owner-only document for the operation that owns it."""
+    _private_input(path)
     return path.read_bytes()
 
 
@@ -284,145 +280,107 @@ def start_deployment(repository: Path, name: str) -> dict:
         )
         raise
     state = repository / "secrets/deployments" / name
-    for path in (config / "provider.toml", config / "worker.toml",
-                 state / "provider.signing.private.json", state / "interpreter.key"):
-        _private_file(path)
+    for path in (config / "provider.toml", config / "worker.toml", state / "interpreter.key"):
+        _private_input(path)
     state = _state_root(repository, name)
-    _bind_attempt_owner(state, config)
-    for part in ("state", "sources", "socket"):
+    if (state / "state" / "journal").exists():
+        raise ValueError("Legacy Attempt journal remains; drain its obligations under the old runtime before selecting a fresh SDK lifetime directory.")
+    for part in ("state", "sources", "socket", "api-route"):
         _ensure_private_parent(state / part)
+    lock = state / "socket/.owner-session.lock"
+    try:
+        descriptor = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except FileExistsError:
+        metadata = lock.lstat()
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600):
+            raise ValueError("Native lifetime lock must remain an operator-owned mode 0600 regular file.")
+    else:
+        os.close(descriptor)
     return project.start(plan)
 
 
-def _bind_attempt_owner(state: Path, config: Path) -> None:
-    """Keep retained attempts bound to the same API origin and provider identity.
-
-    Runtime parsers validate the full documents. Here only the facts needed to
-    prevent cross-deployment replay are read. Credential rotation is allowed;
-    changing the API or provider requires a different named deployment.
-    """
-    provider = tomllib.loads(_private_file(config / "provider.toml").decode("utf-8"))
-    credential = json.loads(_private_file(state / "provider.signing.private.json"))
-    try:
-        identity = {"origin": provider["api"]["origin"], "provider_ref": credential["principal_ref"]}
-    except (KeyError, TypeError) as error:
-        raise ValueError("Cannot bind attempt state: provider.toml needs api.origin and the credential needs principal_ref.") from error
-    if any(not isinstance(value, str) or not value for value in identity.values()):
-        raise ValueError("Cannot bind attempt state: API origin and provider identity must be nonempty text.")
-    binding = state / "attempt-owner.json"
-    content = (json.dumps(identity, sort_keys=True) + "\n").encode()
-    if binding.exists() or binding.is_symlink():
-        if _private_file(binding) != content:
-            raise ValueError("This attempt state belongs to another API or provider; use another deployment name.")
-    else:
-        journal = state / "state"
-        if journal.exists() and any(journal.iterdir()):
-            raise ValueError("Cannot adopt existing attempt files without their API/provider ownership record.")
-        _publish_new_file(binding, content)
-
-
-def inspect_deployment_journal(repository: Path, name: str) -> dict:
-    """Inspect a stopped deployment under its caller's lifecycle exclusion."""
-    project = _project(repository, name)
-    if any(record["State"].get("Running") is not False for record in project.inventory().values()):
-        raise RuntimeError(f"Journal inspection requires a stopped deployment; run make provider/deployment/down DEPLOYMENT={name} first.")
-    state = repository / "secrets/deployments" / name
-    _private_directory(state)
-    journal = state / "state/journal"
-    _private_directory(journal)
-    binding = json.loads(_private_file(state / "attempt-owner.json"))
-    if type(binding) is not dict or set(binding) != {"origin", "provider_ref"} or any(type(value) is not str or not value for value in binding.values()):
-        raise ValueError("Attempt ownership binding is unreadable.")
-    image = render_deployment(repository, name)["services"]["provider"]["image"]
-    raw = project.command("run", "--rm", "--pull", "never", "--network", "none", "--read-only",
-                          "--user", f"{os.getuid()}:{os.getgid()}", "--cap-drop", "ALL",
-                          "--security-opt", "no-new-privileges:true", "--pids-limit", "32",
-                          "--memory", "128m", "--memory-swap", "128m", "--log-driver", "none",
-                          "--mount", f"type=bind,src={journal},dst=/state/journal,readonly",
-                          "--entrypoint", "python", image, "-m", "secs_inference.provider.journal_inspect")
-    document = _inspection_contract.parse_inspection_document(raw)
-    if any(record.get("provider_ref") != binding["provider_ref"] for record in document["records"]):
-        raise ValueError("Retained journal names another provider than this deployment's ownership binding.")
-    return document | {"deployment": name, "owner": binding}
+def _apply_delivery_binding(plan, project, config):
+    """Consume the installed SDK's projection, not a second binding parser."""
+    document = _toml_document(config / "provider.toml")
+    selection = document.get("binding")
+    if type(selection) is not dict or set(selection) != {"definition_file", "name"}:
+        raise ValueError("Provider configuration requires its shared binding definition_file and name.")
+    definition, name = selection["definition_file"], selection["name"]
+    if (type(definition) is not str or not Path(definition).is_absolute()
+            or not Path(definition).name or any(value in definition for value in (",", "\0", "\r", "\n"))
+            or type(name) is not str):
+        raise ValueError("Delivery selection requires an absolute definition file and a text binding name.")
+    projection = _sdk_projection(project, plan["services"]["provider"]["image"], definition,
+                                 "provider_core.deployment_binding", "describe-binding",
+                                 "--definition", definition, "--binding", name)
+    if type(projection) is not dict or set(projection) != {"ipc_volume", "socket_path", "socket_group_id", "input_paths"}:
+        raise ValueError("Installed SDK did not return its complete delivery-binding projection.")
+    volume, socket_path, group, inputs = (projection[key] for key in (
+        "ipc_volume", "socket_path", "socket_group_id", "input_paths"))
+    if (type(volume) is not str or not volume or type(socket_path) is not str
+            or not Path(socket_path).is_absolute() or Path(socket_path).parent == Path("/")
+            or type(group) is not int or group <= 0 or type(inputs) is not list
+            or any(type(path) is not str or not Path(path).is_absolute() for path in inputs)):
+        raise ValueError("Installed SDK delivery projection contains invalid container grants.")
+    provider = plan["services"]["provider"]
+    mounts = [{"type": "volume", "source": volume, "target": str(Path(socket_path).parent),
+               "read_only": True, "volume": {"nocopy": True}}]
+    mounts.extend({"type": "bind", "source": filename, "target": filename,
+                   "read_only": True, "bind": {"create_host_path": False}}
+                  for filename in (definition, *inputs))
+    _add_mount_grants(provider, mounts)
+    provider["group_add"] = [str(group)]
+    plan.setdefault("volumes", {})[volume] = {"name": volume, "external": True}
+    _apply_api_route(plan, project, config, definition, name)
 
 
-def archive_deployment_journal(repository: Path, name: str, *, execution_attempt_ref: str,
-                               expected_record_digest: str, reason: str) -> dict:
-    """Archive under lifecycle exclusion using current bound API credentials."""
-    project = _project(repository, name)
-    if any(record["State"].get("Running") is not False for record in project.inventory().values()):
-        raise RuntimeError(f"Journal archival requires a stopped deployment; run make provider/deployment/down DEPLOYMENT={name} first.")
-    state = repository / "secrets/deployments" / name
-    config = configuration_directory(repository, name)
-    journal = state / "state/journal"
-    _private_directory(state)
-    _private_directory(journal)
-    # Unlike offline inspection, this operation uses credentials: existing
-    # ownership must match current inputs, and missing binding cannot be created.
-    _private_file(state / "attempt-owner.json")
-    _bind_attempt_owner(state, config)
-    image = render_deployment(repository, name)["services"]["provider"]["image"]
-    reader_token = uuid.uuid4().hex
-    reader_name = "secs-journal-archive-" + reader_token
-    try:
-        raw = project.command("run", "--rm", "--name", reader_name,
-                              "--label", "io.secs.archive=" + reader_token, "--pull", "never", "--read-only",
-                              "--user", f"{os.getuid()}:{os.getgid()}", "--cap-drop", "ALL",
-                              "--security-opt", "no-new-privileges:true", "--pids-limit", "32",
-                              "--memory", "128m", "--memory-swap", "128m", "--log-driver", "none",
-                              "--mount", f"type=bind,src={journal},dst=/state/journal",
-                              "--mount", f"type=bind,src={config},dst=/run/config/provider,readonly",
-                              "--mount", f"type=bind,src={state / 'provider.signing.private.json'},dst=/run/secrets/provider/signing.private.json,readonly",
-                              "--mount", f"type=bind,src={state / 'attempt-owner.json'},dst=/run/config/attempt-owner.json,readonly",
-                              "--entrypoint", "python", image, "-m", "secs_inference.provider.journal_archive",
-                              "--execution-attempt-ref", execution_attempt_ref,
-                              "--expected-record-digest", expected_record_digest, "--reason", reason)
-    except (Exception, KeyboardInterrupt) as original:
-        try:
-            _remove_archive_reader(project, reader_name, reader_token)
-        except (Exception, KeyboardInterrupt) as cleanup:
-            failure = RuntimeError(
-                f"Archival result unconfirmed ({original}); reader cleanup unconfirmed ({cleanup}). "
-                f"Provider operator must inspect name={reader_name}, label=io.secs.archive={reader_token}, "
-                "verify both and remove only that container ID before inspecting retained journal/archive state. "
-                "Preserve all retained work; do not restart until reader shutdown is confirmed."
-            )
-            for error in (original, cleanup):
-                for note in getattr(error, "__notes__", ()):
-                    failure.add_note(note)
-            raise failure from original
-        failure = RuntimeError(
-            f"Archival result unconfirmed ({original}); invocation reader stopped. "
-            "Provider operator must inspect the journal and archive before retrying or restarting; preserve both."
-        )
-        for note in getattr(original, "__notes__", ()):
-            failure.add_note(note)
-        raise failure from original
-    document = _archive_contract.parse_archive_document(raw)
-    if document["execution_attempt_ref"] != execution_attempt_ref or document["record_digest"] != expected_record_digest:
-        raise ValueError("Archive result names a different selection; inspect retained state before retrying.")
-    return document | {"deployment": name}
+def _add_mount_grants(provider, mounts):
+    """Refuse a projection that hides another owner's already granted path."""
+    targets = [Path(mount["target"]) for mount in provider["volumes"]]
+    for mount in mounts:
+        target = Path(mount["target"])
+        if any(target == occupied or target in occupied.parents or occupied in target.parents
+               for occupied in targets):
+            raise ValueError("Projected grants overlap a provider mount; select separate socket and input paths.")
+        targets.append(target)
+    provider["volumes"].extend(mounts)
 
 
-def _remove_archive_reader(project, name: str, token: str) -> None:
-    """A timed-out Docker CLI does not prove its writable container stopped."""
-    identifiers = project.command("ps", "-a", "--no-trunc", "--filter",
-                                  "name=^/" + name + "$", "--format", "{{.ID}}").decode("ascii").splitlines()
-    if not identifiers:
-        return
-    if len(identifiers) != 1 or re.fullmatch(r"[0-9a-f]{64}", identifiers[0]) is None:
-        raise ValueError("Archive reader inventory is malformed")
-    identifier = identifiers[0]
-    records = json.loads(project.command("inspect", identifier))
-    if type(records) is not list or len(records) != 1 or type(records[0]) is not dict:
-        raise ValueError("Archive reader inspection is malformed")
-    record = records[0]
-    config = record.get("Config")
-    labels = config.get("Labels") if type(config) is dict else None
-    if (record.get("Id") != identifier or record.get("Name") != "/" + name
-            or type(labels) is not dict or labels.get("io.secs.archive") != token):
-        raise ValueError("Archive reader ownership does not match this invocation")
-    project.command("rm", "-f", identifier)
+def _sdk_projection(project, image, definition, module, *arguments):
+    """Run the installed SDK with only its explicit neutral definition mounted."""
+    raw = project.command(
+        "run", "--rm", "--pull", "never", "--network", "none", "--read-only",
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+        "--pids-limit", "16", "--cpus", "1", "--memory", "128m", "--memory-swap", "128m",
+        "--user", f"{os.getuid()}:{os.getgid()}",
+        "--mount", f"type=bind,src={definition},dst={definition},readonly",
+        "--entrypoint", "python", image, "-I", "-B", "-m", module, *arguments,
+    )
+    return json.loads(raw)
+
+
+def _apply_api_route(plan, project, config, definition, binding_name):
+    """Merge SDK-owned API routing while keeping the scientific service isolated."""
+    directory = project.repository / "secrets/deployments" / config.name / "api-route"
+    provider = plan["services"]["provider"]
+    route = _sdk_projection(
+        project, provider["image"], definition, "provider_core.deployment_route", "render",
+        "--definition", definition, "--binding", binding_name, "--image", provider["image"],
+        "--interpreter", "/usr/local/bin/python", "--namespace", project.name, "--service-name", "api",
+        "--uid", str(os.getuid()), "--gid", str(os.getgid()), "--directory", str(directory),
+    )
+    if type(route) is not dict or set(route) != {"compose", "client_socket", "client_mount", "client_depends_on"}:
+        raise ValueError("Installed SDK did not return its complete API route grants.")
+    for section, grants in route["compose"].items():
+        occupied = plan.setdefault(section, {})
+        if set(occupied) & set(grants):
+            raise ValueError("Shared API route roles overlap the existing deployment; no route grants were applied.")
+    _add_mount_grants(provider, (route["client_mount"],))
+    for section, grants in route["compose"].items():
+        plan[section].update(grants)
+    provider.setdefault("depends_on", {}).update(route["client_depends_on"])
+    provider.setdefault("environment", {})["SECS_API_PROXY_SOCKET"] = route["client_socket"]
 
 
 def _status(records: dict) -> dict:
@@ -440,17 +398,10 @@ def main(arguments: list[str] | None = None) -> int:
     """Dispatch one named operation; report partial effects without implying rollback."""
     parser = argparse.ArgumentParser(description="Operate a named SECS deployment.")
     parser.add_argument("operation", choices=("init", "config", "up", "status", "down",
-                                              "logs", "inspect", "archive-closed", "credential-install", "interpreter-key-install"))
+                                              "logs", "credential-install", "interpreter-key-install"))
     parser.add_argument("deployment")
     parser.add_argument("--source", type=Path)
-    parser.add_argument("--execution-attempt-ref")
-    parser.add_argument("--expected-record-digest")
-    parser.add_argument("--reason")
     options = parser.parse_args(arguments)
-    archive_arguments = (options.execution_attempt_ref, options.expected_record_digest, options.reason)
-    if (options.operation == "archive-closed" and not all(archive_arguments)
-            or options.operation != "archive-closed" and any(value is not None for value in archive_arguments)):
-        parser.error("--execution-attempt-ref, --expected-record-digest and --reason are required only for archive-closed")
     installing = options.operation in {"credential-install", "interpreter-key-install"}
     if installing != (options.source is not None):
         parser.error("--source is required only for credential-install or interpreter-key-install")
@@ -485,12 +436,6 @@ def main(arguments: list[str] | None = None) -> int:
                 print(json.dumps(_status(start_deployment(repository, options.deployment)), indent=2))
                 print("Containers started. Check provider logs for hello publication or errors.")
                 print("A successful hello confirms API acceptance, not model readiness.")
-            elif options.operation == "inspect":
-                print(json.dumps(inspect_deployment_journal(repository, options.deployment), ensure_ascii=False))
-            elif options.operation == "archive-closed":
-                print(json.dumps(archive_deployment_journal(repository, options.deployment,
-                      execution_attempt_ref=options.execution_attempt_ref,
-                      expected_record_digest=options.expected_record_digest, reason=options.reason), ensure_ascii=False))
             elif options.operation == "down":
                 print(json.dumps(_status(project.stop()), indent=2))
     except (OSError, ValueError, RuntimeError) as error:

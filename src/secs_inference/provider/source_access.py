@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
+from io import BytesIO
 from lzma import LZMAError
 import json
 from pathlib import Path
@@ -20,7 +21,7 @@ class InputReadError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class SourceEntry:
-    """One admitted logical object without an archive-controlled host path."""
+    """One admitted logical object without an archive-controlled host contents."""
 
     source: SourceRef
     byte_length: int
@@ -86,16 +87,18 @@ class ScopeReader:
 
 
 class SourceAccess:
-    """Attempt-owned acquired files; all materialized paths remain private.
+    """Parse immutable Upload snapshots inside the scientific process.
 
-    The execution owner must stop active readers before releasing this object
-    or its acquired files. This class does not acquire network authority.
+    The shared SDK verifies each whole-file snapshot before construction.
+    Scientific member limits and temporary parser workspaces remain SECS-owned.
     """
 
-    def __init__(self, files: dict[str, Path], directory: Path, *,
+    def __init__(self, snapshots: dict[str, bytes], directory: Path, *,
                  max_member_bytes: int = 128 * 1024 * 1024,
                  max_scope_bytes: int = 256 * 1024 * 1024):
-        self.files = files
+        if any(type(contents) is not bytes for contents in snapshots.values()):
+            raise TypeError("Scientific source access requires immutable Upload snapshots")
+        self.snapshots = snapshots
         self.directory = directory
         self.max_member_bytes = max_member_bytes
         self.max_scope_bytes = max_scope_bytes
@@ -103,12 +106,12 @@ class SourceAccess:
     @contextmanager
     def scope_reader(self, source: SourceRef):
         """Admit one inventory and reuse its archive index for the inspection."""
-        path = self._upload(source.upload_ref)
-        if source.member is None and not is_zipfile(path):
-            entries = (SourceEntry(source, path.stat().st_size),)
+        contents = self._upload(source.upload_ref)
+        if source.member is None and not is_zipfile(BytesIO(contents)):
+            entries = (SourceEntry(source, len(contents)),)
             yield ScopeReader(self, source, entries)
             return
-        with self._archive(path) as archive:
+        with self._archive(contents) as archive:
             infos = archive.infolist()
             members = _member_index(infos)
             entries = self._scope_entries(source, infos, members)
@@ -116,14 +119,14 @@ class SourceAccess:
 
     def scope(self, source: SourceRef) -> tuple[SourceEntry, ...]:
         """Enumerate a root scope or admit one exact member without format policy."""
-        path = self._upload(source.upload_ref)
+        contents = self._upload(source.upload_ref)
         if source.member is not None:
-            with self._archive(path) as archive:
+            with self._archive(contents) as archive:
                 info = self._member(archive, source.member)
             return (SourceEntry(source, info.file_size),)
-        if not is_zipfile(path):
-            return (SourceEntry(source, path.stat().st_size),)
-        with self._archive(path) as archive:
+        if not is_zipfile(BytesIO(contents)):
+            return (SourceEntry(source, len(contents)),)
+        with self._archive(contents) as archive:
             infos = archive.infolist()
             return self._scope_entries(source, infos, _member_index(infos))
 
@@ -182,12 +185,12 @@ class SourceAccess:
     @contextmanager
     def open(self, source: SourceRef):
         """Open selected bytes, rejecting ambiguous or nonregular ZIP members."""
-        path = self._upload(source.upload_ref)
+        contents = self._upload(source.upload_ref)
         if source.member is None:
-            with path.open("rb") as stream:
+            with BytesIO(contents) as stream:
                 yield stream
             return
-        with self._archive(path) as archive:
+        with self._archive(contents) as archive:
             info = self._member(archive, source.member)
             with self._member_stream(archive, info) as stream:
                 yield stream
@@ -201,25 +204,25 @@ class SourceAccess:
         with stream:
             yield stream
 
-    def _upload(self, ref: str) -> Path:
+    def _upload(self, ref: str) -> bytes:
         try:
-            return self.files[ref]
+            return self.snapshots[ref]
         except KeyError:
             raise InputReadError("Cannot read the selected source: choose an Upload listed for this Job") from None
 
     @contextmanager
-    def _archive(self, path: Path):
-        self._preflight_archive(path)
+    def _archive(self, contents: bytes):
+        self._preflight_archive(contents)
         try:
-            archive = ZipFile(path)
+            archive = ZipFile(BytesIO(contents))
         except (BadZipFile, UnicodeDecodeError) as error:
             raise InputReadError("Cannot inspect archive members: the selected Upload is not a readable ZIP") from error
         with archive:
             yield archive
 
-    def _preflight_archive(self, path: Path) -> None:
+    def _preflight_archive(self, contents: bytes) -> None:
         """Reject excessive entry counts before Python loads the central directory."""
-        with path.open("rb") as stream:
+        with BytesIO(contents) as stream:
             stream.seek(0, 2)
             size = stream.tell()
             stream.seek(max(0, size - 65_557))

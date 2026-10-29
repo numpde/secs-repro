@@ -8,7 +8,6 @@ import socket
 import ssl
 import traceback
 
-from secs_inference.provider.network_errors import network_failure_evidence
 
 
 def exception_evidence(error: BaseException, *, boundary_details=None) -> dict:
@@ -44,7 +43,14 @@ def exception_evidence(error: BaseException, *, boundary_details=None) -> dict:
             if current.errno in errno.errorcode and not isinstance(current, (ssl.SSLError, socket.gaierror, socket.herror)):
                 evidence["reason"] = os.strerror(current.errno)
         if isinstance(current, ssl.SSLError):
-            evidence.update(network_failure_evidence(current))
+            for name in ("library", "reason"):
+                value = getattr(current, name, None)
+                if isinstance(value, str):
+                    evidence[f"tls_{name}"] = value
+            if isinstance(current, ssl.SSLCertVerificationError):
+                code = getattr(current, "verify_code", None)
+                if type(code) is int:
+                    evidence["tls_verify_code"] = code
         if boundary_details is not None:
             evidence.update(boundary_details(current))
         if current.__cause__ is not None:

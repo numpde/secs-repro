@@ -7,35 +7,35 @@ Common design and active decisions:
   <local repository checkout>
 
 These items do not waive the common design's correctness requirements or
-constitute deployment approval. Active adoption blockers belong in note 014.
-In particular, independent work deadlines, original native retirement, source
-retention, and removal of duplicate lifecycle/publication owners are active
-implementation requirements, not caveats to defer.
-Shared runtime support, safe deployment reconciliation, and selected-report
-ownership also remain active in note 014.
+constitute deployment approval. Independent work deadlines, original native
+retirement, source retention, and removal of duplicate lifecycle/publication
+owners remain implementation requirements, not caveats to defer.
+Local qualification used ordinary published-SDK acquisition for both API and
+CPU images. Disposable fixtures cover native retirement, selected-report drain
+and the bounded scientific workflow below. Note 014 records the shared decisions
+and exact proof scopes.
 
-GPU and full-model qualification
+GPU and full-index qualification
 -------------------------------
 
-Owner: SECS scientific qualification maintainer. Deferred because the current
-infrastructure slices preserve scientific/model policy. Revisit before claiming
-checkpoint/GPU effects or rolling out the corresponding scientific image.
+Owner: SECS scientific qualification maintainer. Revisit before claiming GPU
+or full-index effects or deploying the corresponding scientific image.
 
-Commit 19e356c qualifies the isolated native SDK environment on the CPU image,
-with real inherited descriptors, lease identity, repeated use of one child,
-and SDK retirement. The reader/scientific-boundary and input suites passed.
-This is not a GPU image qualification, a checkpoint inference result, or proof
-of numerical equivalence. Run the maintained model/GPU lanes before claiming
-those effects or rolling out the corresponding scientific image. The native
-installation does not change the scientific Python or dependency locks.
-Final shared runtime placement remains an active decision in note 014.
+The SDK 0.5.0 adoption replaced commit 19e356c's isolated SDK prefix with the
+shared SDK's issued native-only installation lock. The API and scientific
+images install the same published wheel; scientific dependency pins are unchanged.
+Offline CPU qualification now includes the actual checkpoint, eight fixture
+candidates and one GA generation, alongside input and scientific-boundary tests.
+That establishes this bounded composition, not GPU behavior, full-index quality,
+or numerical equivalence across the production workload. Run the maintained
+GPU and published-challenge lanes before claiming those effects.
 
 Deployment and recovery rehearsal
 --------------------------------
 
 Owner: shared deployment maintainer and SECS deployment owner. Defer only the
 deployment-specific rehearsal: no rollout is authorized or performed. Revisit
-after the shared drain/reconciliation design lands and before a deployment.
+before deploying a selected installation.
 
 The eventual deployment still needs its actual blocked-drain and native
 containment procedures rehearsed under the common design. A finite Compose
@@ -45,8 +45,9 @@ is proved; status/socket disappearance or a replacement scratch root is not
 that proof. Do not build provider-local recovery machinery just to avoid this
 qualification. Any shared online barrier must establish its real continuity
 preconditions; failed proof remains held for explicit operator resolution.
-That protects current obligations; it is not the desired final reconciliation
-experience. Shared drain/reconciliation implementation remains active work.
+Disposable fixtures exercise pending-report drain and ordered stop. They do not
+prove the original owner's cleanup or continuity on an installed deployment.
+Rehearse those deployment-specific procedures before cutover.
 
 Legacy obligations at cutover
 ----------------------------

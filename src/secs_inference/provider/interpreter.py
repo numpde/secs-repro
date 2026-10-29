@@ -5,6 +5,7 @@ selection suspends this session: inference does not consume model turns, and
 only an expected input rejection resumes the retained conversation.
 """
 
+import asyncio
 from dataclasses import asdict
 import json
 from time import monotonic
@@ -14,7 +15,7 @@ from secs_inference.provider.input_operations import (
     interpreter_tools,
 )
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
-from secs_inference.provider.response_json import response_object
+from provider_core.response_json import read_document
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.formula_notation import is_formula_space, normalize_formula_notation
 
@@ -33,6 +34,13 @@ tool call per turn. Never introduce shell commands, URLs or executable code.
 """
 
 
+class InterpretationFailed(RuntimeError):
+    """The conversation produced no usable decision, rather than rejecting input."""
+
+    def __init__(self, phase: str, reason: str):
+        super().__init__(f"Cannot interpret SECS input while {phase}: {reason}.")
+
+
 class _InvalidArguments(ValueError):
     """Only malformed model arguments may request conversational repair."""
 
@@ -40,12 +48,11 @@ class _InvalidArguments(ValueError):
 class InterpretationSession:
     """One transcript and one turn/time budget across inspection and correction."""
 
-    def __init__(self, chat, specification, uploads, inspect, *, deadline: float, max_turns: int = 8, check_running=None):
+    def __init__(self, chat, specification_text: str, uploads, inspect, *, deadline: float, max_turns: int = 8):
         self.chat = chat
         self.inspect = inspect
-        self.specification_text = specification.text
+        self.specification_text = specification_text
         self.deadline = deadline
-        self.check_running = check_running
         self.remaining_turns = max_turns
         self.pending_call = None
         # Keep provider-issued rejections, not raw arguments or inspected file
@@ -55,27 +62,37 @@ class InterpretationSession:
             {"role": "system", "content": _INSTRUCTIONS},
             {"role": "user", "content": json.dumps({
                 "analysis_kind_ref": ANALYSIS_KIND_REF,
-                "job_specification": specification.text,
+                "job_specification": specification_text,
                 "uploads": [asdict(upload) for upload in uploads],
             }, ensure_ascii=False)},
         ]
 
-    def select(self):
-        """Inspect as needed and return an explained choice or explicit inability."""
+    async def select(self):
+        """Bound asynchronous interpretation without resetting its retained budget."""
+        deadline = asyncio.timeout_at(self.deadline)
+        try:
+            async with deadline:
+                return await self._select()
+        except TimeoutError:
+            if not deadline.expired():
+                raise
+            raise InterpretationFailed("selecting an input representation",
+                                       "the interpretation deadline elapsed without a usable decision") from None
+
+    async def _select(self):
         if self.pending_call is not None:
             raise AssertionError("A selected representation must finish or reject before another selection")
         while self.remaining_turns > 0 and monotonic() < self.deadline:
             self.remaining_turns -= 1
-            message = self.chat.complete(self.messages, interpreter_tools(), deadline=self.deadline,
-                                         check_running=self.check_running)
+            message = await self.chat.complete(self.messages, interpreter_tools())
             calls = message.get("tool_calls", [])
             if type(calls) is not list or not calls or any(
                 type(call) is not dict or type(call.get("id")) is not str or not call["id"]
                 for call in calls
             ):
-                raise self.chat.failure("checking the model's requested action", "the reply contains no identifiable tool call")
+                raise InterpretationFailed("checking the model's requested action", "the reply contains no identifiable tool call")
             if len({call["id"] for call in calls}) != len(calls):
-                raise self.chat.failure("checking the model's requested action", "the reply repeats a tool call identity")
+                raise InterpretationFailed("checking the model's requested action", "the reply repeats a tool call identity")
             if any(
                 call.get("type") != "function" or type(call.get("function")) is not dict
                 or type(call["function"].get("name")) is not str
@@ -84,7 +101,7 @@ class InterpretationSession:
             ):
                 # An invalid carrier cannot be replayed as an assistant message
                 # for correction. Invalid JSON *inside* its text can be repaired.
-                raise self.chat.failure("checking the model's requested action", "the reply does not identify a function and text arguments for each tool call")
+                raise InterpretationFailed("checking the model's requested action", "the reply does not identify a function and text arguments for each tool call")
             self.messages.append({"role": "assistant", "content": None, "tool_calls": calls})
             if len(calls) != 1:
                 reason = "Choose exactly one tool per turn; no operations were performed."
@@ -115,7 +132,7 @@ class InterpretationSession:
                         continue
             if isinstance(action, SourceRef):
                 try:
-                    facts = self.inspect(action)
+                    facts = await self.inspect(action)
                 except InputReadError as error:
                     self.rejections.append({"stage": "inspection", "reason": str(error)})
                     self._feedback(call["id"], str(error))
@@ -129,7 +146,7 @@ class InterpretationSession:
             return action
         reason = ("the interpretation deadline elapsed" if monotonic() >= self.deadline
                   else "the allowed model turns were exhausted")
-        raise self.chat.failure("selecting an input representation", reason + " without a usable decision")
+        raise InterpretationFailed("selecting an input representation", reason + " without a usable decision")
 
     def reject(self, reason: str) -> None:
         """Return correctable input feedback to the selection awaiting its result."""
@@ -150,7 +167,9 @@ def _decode_call(call: dict):
     if operation is None:
         raise _InvalidArguments("The requested tool is not available; choose one of the advertised tools")
     try:
-        arguments = response_object(function["arguments"].encode("utf-8"))
+        arguments = read_document(function["arguments"].encode("utf-8"), 262144)
+        if type(arguments) is not dict:
+            raise ValueError("Tool arguments must form an object")
     except (ValueError, RecursionError) as error:
         raise _InvalidArguments("Tool arguments are not readable JSON") from error
     if set(arguments) != set(operation.parameters["required"]):

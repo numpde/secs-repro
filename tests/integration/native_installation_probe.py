@@ -2,8 +2,9 @@
 
 import argparse
 from importlib import import_module
-from importlib.metadata import PackageNotFoundError, distribution, version
+from importlib.metadata import distribution, version
 import json
+from importlib.util import find_spec
 import os
 from pathlib import Path
 import shutil
@@ -26,12 +27,10 @@ def science_child():
     assert Path(model.__file__).resolve() == Path(
         distribution("secs-inference").locate_file("secs_inference/model.py")
     ).resolve()
-    try:
-        version("provider-core")
-    except PackageNotFoundError:
-        pass
-    else:
-        raise AssertionError("The scientific child imported the native owner's SDK")
+    assert version("provider-core") == "0.5.0"
+    import_module("provider_core.upload_file")
+    import_module("secs_inference.provider.worker")
+    assert all(find_spec(name) is None for name in ("httpx", "httpcore", "cryptography", "http_sf", "tomli_w"))
     lease = os.fstat(arguments.lease_fd)
     facts = {"pid": os.getpid(), "prefix": sys.prefix, "executable": sys.executable,
              "operation": arguments.operation, "lease": [lease.st_dev, lease.st_ino],
@@ -50,10 +49,11 @@ def native_owner():
 
     installed = distribution("provider-core")
     package = import_module("provider_core")
-    assert installed.version == "0.4.0"
-    assert sys.prefix == "/opt/native"
+    assert installed.version == "0.5.0"
+    assert sys.prefix == "/usr/local"
     assert Path(package.__file__).resolve() == Path(installed.locate_file("provider_core/__init__.py")).resolve()
-    assert "/usr/local/lib/python3.12/site-packages" not in sys.path
+    assert not Path("/opt/native").exists()
+    assert all(find_spec(name) is None for name in ("httpx", "httpcore", "cryptography", "http_sf", "tomli_w"))
     checked = subprocess.run((sys.executable, "-I", "-m", "pip", "check"), capture_output=True, text=True)
     assert checked.returncode == 0, checked.stdout + checked.stderr
     root = Path(tempfile.mkdtemp(prefix="secs-native-installation-"))
