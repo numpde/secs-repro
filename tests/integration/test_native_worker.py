@@ -14,12 +14,44 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from secs_inference.provider.worker import NativeWorkerExited, WorkerClient, WorkerError, WorkerStopUnconfirmed
+from secs_inference.provider.worker import NativeWorkerExited, WorkerClient, WorkerDeadlineBeforeDispatch, WorkerError, WorkerStopUnconfirmed
 from secs_inference.provider.worker_protocol import InvalidFailureEnvelope, ScientificWorkerFailed, encode
 from secs_inference.provider.worker_config_snapshot import capture
 
 
 class WorkerDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_original_exchange_deadline_refuses_before_write(self):
+        with TemporaryDirectory() as temporary:
+            worker = self.client(temporary)
+            with self.assertRaises(WorkerDeadlineBeforeDispatch):
+                await worker._exchange({"operation": "inspect"}, monotonic() - 1, lambda: None)
+            worker._writer.write.assert_not_called()
+
+    async def test_wait_timeout_does_not_claim_late_prewrite_refusal(self):
+        with TemporaryDirectory() as temporary:
+            worker = self.client(temporary)
+            original = worker._exchange
+            entered, release = asyncio.Event(), asyncio.Event()
+            async def delayed(command, deadline, permission):
+                entered.set()
+                await release.wait()
+                return await original(command, deadline, permission)
+            worker._exchange = delayed
+            request = asyncio.create_task(worker.request({"operation": "inspect"}, deadline=monotonic() + 0.1,
+                                                         require_execution=lambda: None))
+            try:
+                await asyncio.wait_for(entered.wait(), 1)
+                with self.assertRaises(TimeoutError) as caught:
+                    await request
+                self.assertIs(type(caught.exception), TimeoutError)
+                release.set()
+                await asyncio.gather(worker._pending, return_exceptions=True)
+                self.assertIs(type(worker._pending.exception()), WorkerError)
+                worker._writer.write.assert_not_called()
+            finally:
+                release.set()
+                await worker.stop()
+
     async def test_retirement_does_not_retain_its_own_startup_stop_error(self):
         with TemporaryDirectory() as temporary:
             worker = self.client(temporary)

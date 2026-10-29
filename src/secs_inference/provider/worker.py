@@ -17,6 +17,10 @@ class WorkerStopUnconfirmed(WorkerError):
     """Retain sources and admission until original native retirement is proved."""
 
 
+class WorkerDeadlineBeforeDispatch(TimeoutError):
+    """The original exchange reached its deadline before writing its frame."""
+
+
 class NativeWorkerExited(WorkerError):
     """Carry an actual original exit to the owning Attempt's scientific session."""
 
@@ -160,10 +164,10 @@ class WorkerClient:
         if self._stopping or self.stopped:
             raise WorkerError("The scientific request was stopped before dispatch")
         frame = encode(command)
-        if monotonic() >= deadline:
-            raise TimeoutError("Scientific request deadline elapsed before dispatch")
         if require_execution is not None:
             require_execution()
+        if monotonic() >= deadline:
+            raise WorkerDeadlineBeforeDispatch("Scientific request deadline elapsed before dispatch")
         try:
             self._writer.write(frame)
             await self._writer.drain()

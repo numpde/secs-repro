@@ -7,14 +7,15 @@ import json
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import monotonic
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from provider_core.analysis import AnalysisSuccess, PreparedAnalysis
 from provider_core.api import ProviderAPI
-from provider_core.attempt_record import ProtectedEvidence, RecoveryScope, StartPending
+from provider_core.attempt_record import ProtectedEvidence, RecoveryScope, StartPending, TerminalOperation
 from provider_core.attempt_request import start_body
 from provider_core.controller import AttemptController, ControllerFailed, LiveStartPolicy
 from provider_core.delivery_client import DeliveryClient, DeliveryEndpoint
@@ -126,6 +127,70 @@ class Discovery:
 
 
 class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
+    async def test_proven_prewrite_deadline_reports_without_worker_write(self):
+        await self._assert_proven_prewrite_deadline(fail_retirement=False)
+
+    async def test_prewrite_deadline_preserves_independent_retirement_failure(self):
+        await self._assert_proven_prewrite_deadline(fail_retirement=True)
+
+    async def _assert_proven_prewrite_deadline(self, *, fail_retirement):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ipc").mkdir(mode=0o700)
+            (root / "queue").mkdir(mode=0o700)
+            endpoint = DeliveryEndpoint(ORIGIN, PROVIDER, root / "ipc/delivery.sock")
+            queue = DeliveryQueue(root / "queue", limits=QueueLimits(1, 2097152, 1, 2097152))
+            inbox = DeliveryInbox(queue, (endpoint,), request_seconds=1,
+                                  on_accepted=lambda _endpoint: None, on_failure=lambda *_args: None,
+                                  binding_status=lambda _endpoint: {})
+            delivery = DeliveryClient(endpoint, exchange_seconds=1, retirement_seconds=1)
+            events = []
+            worker = Worker(events)
+            cleanup = RuntimeError("fixture retirement failure")
+            if fail_retirement:
+                worker.stopping_failure = cleanup
+            exchange = WorkerClient(root / "ipc/worker.sock", startup_seconds=10, retirement_seconds=10)
+            exchange._writer = SimpleNamespace(write=Mock())
+            async def request(command, *, deadline, require_execution):
+                return await exchange._exchange(command, monotonic() - 1, require_execution)
+            worker.request = request
+            session = SecsSession(worker=worker, sources=Sources(events), chat=Carrier(events, [choice()]),
+                                  work_seconds=3, interpretation_seconds=1, startup_seconds=1, max_turns=3)
+            claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
+            scope = RecoveryScope(ORIGIN, PROVIDER, "secs", "runtime-one")
+            pending = StartPending(scope, ANALYSIS_KIND_REF, FACTS, start_body(FACTS.job_ref, "request-deadline"))
+            identity = SigningIdentity(ORIGIN, "credential:test", Ed25519PrivateKey.generate())
+            controller = AttemptController.live(
+                ProviderAPI(identity, LifecycleTransport(), expected_topology="dev-local"), claims, session,
+                scope=scope, stopping=asyncio.Event(), admission_stopping=asyncio.Event(),
+                start_policy=LiveStartPolicy(0.001, lambda *_args: None, lambda *_args: None),
+                preverified_input=VerifiedJobInput(FACTS, PAYLOAD), delivery=delivery,
+                on_delivery_retry=lambda *_args: None, delivery_retry_initial_seconds=0.01,
+                delivery_retry_max_seconds=0.01, allowed_job_states=frozenset({"open", "closed"}),
+                poll_seconds=0.01, task_settle_seconds=1,
+            )
+            try:
+                await inbox.start()
+                if fail_retirement:
+                    with self.assertRaises(ControllerFailed) as caught:
+                        await controller.run(pending)
+                    def contains(error):
+                        return error is cleanup or (isinstance(error, BaseExceptionGroup)
+                                                    and any(contains(child) for child in error.exceptions))
+                    execution = caught.exception.cause
+                    self.assertTrue(any(contains(error) for error in (execution.cause, *execution.cleanup_failures)))
+                    self.assertIn(controller, claims.live_owners())
+                else:
+                    await controller.run(pending)
+                exchange._writer.write.assert_not_called()
+                self.assertEqual(queue.next_pending(ORIGIN, PROVIDER).operation, TerminalOperation.FAIL)
+                self.assertEqual(worker.stopped, not fail_retirement)
+                self.assertIn(("sources-retire", not fail_retirement), events)
+            finally:
+                await delivery.retire()
+                await inbox.close()
+                queue.close()
+
     async def test_controller_stop_before_worker_dispatch_blocks_first_execution(self):
         await self._assert_stop_before_worker_dispatch("execute")
 

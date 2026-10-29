@@ -10,6 +10,7 @@ import unittest
 from provider_core.execution import ObservationGapExpired
 from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
 from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession
+from secs_inference.provider.worker import WorkerDeadlineBeforeDispatch
 
 
 def call(name, arguments, identity):
@@ -40,6 +41,21 @@ class ScriptedCarrier:
 
 
 class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pre_dispatch_deadline_survives_interpreter_deadline(self):
+        refusal = WorkerDeadlineBeforeDispatch("fixture no-write deadline")
+        async def inspect(_source):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                raise refusal
+        chat = ScriptedCarrier([call("inspect_source", {
+            "source": {"upload_ref": "upload:chosen", "member": None}}, "inspect")])
+        session = self.session(chat, inspect)
+        session.deadline = monotonic() + 0.05
+        with self.assertRaises(WorkerDeadlineBeforeDispatch) as caught:
+            await session.select()
+        self.assertIs(caught.exception, refusal)
+
     async def test_observation_expiry_survives_interpreter_deadline(self):
         expiry = ObservationGapExpired(1, executor=SimpleNamespace(_observation_read_started=False))
         async def inspect(_source):

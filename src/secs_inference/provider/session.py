@@ -14,7 +14,7 @@ from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepr
 from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession
 from secs_inference.provider.outcomes import AnalysisOutcome, NO_STARTING_CANDIDATES_MESSAGE
 from secs_inference.provider.source_access import InputReadError
-from secs_inference.provider.worker import NativeWorkerExited
+from secs_inference.provider.worker import NativeWorkerExited, WorkerDeadlineBeforeDispatch
 from secs_inference.provider.worker_protocol import ScientificWorkerFailed, WorkerError, scientific_worker_failure
 from secs_inference.provider.sources import SourceAcquisitionFailed
 
@@ -91,6 +91,8 @@ class SecsSession:
             return self._failure("scientific_execution_failed", str(cause), cause)
         except WorkerError as cause:
             raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific preparation outcome") from cause
+        except WorkerDeadlineBeforeDispatch as cause:
+            return self._failure("work_deadline_exceeded", "The scientific request deadline elapsed before the worker request was sent.", cause)
         except (ConditionRecoveryExpired, ObservationGapExpired):
             raise
         except TimeoutError as cause:
@@ -168,6 +170,8 @@ class SecsSession:
             return self._failure("scientific_execution_failed", str(cause), cause)
         except WorkerError as cause:
             raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific execution outcome") from cause
+        except WorkerDeadlineBeforeDispatch as cause:
+            return self._failure("work_deadline_exceeded", "The scientific request deadline elapsed before the worker request was sent.", cause)
         self._choices[-1]["used"] = True
         if response["outcome"] == AnalysisOutcome.NO_STARTING_CANDIDATES:
             return self._failure(AnalysisOutcome.NO_STARTING_CANDIDATES.value, NO_STARTING_CANDIDATES_MESSAGE)
@@ -184,6 +188,8 @@ class SecsSession:
         self._quiescent = False
         try:
             response = await self.worker.request(command, deadline=deadline, require_execution=require_execution)
+        except WorkerDeadlineBeforeDispatch:
+            raise
         except (ConditionRecoveryExpired, ObservationGapExpired):
             raise
         except TimeoutError as cause:

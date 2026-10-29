@@ -66,8 +66,8 @@ eligibility, source, native-retirement and deadline requirements are complete.
 Held Attempt capacity and availability
 --------------------------------------
 
-Owner: SECS runtime maintainer. Revisit when the shared held-owner check is
-released and before continuing unrelated Jobs while an Attempt remains held.
+Owner: SECS runtime maintainer. Revisit before continuing unrelated Jobs while
+an Attempt remains held.
 
 The current provider has one scientific worker and one live bookkeeping slot.
 These are different limits: a retired worker may leave a held claim even when
@@ -78,6 +78,12 @@ confirmed worker retirement and fresh readiness, and local exclusion of the
 held Job. Prove a held Job followed by an unrelated Job, capacity saturation,
 stale discovery and shutdown before choosing that policy; do not add capacity
 or a wait loop merely to imply persistence.
+
+Only the original exchange's settled pre-write deadline refusal proves that no
+request was dispatched. A caller's wait can expire while its shielded exchange
+is still running, and remains unresolved. Do not infer no dispatch from a
+generic timeout. An unresolved Attempt occupies the single live claim and stops
+further Job processing; the process does not accumulate multiple live claims.
 
 SECS asks the server for Jobs without a provider Attempt, using a fresh START
 key for each selected Job. The server's feed excludes a Job after any Attempt
@@ -147,6 +153,16 @@ identity but omit the original causal graph when no response exists. The generic
 START/delivery callback also discards failure, wait and recovery detail. Controlled
 backend-stage test failures establish this gap (D131); the richer rendering remains
 deferred, not fixed. Preserve retry/stop/retirement rules and disclosure boundaries.
+
+Direct session-retirement cancellation
+--------------------------------------
+
+Owner: SECS session maintainer. Revisit if a caller must cancel the retirement
+coroutine itself and still attempt every independent cleanup port in that same
+invocation. A raw cancellation can interrupt `SecsSession.retire` before later
+ports are attempted. The shared SDK normally owns retirement in a retained
+task, and a held owner can settle again; those facts do not prove that every
+port runs during an independently cancelled invocation.
 
 Fatal diagnostic interruption status
 ------------------------------------

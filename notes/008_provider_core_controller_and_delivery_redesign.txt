@@ -82,8 +82,11 @@ The controller retains the live claim and does not enqueue FAIL or repeat
 science. Independent source and interpretation deadlines retain their reviewed
 public outcomes when no worker request is in flight. This live ownership is not
 reconstructed after process restart; the server owns Attempt expiry.
-Worker request timeouts use this conservative hold even if the local deadline
-expired before the frame was written; no separate pre-dispatch outcome is issued.
+The original scientific request exchange can prove its deadline elapsed before
+writing a frame; that exact refusal produces a public deadline failure. An
+observer timeout does not prove this, because its shielded exchange may still
+be running. Retirement
+remains independently owned even if a deadline report is handed off.
 
 One shared delivery binding for the API-origin/provider-ref pair accepts exact
 complete/fail bodies. The delivery service owns the persistent queue, publication,

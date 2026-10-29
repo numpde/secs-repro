@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from datetime import datetime, timezone
 from hashlib import sha256
 import unittest
+from unittest.mock import Mock
 
 from provider_core.analysis import AnalysisFailure, AnalysisOutcomeUnresolved, AnalysisSuccess, PreparedAnalysis
 from provider_core.attempt_record import RecoveryScope, StartPending, acknowledge_start
@@ -21,7 +22,7 @@ from provider_core.job_input import FeedInputFacts, VerifiedJobInput
 
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.session import SecsSession
-from secs_inference.provider.worker import WorkerClient
+from secs_inference.provider.worker import WorkerClient, WorkerDeadlineBeforeDispatch
 from secs_inference.provider.worker_protocol import InvalidFailureEnvelope, ScientificWorkerFailed, WorkerError
 from secs_inference.provider.diagnostics import exception_evidence
 from test_async_interpretation import ScriptedCarrier, choice, call
@@ -110,6 +111,38 @@ condition.require_execution = lambda: None
 
 
 class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_phase_refusal_precedes_expired_exchange_deadline(self):
+        failures = (
+            ObservationGapExpired(1, executor=SimpleNamespace(_observation_read_started=False)),
+            ConditionRecoveryExpired(1, phase="preparing", condition_code=None, cause=None),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            worker = WorkerClient(Path(directory) / "worker.sock", startup_seconds=10, retirement_seconds=10)
+            worker._writer = SimpleNamespace(write=Mock())
+            for failure in failures:
+                with self.subTest(failure=type(failure).__name__):
+                    def refuse():
+                        raise failure
+                    with self.assertRaises(type(failure)) as caught:
+                        await worker._exchange({"operation": "inspect"}, monotonic() - 1, refuse)
+                    self.assertIs(caught.exception, failure)
+                    worker._writer.write.assert_not_called()
+
+    async def test_proven_pre_dispatch_deadline_is_public_deadline(self):
+        session, worker, _, events = self.make_session([])
+        failure = WorkerDeadlineBeforeDispatch("fixture no-write deadline")
+        async def refused(command, *, deadline, require_execution):
+            raise failure
+        worker.request = refused
+        try:
+            outcome = await self.prepare(session)
+            self.assertIs(type(outcome), AnalysisFailure)
+            self.assertEqual(outcome.code, "work_deadline_exceeded")
+            self.assertNotIn(b"fixture no-write", outcome.evidence.content)
+        finally:
+            await session.retire()
+        self.assertLess(events.index("worker-stop"), events.index(("sources-retire", True)))
+
     async def test_unknown_preparation_reply_is_unresolved(self):
         session, _, _, events = self.make_session([{"outcome": "unexpected"}])
         try:
