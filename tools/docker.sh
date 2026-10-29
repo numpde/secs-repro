@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly wlan_interface="${SECS_WLAN_INTERFACE_INPUT:-}"
 arguments=("$@")
 subcommand_index=-1
 network_index=-1
@@ -24,16 +23,21 @@ for index in "${!arguments[@]}"; do
     esac
 done
 
+if [[ ${SECS_OLD_WLAN_ORIGIN:-undefined} != undefined ]]; then
+    printf '%s\n' 'WLAN_INTERFACE was removed; select NETWORK_INTERFACE instead.' >&2
+    exit 2
+fi
 if (( subcommand_index < 0 )) || [[ "$network" == none ]]; then
     exec docker "${arguments[@]}"
 fi
-if [[ -z "$wlan_interface" ]] && { [[ "${arguments[$subcommand_index]}" != run ]] || [[ "$network" != bridge && "$network" != default ]]; }; then
-    exec docker "${arguments[@]}"
-fi
 if [[ "$network" != bridge && "$network" != default ]]; then
-    printf 'WLAN routing supports Docker bridge/default downloads, not --network %s.\n' "${network:-<unset>}" >&2
+    printf 'Acquisition requires --network bridge, default, or none; got %s.\n' "${network:-<unset>}" >&2
     exit 2
 fi
+source "$(dirname -- "${BASH_SOURCE[0]}")/network_interface.sh"
+select_network_interface
+wlan_interface=''
+[[ "$SECS_SELECTED_INTERFACE" == system ]] || wlan_interface=$SECS_SELECTED_INTERFACE
 if [[ "${arguments[$subcommand_index]}" == run ]]; then
     for argument in "${arguments[@]}"; do
         if [[ $argument == --cidfile || $argument == --cidfile=* ]]; then
@@ -192,15 +196,23 @@ if [[ "${arguments[$subcommand_index]}" == run ]]; then
         --env "https_proxy=$proxy_url"
         --env NO_PROXY= --env no_proxy= --env ALL_PROXY= --env all_proxy= --env FTP_PROXY= --env ftp_proxy=
         )
+    else
+        injected+=(--env HTTP_PROXY= --env HTTPS_PROXY= --env http_proxy= --env https_proxy=
+                   --env NO_PROXY= --env no_proxy= --env ALL_PROXY= --env all_proxy= --env FTP_PROXY= --env ftp_proxy=)
     fi
 else
-    injected=(
+    if [[ -n "$wlan_interface" ]]; then
+        injected=(
         --build-arg "HTTP_PROXY=$proxy_url"
         --build-arg "HTTPS_PROXY=$proxy_url"
         --build-arg "http_proxy=$proxy_url"
         --build-arg "https_proxy=$proxy_url"
         --build-arg NO_PROXY= --build-arg no_proxy= --build-arg ALL_PROXY= --build-arg all_proxy= --build-arg FTP_PROXY= --build-arg ftp_proxy=
-    )
+        )
+    else
+        injected=(--build-arg HTTP_PROXY= --build-arg HTTPS_PROXY= --build-arg http_proxy= --build-arg https_proxy=
+                  --build-arg NO_PROXY= --build-arg no_proxy= --build-arg ALL_PROXY= --build-arg all_proxy= --build-arg FTP_PROXY= --build-arg ftp_proxy=)
+    fi
 fi
 arguments=(
     "${arguments[@]:0:$((subcommand_index + 1))}"

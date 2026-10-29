@@ -16,7 +16,16 @@ override CHECKPOINT_MANIFEST := $(CHECKPOINT_DIRECTORY)/manifest.json
 override CHECKPOINT_MANIFEST_FILENAME := $(notdir $(CHECKPOINT_MANIFEST))
 override SECS_REPOSITORY := $(shell git config -f .gitmodules --get submodule.secs.url)
 override SECS_REVISION := $(shell git ls-files --stage secs | awk '{print $$2}')
-export SECS_WLAN_INTERFACE_INPUT := $(if $(filter command line,$(origin WLAN_INTERFACE)),$(value WLAN_INTERFACE))
+ifeq ($(MAKELEVEL),0)
+export SECS_NETWORK_INTERFACE_INPUT := $(value NETWORK_INTERFACE)
+export SECS_NETWORK_INTERFACE_ORIGIN := $(origin NETWORK_INTERFACE)
+export SECS_OLD_WLAN_ORIGIN := $(origin WLAN_INTERFACE)
+else ifneq ($(origin NETWORK_INTERFACE),undefined)
+export SECS_NETWORK_INTERFACE_INPUT := $(value NETWORK_INTERFACE)
+export SECS_NETWORK_INTERFACE_ORIGIN := $(origin NETWORK_INTERFACE)
+endif
+unexport NETWORK_INTERFACE
+unexport WLAN_INTERFACE
 override export SECS_BOOTSTRAP_IMAGE = $(PYTHON_BASE)
 DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT $(CURDIR)/tools/docker.sh --context default
 
@@ -27,9 +36,9 @@ help:
 	'SECS CPU workflow' \
 	'' \
 	'Network routing' \
-	'  make <target> WLAN_INTERFACE=<name>' \
-	'      Route container-owned HTTP(S) downloads through that host interface.' \
-	'      Omit WLAN_INTERFACE to use Docker networking normally.' \
+	'  make <target> NETWORK_INTERFACE=<name|system>' \
+	'      Route cooperative HTTP(S) downloads through that interface, or choose system routing.' \
+	'      Omit it to choose interactively; noninteractive downloads require a choice.' \
 	'      Docker daemon image pulls continue to use the daemon default route.' \
 	'' \
 	'1. Prepare CPU dependencies' \

@@ -184,8 +184,6 @@ interpreter/model-behavior: private export LIVE_CONFIG_DIR_INPUT := $(value CONF
 interpreter/model-behavior: private export LIVE_KEY_FILE_INPUT := $(value KEY_FILE)
 interpreter/model-behavior:
 	@test "$(HOST_UID)" -ne 0
-	test -z "$${SECS_WLAN_INTERFACE_INPUT:-}" || { \
-		printf '%s\n' 'This live test uses direct HTTPS; WLAN_INTERFACE proxy routing is not supported.' >&2; exit 2; }
 	test -n "$${LIVE_CONFIG_DIR_INPUT}" -a -n "$${LIVE_KEY_FILE_INPUT}" || { \
 		printf '%s\n' 'Set CONFIG_DIR to the provider configuration directory and KEY_FILE to its interpreter key. This live test makes paid model requests.' >&2; exit 2; }
 	config_dir=$$(realpath -e -- "$${LIVE_CONFIG_DIR_INPUT}")
@@ -198,7 +196,7 @@ interpreter/model-behavior:
 		ca_mount=(--mount "type=bind,src=$$config_dir/interpreter-ca.crt,dst=/run/config/provider/interpreter-ca.crt,readonly")
 	fi
 	provider_image=$$($(MAKE) --no-print-directory provider/image)
-	$(DOCKER) run --rm --init --pull never --network bridge --read-only \
+	SECS_NETWORK_INTERFACE_ORIGIN='command line' SECS_NETWORK_INTERFACE_INPUT=system $(DOCKER) run --rm --init --pull never --network bridge --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" --cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 256m --memory-swap 256m \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777 \

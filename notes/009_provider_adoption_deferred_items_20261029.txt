@@ -231,9 +231,9 @@ the release-record-verified SDK source snapshot in a pinned Python container;
 its DNS and TCP sockets bind to the selected device. A real ProArt probe reached
 PyPI through WLAN with the SDK while wired was the preferred host route. This
 does not establish that every acquisition client uses the proxy, nor prove the
-full cold-start and cancellation contract. The explicit NETWORK_INTERFACE
-selector remains to be integrated. Base-image bootstrap and GitHub updates may
-use the default connection.
+full cold-start and cancellation contract. NETWORK_INTERFACE makes device or
+system routing explicit; base-image bootstrap and GitHub updates may use the
+default connection.
 
 A disposable Docker probe showed that TERM to the current wrapper did not retire
 its running container. Commit 5ddf70a preserves mounted staging inputs when a

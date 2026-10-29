@@ -54,7 +54,8 @@ esac
             docker.chmod(0o700)
             calls, errors = root / 'calls', root / 'errors'
             worker_live, proxy_live = root / 'worker', root / 'proxy'
-            env = os.environ | {'PATH': f'{root}:/usr/bin:/bin', 'SECS_WLAN_INTERFACE_INPUT': 'lo',
+            env = os.environ | {'PATH': f'{root}:/usr/bin:/bin', 'SECS_NETWORK_INTERFACE_INPUT': 'lo',
+                'SECS_NETWORK_INTERFACE_ORIGIN': 'command line',
                 'SECS_BOOTSTRAP_IMAGE': 'pinned-test-image', 'CALLS': str(calls), 'PROXY': PROXY,
                 'WORKER': WORKER, 'PROXY_LIVE': str(proxy_live), 'WORKER_LIVE': str(worker_live),
                 'FAIL': '1' if fail_removal else '0', 'MISSING': '1' if missing_proxy else '0',

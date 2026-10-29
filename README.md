@@ -12,6 +12,15 @@ that route. `network.toml` separately controls interpreter and upload-store egre
 The API and scientific images install the same SDK wheel using its issued API
 and native installation locks; the scientific image retains its own dependency pins.
 
+Networked acquisition requires `NETWORK_INTERFACE=<device>` or
+`NETWORK_INTERFACE=system`, supplied on the make command line or in the
+environment. Without a selection, an interactive terminal offers a choice;
+noninteractive acquisition fails. The device choice routes cooperating HTTP(S)
+clients through the SDK proxy, which binds DNS and TCP to that device. This is
+not a firewall for clients that bypass the proxy. `system` uses normal routing.
+Offline operations do not ask, and Docker base-image pulls use the daemon's
+default route. GitHub and provider API traffic use their normal routes.
+
 `make provider/deployment/down DEPLOYMENT=<name>` stops admission and waits for
 work and selected reports before stopping the scientific worker. It may wait
 indefinitely while delivery is unavailable; interruption leaves shutdown unconfirmed.

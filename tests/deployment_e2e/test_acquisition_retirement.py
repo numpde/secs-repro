@@ -19,7 +19,8 @@ class AcquisitionRetirementTests(unittest.TestCase):
 
     def _check_run_input_output_and_exit_status(self, interface):
         image = os.environ["DEPLOYMENT_TEST_IMAGE"]
-        environment = os.environ | {"SECS_WLAN_INTERFACE_INPUT": interface}
+        environment = os.environ | {"SECS_NETWORK_INTERFACE_INPUT": interface or "system",
+                                    "SECS_NETWORK_INTERFACE_ORIGIN": "command line"}
         result = subprocess.run(
             ["bash", str(ROOT / "tools/docker.sh"), "--context", "default", "run", "--rm", "-i",
              "--network", "bridge", "--pull", "never", "--entrypoint", "sh", image,
@@ -39,7 +40,8 @@ class AcquisitionRetirementTests(unittest.TestCase):
     def _check_term_retires_container(self, interface):
         image = os.environ["DEPLOYMENT_TEST_IMAGE"]
         name = "secs-acquisition-proof-" + uuid4().hex
-        environment = os.environ | {"SECS_WLAN_INTERFACE_INPUT": interface}
+        environment = os.environ | {"SECS_NETWORK_INTERFACE_INPUT": interface or "system",
+                                    "SECS_NETWORK_INTERFACE_ORIGIN": "command line"}
         process = subprocess.Popen(
             ["bash", str(ROOT / "tools/docker.sh"), "--context", "default", "run", "--rm",
              "--name", name, "--network", "bridge", "--pull", "never", "--entrypoint", "sh",
