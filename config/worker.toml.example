@@ -1,4 +1,5 @@
 # Paths are inside the offline worker, not host paths.
+# The worker captures this file at container startup; restart the worker container to apply changes.
 checkpoint_directory = "/checkpoint"
 molformer_lock = "/input/molformer.lock.toml"
 device = "cuda:0"
