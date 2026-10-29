@@ -64,6 +64,7 @@ proxy_pid=''
 docker_pid=''
 proxy_starting=0
 proxy_pending=0
+proxy_identity_verified=0
 docker_starting=0
 worker_pending=0
 worker_identity_verified=0
@@ -127,7 +128,11 @@ cleanup() {
         fi
     fi
     if [[ "$uncertain" == 0 && "$proxy_pending" == 1 ]]; then
-        retire_container proxy || uncertain=1
+        if [[ "$proxy_identity_verified" == 1 ]]; then
+            retire_container proxy || uncertain=1
+        else
+            uncertain=1
+        fi
     fi
     if [[ "$uncertain" == 0 ]]; then
         rm -rf -- "$scratch"
@@ -152,7 +157,7 @@ if [[ -f /run/systemd/resolve/resolv.conf ]]; then
 fi
 proxy_starting=1
 proxy_pending=1
-timeout --signal=TERM --kill-after=2 30 docker "${arguments[@]:0:$subcommand_index}" run --detach --pull never \
+timeout --signal=TERM --kill-after=2 30 docker "${arguments[@]:0:$subcommand_index}" create --pull never \
     --cidfile "$scratch/proxy.cid" --network host --read-only \
     --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges:true \
     --pids-limit 64 --cpus 1 --memory 128m --memory-swap 128m \
@@ -162,7 +167,7 @@ timeout --signal=TERM --kill-after=2 30 docker "${arguments[@]:0:$subcommand_ind
     --mount "type=bind,src=$scratch,dst=/receipt" "${resolver_mount[@]}" \
     --entrypoint python "${SECS_BOOTSTRAP_IMAGE:?Pinned bootstrap image is required}" \
     -I -B -c 'import sys; sys.path.insert(0, "/bootstrap"); from provider_core.bound_http_proxy import main; main()' \
-    --interface "$wlan_interface" --port 0 --ready-file /receipt/proxy.port >/dev/null &
+    --interface "$wlan_interface" --port 0 --ready-file /receipt/proxy.port >"$scratch/proxy.output" &
 proxy_pid=$!
 proxy_starting=0
 [[ "$pending_signal" == 0 ]] || exit "$pending_signal"
@@ -174,6 +179,29 @@ else
     exit "$status"
 fi
 proxy_cid=$(read_cid proxy) || { printf '%s\n' 'Cannot verify the proxy container identity.' >&2; exit 2; }
+cmp -s "$scratch/proxy.output" <(printf '%s\n' "$proxy_cid") || {
+    printf '%s\n' 'Docker create output does not match its proxy CID receipt.' >&2; exit 2;
+}
+proxy_identity_verified=1
+proxy_settings=$(timeout --signal=TERM --kill-after=2 10 docker "${arguments[@]:0:$subcommand_index}" inspect \
+    --format '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' "$proxy_cid") || {
+    printf '%s\n' 'Cannot inspect the created proxy container.' >&2; exit 2;
+}
+[[ "$proxy_settings" == 'created no' ]] || {
+    printf '%s\n' 'Created proxy must be stopped with restart disabled.' >&2; exit 2;
+}
+proxy_starting=1
+timeout --signal=TERM --kill-after=2 30 docker "${arguments[@]:0:$subcommand_index}" start "$proxy_cid" >/dev/null &
+proxy_pid=$!
+proxy_starting=0
+[[ "$pending_signal" == 0 ]] || exit "$pending_signal"
+if wait "$proxy_pid"; then
+    proxy_pid=''
+else
+    status=$?
+    proxy_pid=''
+    exit "$status"
+fi
 for _ in {1..100}; do
     [[ -s "$ready_file" ]] && break
     sleep 0.05

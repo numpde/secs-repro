@@ -261,7 +261,10 @@ Docker probe with the receipt deliberately withheld observed the container still
 in the created state and no worker start; the unknown stopped container and
 its evidence still need operator reconciliation. Once start is dispatched,
 failed or interrupted execution is retired by exact verified CID, or reported
-as unconfirmed. This does not settle proxy creation or BuildKit cancellation.
+as unconfirmed. The proxy uses the same stopped-create and matching-receipt
+boundary before its listener starts. A withheld-receipt Docker probe observed
+the proxy in created state; an unidentified stopped proxy still requires
+reconciliation. This does not settle BuildKit cancellation.
 The Make-owned foreground callers select `--pull never`; the wrapper is not a
 general Docker option parser and does not enforce that policy against an
 arbitrary later override supplied to a direct invocation.
