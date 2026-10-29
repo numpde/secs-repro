@@ -216,7 +216,7 @@ def main(arguments=None) -> int:
     parser.add_argument("--operation", required=True)
     options = parser.parse_args(arguments)
 
-    path = Path("/run/config/worker/worker.toml")
+    path = Path("/tmp/native-config/worker.toml")
     operation = f"reading scientific worker configuration from {path}"
     try:
         try:

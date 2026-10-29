@@ -17,9 +17,11 @@ parser.add_argument("--lease-fd", type=int, required=True)
 parser.add_argument("--operation", required=True)
 parser.add_argument("--mode", required=True)
 parser.add_argument("--pid-file", required=True)
+parser.add_argument("--config-file")
 options = parser.parse_args()
 os.fstat(options.lease_fd)
 Path(options.pid_file).write_text(str(os.getpid()))
+config = Path(options.config_file).read_text() if options.config_file else None
 connection = socket.socket(fileno=options.session_fd)
 if options.mode == "startup_exit":
     while not Path(options.pid_file + ".exit").exists():
@@ -52,6 +54,8 @@ def load():
                 raise OSError(errno.EIO, "private fixture path")
             except OSError as cause:
                 raise RuntimeError("private fixture source content") from cause
+        if command["operation"] == "config":
+            return {"outcome": "observed", "pid": os.getpid(), "config": config}
         return {"outcome": "observed", "pid": os.getpid(), "calls": calls}
     return handle
 

@@ -148,6 +148,9 @@ class LifecycleEndToEndTests(unittest.TestCase):
             self.assertTrue(provider_mounts["/run/secs/worker"]["read_only"])
             self.assertTrue(provider_mounts["/run/delivery"]["read_only"])
             command = " ".join(worker["command"])
+            self.assertIn("python -I -m secs_inference.provider.worker_config_snapshot", command)
+            self.assertLess(command.index("secs_inference.provider.worker_config_snapshot"),
+                            command.index("provider_core.runner"))
             self.assertIn("python -I -m provider_core.runner --role secs", command)
             self.assertIn("--owner-session-lifetime", command)
             self.assertIn("-- python -I -m secs_inference.provider.worker_model", command)

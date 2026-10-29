@@ -122,7 +122,8 @@ services:
     command:
       - >-
         python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache &&
-        mkdir -m 700 /tmp/native-scratch /tmp/native-status &&
+        mkdir -m 700 /tmp/native-config /tmp/native-scratch /tmp/native-status &&
+        python -I -m secs_inference.provider.worker_config_snapshot &&
         exec python -I -m provider_core.runner --role secs
         --socket /run/secs/worker/worker.sock --scratch /tmp/native-scratch
         --status-directory /tmp/native-status --owner-session-lifetime

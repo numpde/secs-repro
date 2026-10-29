@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from secs_inference.provider.worker import NativeWorkerExited, WorkerClient, WorkerError, WorkerStopUnconfirmed
 from secs_inference.provider.worker_protocol import ScientificWorkerFailed, encode
+from secs_inference.provider.worker_config_snapshot import capture
 
 
 class WorkerDispatchTests(unittest.IsolatedAsyncioTestCase):
@@ -123,7 +124,8 @@ class NativeWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.owner = self.worker = None
         self.log = (self.root / "supervisor.log").open("wb")
 
-    async def start(self, mode="normal", *, scratch="scratch"):
+    async def start(self, mode="normal", *, scratch="scratch", config_file=None):
+        config_arguments = () if config_file is None else ("--config-file", str(config_file))
         self.owner = await asyncio.create_subprocess_exec(
             sys.executable, "-I", "-m", "provider_core.runner", "--role", "secs",
             "--socket", str(self.endpoint), "--scratch", str(self.root / scratch),
@@ -131,7 +133,7 @@ class NativeWorkerTests(unittest.IsolatedAsyncioTestCase):
             "--startup-seconds", "2", "--terminate-seconds", "2", "--kill-seconds", "2",
             "--cleanup-seconds", "2", "--", sys.executable, "-I",
             str(Path(__file__).with_name("native_worker_fixture.py")), "--mode", mode,
-            "--pid-file", str(self.pid_file), stdout=self.log, stderr=self.log,
+            "--pid-file", str(self.pid_file), *config_arguments, stdout=self.log, stderr=self.log,
         )
         if self.worker is None:
             self.worker = WorkerClient(self.endpoint, startup_seconds=10, retirement_seconds=10, observation_seconds=2)
@@ -155,6 +157,22 @@ class NativeWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(select.select([descriptor], [], [], 0)[0], "The original PID remains alive")
         self.assertTrue(self.worker.native.session.retirement.scratch_released)
         self.assertEqual(list((self.root / "scratch").iterdir()), [])
+
+    async def test_fresh_children_read_one_worker_config_snapshot(self):
+        source, snapshot = self.root / "operator.toml", self.root / "snapshot.toml"
+        source.write_text("seed = 42\n")
+        source.chmod(0o600)
+        capture(source, snapshot)
+        await self.start(config_file=snapshot)
+        await self.worker.check_ready(deadline=monotonic() + 10)
+        first = await self.worker.request({"operation": "config"}, deadline=monotonic() + 3)
+        source.write_text("seed = 99\n")
+        await self.worker.stop()
+        await self.worker.check_ready(deadline=monotonic() + 10)
+        second = await self.worker.request({"operation": "config"}, deadline=monotonic() + 3)
+        self.assertNotEqual(first["pid"], second["pid"])
+        self.assertEqual((first["config"], second["config"]), ("seed = 42\n", "seed = 42\n"))
+        self.assertEqual(source.read_text(), "seed = 99\n")
 
     async def test_cancelled_startup_waiter_retains_the_original_failed_frame(self):
         await self.start("startup_failure")
