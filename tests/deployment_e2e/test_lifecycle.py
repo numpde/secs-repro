@@ -11,6 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory, mkdtemp
 from contextlib import contextmanager
 import shutil
+from time import monotonic, sleep
 import unittest
 from uuid import uuid4
 
@@ -149,7 +150,8 @@ class LifecycleEndToEndTests(unittest.TestCase):
                                      ("provider", "worker"))
             service = {
                 "image": "${TEST_IMAGE:?set the existing local image}",
-                "entrypoint": ["python", "-c", "import time; time.sleep(3600)"],
+                "init": True,
+                "entrypoint": ["python", "-c", "import signal,time; signal.signal(signal.SIGTERM, lambda *_: exit(0)); time.sleep(3600)"],
                 "network_mode": "none", "read_only": True,
                 "user": f"{os.getuid()}:{os.getgid()}",
                 "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],
@@ -161,8 +163,16 @@ class LifecycleEndToEndTests(unittest.TestCase):
                              "bind": {"create_host_path": False}}],
             }
             recipe = root / "compose.json"
+            draining_provider = service | {
+                "depends_on": ["worker"], "restart": "unless-stopped", "stop_grace_period": "1s",
+                "entrypoint": ["python", "-c", (
+                    "import signal,time; from pathlib import Path; "
+                    "signal.signal(signal.SIGTERM, lambda *_: (time.sleep(2), exit(0))); "
+                    "Path('/state/ready').touch(); time.sleep(3600)"
+                )],
+            }
             recipe.write_text(json.dumps({"services": {
-                "provider": service | {"depends_on": ["worker"]}, "worker": service,
+                "provider": draining_provider, "worker": service,
             }}))
             env = root / "deployment.env"
             env.write_text(f"TEST_IMAGE={image}\n")
@@ -182,7 +192,15 @@ class LifecycleEndToEndTests(unittest.TestCase):
                     self.assertEqual(record["Image"], image)
                 with self.assertRaisesRegex(ValueError, "already running"):
                     project.start(plan)
+                deadline = monotonic() + 5
+                while not (state / "ready").exists():
+                    self.assertLess(monotonic(), deadline, "Provider did not install its drain handler")
+                    sleep(0.02)
+                started = monotonic()
                 stopped = project.stop()
+                self.assertGreaterEqual(monotonic() - started, 2)
+                self.assertEqual(stopped["provider"]["State"]["ExitCode"], 0)
+                self.assertEqual(stopped["provider"]["RestartCount"], 0)
                 self.assertTrue(all(not r["State"]["Running"] for r in stopped.values()))
                 self.assertEqual(marker.read_text(), "must survive shutdown")
                 # Restart uses the same persistent input, not a new empty state.

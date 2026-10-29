@@ -45,7 +45,7 @@ class ComposeTests(unittest.TestCase):
             with patch.object(ComposeProject, "command", side_effect=RuntimeError("stop failed")) as command:
                 with self.assertRaisesRegex(RuntimeError, "stop failed"):
                     self.project.stop()
-        command.assert_called_once_with("stop", "1" * 64, timeout=77)
+        command.assert_called_once_with("stop", "--signal", "SIGTERM", "--timeout", "-1", "1" * 64, timeout=None)
 
     def test_stop_is_ordered_and_does_not_delete_containers_or_state(self):
         records = {role: record(self.project, role, n) for n, role in enumerate(("provider", "worker"), 1)}
@@ -54,20 +54,29 @@ class ComposeTests(unittest.TestCase):
             with patch.object(ComposeProject, "command") as command:
                 self.project.stop()
         self.assertEqual([call.args for call in command.call_args_list], [
-            ("stop", "1" * 64), ("stop", "2" * 64),
+            ("stop", "--signal", "SIGTERM", "--timeout", "-1", "1" * 64),
+            ("stop", "--signal", "SIGTERM", "--timeout", "-1", "2" * 64),
         ])
 
-    def test_unbounded_grace_is_rejected_before_stopping_any_service(self):
-        for grace in (None, -1, "30", True):
-            records = [record(self.project, "provider", 1),
-                       record(self.project, "worker", 2, grace=grace)]
+    def test_operator_interrupt_during_provider_drain_preserves_worker(self):
+        records = {role: record(self.project, role, n) for n, role in enumerate(("provider", "worker"), 1)}
+        with patch.object(ComposeProject, "inventory", return_value=records), patch.object(
+            ComposeProject, "command", side_effect=KeyboardInterrupt
+        ) as command:
+            with self.assertRaises(KeyboardInterrupt):
+                self.project.stop()
+        command.assert_called_once_with("stop", "--signal", "SIGTERM", "--timeout", "-1", "1" * 64, timeout=None)
+
+    def test_container_grace_does_not_limit_selected_report_drain(self):
+        for grace in (None, -1, 1):
             with self.subTest(grace=grace):
-                with patch.object(ComposeProject, "command", side_effect=(
-                    b"1" * 64 + b"\n" + b"2" * 64 + b"\n", json.dumps(records).encode(),
-                )) as command:
-                    with self.assertRaisesRegex(ValueError, "shutdown grace"):
-                        self.project.stop()
-                self.assertEqual([call.args[0] for call in command.call_args_list], ["ps", "inspect"])
+                before = {"provider": record(self.project, "provider", 1, grace=grace)}
+                after = {"provider": record(self.project, "provider", 1, running=False)}
+                with patch.object(ComposeProject, "inventory", side_effect=(before, after)), patch.object(
+                    ComposeProject, "command", return_value=b""
+                ) as command:
+                    self.project.stop()
+                command.assert_called_once_with("stop", "--signal", "SIGTERM", "--timeout", "-1", "1" * 64, timeout=None)
 
     def test_logs_remain_accessible_without_a_finite_shutdown_grace(self):
         document = record(self.project, "provider", 1, grace=-1)

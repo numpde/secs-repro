@@ -125,25 +125,20 @@ class ComposeProject:
     def stop(self) -> dict[str, dict]:
         """Stop admitted IDs in dependency order, preserving containers and durable data.
 
-        Stop the job-accepting provider first so it can finish/cancel work while
-        workers still exist. If stopping it fails, do not proceed to the worker.
+        Stop admission first and wait for admitted work and selected delivery
+        reports while workers still exist. Drain has no forced-kill deadline.
+        An interrupted or failed stop leaves the worker available for recovery.
         This operation needs neither deployment config nor credential contents.
         """
         records = self.inventory()
-        for record in records.values():
-            grace = record["Config"].get("StopTimeout")
-            if record["State"]["Running"] and (type(grace) is not int or grace < 0):
-                raise ValueError(
-                    f"Container {record['Id']} has no finite shutdown grace period; "
-                    "no containers stopped."
-                )
         try:
             for role in self.stop_order:
                 record = records.get(role)
                 if record is not None and record["State"]["Running"]:
-                    # The running container owns its grace period, even if the
-                    # recipe has since changed. Let Docker apply that same value.
-                    self.command("stop", record["Id"], timeout=record["Config"]["StopTimeout"] + 30)
+                    # Docker's manual stop suppresses restart:unless-stopped;
+                    # -1 waits without escalating to SIGKILL. The CLI must also
+                    # remain free of a timeout while the daemon owns this drain.
+                    self.command("stop", "--signal", "SIGTERM", "--timeout", "-1", record["Id"], timeout=None)
             stopped = self.inventory()
             if any(record["State"]["Running"] for record in stopped.values()):
                 raise RuntimeError("A project container is still running.")
