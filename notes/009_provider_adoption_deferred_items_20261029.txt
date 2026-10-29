@@ -222,3 +222,24 @@ different group-access mode. SECS additionally initializes a native session
 lock without replacing an existing inode. A shared helper must preserve these
 different owners and modes rather than combine their lifecycles. Until a shared
 contract is designed and qualified, each existing owner retains its own check.
+
+Acquisition network and retirement
+----------------------------------
+
+Owner: SECS deployment and shared SDK maintainers. Revisit when a qualified
+standalone bootstrap owner and its cold-start acquisition contract are agreed.
+The current SECS download proxy binds outbound TCP to the chosen device but
+uses host name resolution; it does not establish device-bound DNS. An explicit
+NETWORK_INTERFACE selector and an independently tested NMRPeak-derived proxy
+were evaluated locally, but neither was selected or published: copying DNS
+protocol code would create another owner, while a preloaded SDK wheel introduces
+a first-acquisition prerequisite. Base-image bootstrap and GitHub updates may
+use the default connection; those exceptions do not settle other download DNS.
+
+A disposable Docker probe showed that TERM to the current wrapper did not retire
+its running container. Commit 5ddf70a preserves mounted staging inputs when a
+Docker operation has not returned successfully; an independent TERM probe
+observed the preserved stage while its container still ran. This does not prove
+container or BuildKit retirement. A future acquisition owner must preserve the
+exact container identity, prove retirement before removing any stage, and report
+unconfirmed effects. Avoid broad cleanup of shared Docker or BuildKit state.
