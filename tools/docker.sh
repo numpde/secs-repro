@@ -35,30 +35,92 @@ if [[ "$network" != bridge && "$network" != default ]]; then
     printf 'WLAN routing supports Docker bridge/default downloads, not --network %s.\n' "${network:-<unset>}" >&2
     exit 2
 fi
+if [[ "${arguments[$subcommand_index]}" == run ]]; then
+    for argument in "${arguments[@]}"; do
+        if [[ $argument == --cidfile || $argument == --cidfile=* ]]; then
+            printf '%s\n' 'Interface-bound acquisition owns its CID receipt; do not supply --cidfile.' >&2
+            exit 2
+        fi
+    done
+fi
 
-scratch="$(mktemp -d)"
+scratch="$(realpath -e -- "$(mktemp -d)")"
 proxy_pid=''
 docker_pid=''
+proxy_starting=0
+docker_starting=0
+worker_pending=0
+pending_signal=0
+request_stop() {
+    if [[ "$proxy_starting" == 1 || "$docker_starting" == 1 ]]; then
+        [[ "$pending_signal" == 0 ]] && pending_signal=$1
+        return 0
+    else
+        exit "$1"
+    fi
+}
+retire_worker() {
+    local cid receipt="$scratch/worker.cid" observed
+    [[ -f "$receipt" && ! -L "$receipt" ]] || return 1
+    cid=$(<"$receipt")
+    [[ "$cid" =~ ^[a-f0-9]{64}$ ]] || return 1
+    { cmp -s "$receipt" <(printf '%s' "$cid") || cmp -s "$receipt" <(printf '%s\n' "$cid"); } || return 1
+    local -a engine=(docker "${arguments[@]:0:$subcommand_index}")
+    observed=$(timeout --signal=TERM --kill-after=2 10 "${engine[@]}" ps --all --no-trunc --quiet --filter "id=$cid") || return 1
+    [[ -z "$observed" || "$observed" == "$cid" ]] || return 1
+    if [[ -n "$observed" ]]; then
+        timeout --signal=TERM --kill-after=2 10 "${engine[@]}" rm --force "$cid" >/dev/null || return 1
+    fi
+    observed=$(timeout --signal=TERM --kill-after=2 10 "${engine[@]}" ps --all --no-trunc --quiet --filter "id=$cid") || return 1
+    [[ -z "$observed" ]]
+}
 cleanup() {
     local status=$?
+    local uncertain=0
     trap - EXIT HUP INT TERM
+    if [[ "$proxy_starting" == 1 || "$docker_starting" == 1 ]]; then
+        uncertain=1
+    fi
     if [[ -n "$docker_pid" ]]; then
-        kill "$docker_pid" 2>/dev/null || true
+        for child in $(jobs -pr); do
+            [[ "$child" == "$docker_pid" ]] && kill -KILL "$docker_pid" 2>/dev/null || true
+        done
         wait "$docker_pid" 2>/dev/null || true
     fi
-    if [[ -n "$proxy_pid" ]]; then
-        kill "$proxy_pid" 2>/dev/null || true
+    if [[ "$worker_pending" == 1 ]]; then
+        if [[ "${arguments[$subcommand_index]}" == run ]]; then
+            retire_worker || uncertain=1
+        else
+            uncertain=1
+        fi
+    fi
+    if [[ "$uncertain" == 0 && -n "$proxy_pid" ]]; then
+        for child in $(jobs -pr); do
+            [[ "$child" == "$proxy_pid" ]] && kill -KILL "$proxy_pid" 2>/dev/null || true
+        done
         wait "$proxy_pid" 2>/dev/null || true
     fi
-    rm -rf -- "$scratch"
+    if [[ "$uncertain" == 0 ]]; then
+        rm -rf -- "$scratch"
+    else
+        printf 'Docker retirement is unconfirmed; retain %s and inspect the owned worker/proxy before retrying.\n' "$scratch" >&2
+        printf '%s\n' "$proxy_pid" > "$scratch/proxy.pid"
+        [[ "$status" == 0 ]] && status=1
+    fi
     exit "$status"
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'request_stop 129' HUP
+trap 'request_stop 130' INT
+trap 'request_stop 143' TERM
 
 readonly ready_file="$scratch/proxy.port"
+proxy_starting=1
 python3 "$(dirname -- "${BASH_SOURCE[0]}")/bound_http_proxy.py" \
     --interface "$wlan_interface" --ready-file "$ready_file" &
 proxy_pid=$!
+proxy_starting=0
+[[ "$pending_signal" == 0 ]] || exit "$pending_signal"
 for _ in {1..100}; do
     [[ -s "$ready_file" ]] && break
     kill -0 "$proxy_pid" 2>/dev/null || {
@@ -84,6 +146,7 @@ fi
 injected=()
 if [[ "${arguments[$subcommand_index]}" == run ]]; then
     injected=(
+        --cidfile "$scratch/worker.cid"
         --env "HTTP_PROXY=$proxy_url"
         --env "HTTPS_PROXY=$proxy_url"
         --env "http_proxy=$proxy_url"
@@ -103,7 +166,17 @@ arguments=(
     "${arguments[@]:$((subcommand_index + 1))}"
 )
 
-docker "${arguments[@]}" &
+docker_starting=1
+worker_pending=1
+docker "${arguments[@]}" <&0 &
 docker_pid=$!
-wait "$docker_pid"
-docker_pid=''
+docker_starting=0
+[[ "$pending_signal" == 0 ]] || exit "$pending_signal"
+if wait "$docker_pid"; then
+    docker_pid=''
+    worker_pending=0
+else
+    status=$?
+    docker_pid=''
+    exit "$status"
+fi

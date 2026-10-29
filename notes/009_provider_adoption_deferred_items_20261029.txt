@@ -239,7 +239,11 @@ use the default connection; those exceptions do not settle other download DNS.
 A disposable Docker probe showed that TERM to the current wrapper did not retire
 its running container. Commit 5ddf70a preserves mounted staging inputs when a
 Docker operation has not returned successfully; an independent TERM probe
-observed the preserved stage while its container still ran. This does not prove
-container or BuildKit retirement. A future acquisition owner must preserve the
-exact container identity, prove retirement before removing any stage, and report
-unconfirmed effects. Avoid broad cleanup of shared Docker or BuildKit state.
+observed the preserved stage while its container still ran. The interface-bound
+run path now records Docker's CID and attempts to remove and verify that exact
+container after interruption. A real Docker TERM test establishes retirement
+after the CID is present; missing or invalid receipts and failed removal remain
+unconfirmed and retain evidence. The default-route passthrough and BuildKit
+retirement remain unqualified. A future acquisition owner must cover those paths
+and cancellation before CID publication without guessing an identity. Avoid
+broad cleanup of shared Docker or BuildKit state.
