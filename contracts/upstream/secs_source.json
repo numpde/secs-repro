@@ -1,0 +1,6 @@
+{
+  "schema_id": "secs.source-lock.v1",
+  "submodule_path": "secs",
+  "repository": "https://github.com/numpde/fork-of-secs",
+  "revision": "0414b5f9d65e61a6ba00aa046e24b8e48ce230b1"
+}

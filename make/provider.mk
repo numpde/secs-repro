@@ -36,6 +36,7 @@ test/deployment/e2e:
 provider/support/check:
 	@python3 -B tools/project_support_catalog.py check docs/index.html
 	@python3 -B tools/check_support_catalog_boundary.py src/secs_inference
+	@python3 -B tools/check_secs_source_lock.py
 
 provider/support/write:
 	@python3 -B tools/project_support_catalog.py write docs/index.html
