@@ -58,8 +58,15 @@ Choose an upstream-owned verified-read or streaming seam for the candidate
 index and table, and qualify the actual bundle, identity continuity, memory and
 performance before enabling retries. Hashing candidate paths and reopening them
 is insufficient; duplicating their loader in the provider would create another
-scientific authority. The local checkpoint loader still needs its first-child
-identity bound across replacement children.
+scientific authority. Parquet readers may seek or read only part of a file, so
+hashing only the chunks requested by the parser does not establish the full
+manifest digest. Both complete artifacts must be bound to the same approved
+manifest, whose identity is anchored independently of the mutable bundle, and
+preserve the index-to-table row order; matching row counts alone
+does not establish that correspondence. The upstream loader's `allow_partial`
+behavior also needs an explicit identity contract rather than an assumed full
+file match. The local checkpoint loader still needs its first-child identity
+bound across replacement children.
 Retain the current single-search behavior until this proof and the other retry
 eligibility, source, native-retirement and deadline requirements are complete.
 
