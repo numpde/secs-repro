@@ -280,6 +280,11 @@ exported no image and did not prune or reset shared Docker state. Its matching
 local build-history reference was p6r6jkf9xghaa7b5qiaded77z (buildx 0.37.1);
 history is subject to Docker's retention policy.
 
+The uncertainty also applies to the repository's offline image builds; the
+frontend-reference image is the only Make-owned build that additionally uses
+network access. Moving its downloads out of BuildKit would narrow network
+exposure but would not, by itself, establish offline build retirement.
+
 A separate disposable docker-container builder was tested with a pinned
 BuildKit 0.34.1 image and no builder network. After a scratch build's executor
 started, TERM was sent to the build client and the exact inspected builder CID
