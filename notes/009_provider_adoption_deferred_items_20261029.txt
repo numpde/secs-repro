@@ -63,6 +63,31 @@ identity bound across replacement children.
 Retain the current single-search behavior until this proof and the other retry
 eligibility, source, native-retirement and deadline requirements are complete.
 
+Held Attempt capacity and availability
+--------------------------------------
+
+Owner: SECS runtime maintainer. Revisit when the shared held-owner check is
+released and before continuing unrelated Jobs while an Attempt remains held.
+
+The current provider has one scientific worker and one live bookkeeping slot.
+These are different limits: a retired worker may leave a held claim even when
+the scientific slot is free. Keeping only one claim and stopping on uncertainty
+is simple, but the live-only owner is lost when the process exits. Retaining a
+held claim while continuing other Jobs would need a bounded claim and byte budget,
+confirmed worker retirement and fresh readiness, and local exclusion of the
+held Job. Prove a held Job followed by an unrelated Job, capacity saturation,
+stale discovery and shutdown before choosing that policy; do not add capacity
+or a wait loop merely to imply persistence.
+
+SECS asks the server for Jobs without a provider Attempt, using a fresh START
+key for each selected Job. The server's feed excludes a Job after any Attempt
+by that provider, regardless of its state; the feed is a read-only snapshot and
+an unconfirmed START may still race. Restart does not reconstruct the old claim
+or replay its START; the server owns Attempt expiry. Hello advertises capability
+and refreshes the directory, not immediate free capacity or Job admission.
+Withdrawing an offering does not itself gate the feed or admission for Jobs
+selected for the provider, and any withdrawal acknowledgement can be unconfirmed.
+
 Deployment and recovery rehearsal
 --------------------------------
 
