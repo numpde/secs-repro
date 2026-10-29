@@ -266,6 +266,19 @@ exported no image and did not prune or reset shared Docker state. Its matching
 local build-history reference was p6r6jkf9xghaa7b5qiaded77z (buildx 0.37.1);
 history is subject to Docker's retention policy.
 
+A separate disposable docker-container builder was tested with a pinned
+BuildKit 0.34.1 image and no builder network. After a scratch build's executor
+started, TERM was sent to the build client and the exact inspected builder CID
+was force-removed while the recorded executor was still alive. That executor
+PID/start-time pair was absent
+after removal, as was the builder container. Its unattached state volume,
+private builder registration and test-only image reference were then removed.
+This single local witness does not prove all descendant or mount retirement,
+startup races, proxy reachability, or suitability for deployment. The image's
+published SBOM had OSV matches in bundled Go components; the probe used only
+controlled inputs. Revisit a per-build owner only after those boundaries and
+the exact image's advisories are qualified.
+
 The retired host proxy could hold caller output pipes open when its worker's
 retirement was uncertain. The replacement runs detached with bounded Docker
 logs and a separate CID; its launcher retires the worker first and retains the
