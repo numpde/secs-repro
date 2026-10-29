@@ -36,6 +36,12 @@ def scientific_failure_evidence(frame):
         if type(current) is not dict:
             return {"invalid_structure": True}
         result = {}
+        model_failure = current.get("model_failure")
+        if (current.get("outcome") == "failed" and current.get("exception_type") == "ModelExecutionFailed"
+                and type(model_failure) is dict and set(model_failure) == {"modality", "stage"}
+                and model_failure["modality"] in ("h_nmr", "smiles")
+                and model_failure["stage"] in ("forward", "completion")):
+            result["model_failure"] = dict(model_failure)
         name = current.get("exception_type")
         if type(name) is str and name in _BUILTIN_EXCEPTION_NAMES:
             result["exception_type"] = name

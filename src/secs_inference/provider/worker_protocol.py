@@ -9,6 +9,7 @@ import socket
 import struct
 
 from secs_inference.provider.diagnostics import exception_evidence
+from secs_inference.model_failure import ModelExecutionFailed
 
 
 _MAX_MESSAGE_BYTES = 2 * 1024 * 1024
@@ -50,6 +51,8 @@ def serve_scientific_session(connection: socket.socket, load_handler) -> None:
                 # The process boundary owns unexpected-failure serialization,
                 # including imports or setup outside the scientific reader's catches.
                 response = {"outcome": "failed", **exception_evidence(error)}
+                if type(error) is ModelExecutionFailed and command.get("operation") == "execute":
+                    response["model_failure"] = {"modality": error.modality, "stage": error.stage}
                 send(connection, response)
                 continue
             send(connection, response)

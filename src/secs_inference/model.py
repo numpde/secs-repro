@@ -11,6 +11,7 @@ import numpy as np
 from numpy.typing import NDArray
 import torch
 from torch.nn import functional as F
+from secs_inference.model_failure import ModelExecutionFailed
 
 
 FloatArray = NDArray[np.float32]
@@ -152,8 +153,16 @@ class SecsInference:
 
         model_input = torch.from_numpy(model_order).to(device=self._device).reshape(1, 1, -1)
         with self._autocast_context():
-            embedding = self._model.encode_modality(model_input, modality="h_nmr")
-        return embedding.squeeze(0).float().cpu().numpy()
+            try:
+                embedding = self._model.encode_modality(model_input, modality="h_nmr")
+            except Exception as cause:
+                raise ModelExecutionFailed("h_nmr", "forward") from cause
+        embedding = embedding.squeeze(0)
+        try:
+            result = embedding.float().cpu()
+        except Exception as cause:
+            raise ModelExecutionFailed("h_nmr", "completion") from cause
+        return result.numpy()
 
     @torch.inference_mode()
     def embed_smiles(self, smiles: list[str]) -> FloatArray:
@@ -168,8 +177,15 @@ class SecsInference:
             )
             model_input = tokens["input_ids"].to(self._device), tokens["attention_mask"].to(self._device)
             with self._autocast_context():
-                embedding = self._model.encode_modality(model_input, modality="smiles")
-            batch_embeddings.append(embedding.float().cpu())
+                try:
+                    embedding = self._model.encode_modality(model_input, modality="smiles")
+                except Exception as cause:
+                    raise ModelExecutionFailed("smiles", "forward") from cause
+            try:
+                completed = embedding.float().cpu()
+            except Exception as cause:
+                raise ModelExecutionFailed("smiles", "completion") from cause
+            batch_embeddings.append(completed)
         return torch.cat(batch_embeddings).numpy()
 
     def rank(self, spectrum: Sequence[float] | FloatArray, candidates: list[str]) -> list[tuple[str, float]]:

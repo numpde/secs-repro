@@ -10,6 +10,17 @@ from secs_inference.provider.diagnostics import exception_evidence, scientific_f
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_model_failure_fact_requires_owned_failed_frame_and_known_fields(self):
+        fact = {"modality": "h_nmr", "stage": "forward"}
+        for frame in (
+            {"outcome": "ready", "exception_type": "ModelExecutionFailed", "model_failure": fact},
+            {"outcome": "failed", "exception_type": "RuntimeError", "model_failure": fact},
+            {"outcome": "failed", "exception_type": "ModelExecutionFailed",
+             "model_failure": {**fact, "private": "value"}},
+        ):
+            with self.subTest(frame=frame):
+                self.assertNotIn("model_failure", scientific_failure_evidence(frame))
+
     def test_scientific_operator_projection_is_bounded_without_changing_the_private_frame(self):
         member = {"exception_type": "ValueError", "detail": "private scientific input"}
         frame = {"exception_type": "ExceptionGroup", "exceptions": [member] * 1000}
