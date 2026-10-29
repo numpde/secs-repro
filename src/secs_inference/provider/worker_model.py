@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import tomllib
 from typing import TYPE_CHECKING
+from provider_core.startup_file import StartupFileRejected, read_startup_file
 from secs_inference.provider.configuration_error import ConfigurationError
 from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.outcomes import AnalysisOutcome, NO_STARTING_CANDIDATES_MESSAGE
@@ -218,7 +219,10 @@ def main(arguments=None) -> int:
     path = Path("/run/config/worker/worker.toml")
     operation = f"reading scientific worker configuration from {path}"
     try:
-        raw = path.read_bytes()
+        try:
+            raw = read_startup_file(path, maximum_bytes=65536, label="Scientific worker configuration")
+        except StartupFileRejected as error:
+            raise ConfigurationError(str(error)) from error
         operation = f"parsing scientific worker configuration from {path}"
         try:
             document = tomllib.loads(raw.decode("utf-8"))
@@ -245,6 +249,13 @@ def main(arguments=None) -> int:
         # Configuration and scientific protocol errors own their explanations. Parser
         # and library exception text can instead echo arbitrary supplied values.
         def owned_details(cause):
+            if type(cause) is StartupFileRejected:
+                details = {}
+                if cause.cause is not None:
+                    details["read_cause"] = exception_evidence(cause.cause)
+                if cause.cleanup_failures:
+                    details["close_failures"] = [exception_evidence(item) for item in cause.cleanup_failures]
+                return details
             return {"message": str(cause)} if isinstance(cause, (ConfigurationError, WorkerError)) else {}
         evidence = exception_evidence(error, boundary_details=owned_details)
         reason = evidence.get("message") or evidence.get("reason") or "an unexpected internal error occurred"

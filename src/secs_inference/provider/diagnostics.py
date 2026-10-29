@@ -9,6 +9,7 @@ import socket
 import ssl
 import traceback
 
+from provider_core.startup_file import StartupFileRejected
 
 
 _BUILTIN_EXCEPTION_NAMES = frozenset(
@@ -111,7 +112,9 @@ def exception_evidence(error: BaseException, *, boundary_details=None) -> dict:
             evidence.update(boundary_details(current))
         if current.__cause__ is not None:
             evidence["cause"] = describe(current.__cause__)
-        elif current.__context__ is not None:
+        elif (current.__context__ is not None
+              and not (type(current) is StartupFileRejected and "read_cause" in evidence
+                       and current.__context__ is current.cause)):
             # Suppressing a textual traceback does not erase the earlier
             # failure. Context records chronology, not a claim of causation.
             evidence["context"] = describe(current.__context__)
