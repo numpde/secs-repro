@@ -12,18 +12,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class AcquisitionRetirementTests(unittest.TestCase):
-    def test_networked_run_preserves_input_output_and_exit_status(self):
-        for interface in ("lo", ""):
-            with self.subTest(interface=interface):
-                self._check_run_input_output_and_exit_status(interface)
+    def test_run_preserves_input_output_and_exit_status(self):
+        for interface, network in (("lo", "bridge"), ("system", "bridge"), ("", "none")):
+            with self.subTest(interface=interface, network=network):
+                self._check_run_input_output_and_exit_status(interface, network)
 
-    def _check_run_input_output_and_exit_status(self, interface):
+    def _check_run_input_output_and_exit_status(self, interface, network):
         image = os.environ["DEPLOYMENT_TEST_IMAGE"]
-        environment = os.environ | {"SECS_NETWORK_INTERFACE_INPUT": interface or "system",
-                                    "SECS_NETWORK_INTERFACE_ORIGIN": "command line"}
+        environment = os.environ | {"SECS_NETWORK_INTERFACE_INPUT": interface,
+                                    "SECS_NETWORK_INTERFACE_ORIGIN": "command line" if interface else "undefined"}
         result = subprocess.run(
             ["bash", str(ROOT / "tools/docker.sh"), "--context", "default", "run", "--rm", "-i",
-             "--network", "bridge", "--pull", "never", "--entrypoint", "sh", image,
+             "--network", network, "--pull", "never", "--entrypoint", "sh", image,
              "-c", "cat; printf failure >&2; exit 7"],
             cwd=ROOT, env=environment, input=b"exact-stream\n", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             timeout=20,
@@ -33,18 +33,18 @@ class AcquisitionRetirementTests(unittest.TestCase):
         self.assertIn(b"failure", result.stderr)
 
     def test_term_retires_the_running_container(self):
-        for interface in ("lo", ""):
-            with self.subTest(interface=interface):
-                self._check_term_retires_container(interface)
+        for interface, network in (("lo", "bridge"), ("system", "bridge"), ("", "none")):
+            with self.subTest(interface=interface, network=network):
+                self._check_term_retires_container(interface, network)
 
-    def _check_term_retires_container(self, interface):
+    def _check_term_retires_container(self, interface, network):
         image = os.environ["DEPLOYMENT_TEST_IMAGE"]
         name = "secs-acquisition-proof-" + uuid4().hex
-        environment = os.environ | {"SECS_NETWORK_INTERFACE_INPUT": interface or "system",
-                                    "SECS_NETWORK_INTERFACE_ORIGIN": "command line"}
+        environment = os.environ | {"SECS_NETWORK_INTERFACE_INPUT": interface,
+                                    "SECS_NETWORK_INTERFACE_ORIGIN": "command line" if interface else "undefined"}
         process = subprocess.Popen(
             ["bash", str(ROOT / "tools/docker.sh"), "--context", "default", "run", "--rm",
-             "--name", name, "--network", "bridge", "--pull", "never", "--entrypoint", "sh",
+             "--name", name, "--network", network, "--pull", "never", "--entrypoint", "sh",
              image, "-c", "sleep 300"],
             cwd=ROOT, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )

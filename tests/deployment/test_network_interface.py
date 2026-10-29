@@ -71,6 +71,17 @@ class NetworkInterfaceTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIsNotNone(receipt)
 
+    def test_offline_run_owns_only_missing_cid_and_keeps_proxy_environment(self):
+        result, receipt = self.invoke(['run', '--network', 'none', 'image'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(receipt.count('--cidfile\n'), 1)
+        self.assertNotIn('HTTP_PROXY=', receipt)
+        for option in (['--cidfile', '/tmp/caller.cid'], ['--cidfile=/tmp/caller.cid']):
+            with self.subTest(option=option):
+                result, receipt = self.invoke(['run', '--network', 'none', *option, 'image'])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(receipt.splitlines(), ['--context', 'default', 'run', '--network', 'none', *option, 'image'])
+
     def test_invalid_and_legacy_choices_fail_before_docker(self):
         for selection, origin, old in [('missing-device', 'command line', 'undefined'), ('', 'environment', 'undefined'),
                                        ('system', 'command line', 'command line')]:

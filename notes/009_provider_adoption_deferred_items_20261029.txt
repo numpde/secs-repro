@@ -239,11 +239,13 @@ A disposable Docker probe showed that TERM to the current wrapper did not retire
 its running container. Commit 5ddf70a preserves mounted staging inputs when a
 Docker operation has not returned successfully; an independent TERM probe
 observed the preserved stage while its container still ran. The interface-bound
-run path and explicit bridge/default route run path now record Docker's CID and
-attempt to remove and verify that exact container after interruption. A real
-Docker TERM test establishes retirement after the CID is present in both paths;
+run path, explicit bridge/default route run path, and offline runs without a
+caller-owned CID now record Docker's CID and attempt to remove and verify that
+exact container after interruption. A real Docker TERM test establishes
+retirement after the CID is present in all three paths;
 missing or invalid receipts and failed removal remain unconfirmed and retain
-evidence. Other passthrough runs and BuildKit retirement remain unqualified. A
+evidence. Caller-owned CID runs retain their own cleanup; BuildKit retirement
+remains unqualified. A
 future acquisition owner must cover those paths and cancellation before CID
 publication without guessing an identity. Avoid
 broad cleanup of shared Docker or BuildKit state.
