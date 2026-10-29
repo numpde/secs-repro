@@ -74,7 +74,7 @@ provider/image:
 		printf '%s\n' "$(PROVIDER_PYTHON_BASE)"
 		cat containers/provider/Dockerfile containers/provider/Dockerfile.dockerignore \
 			requirements/provider.lock "$(PROVIDER_WHEELHOUSE)/.complete"
-		sha256sum src/secs_inference/__init__.py
+		sha256sum src/secs_inference/__init__.py src/secs_inference/model_failure.py
 		find src/secs_inference/provider -type f \
 			! -path '*/__pycache__/*' ! -name '*.py[co]' -print0 \
 			| LC_ALL=C sort -z | xargs -0 sha256sum

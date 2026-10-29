@@ -15,6 +15,7 @@ RUN cd /opt/provider/wheelhouse \
     && rm -rf /opt/provider/wheelhouse /opt/provider/requirements.lock
 
 COPY src/secs_inference/__init__.py /opt/secs_inference/__init__.py
+COPY src/secs_inference/model_failure.py /opt/secs_inference/model_failure.py
 COPY src/secs_inference/provider/ /opt/secs_inference/provider/
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PROVIDER_CORE_IN_CONTAINER=1 \
