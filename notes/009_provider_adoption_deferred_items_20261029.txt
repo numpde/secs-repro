@@ -2,9 +2,9 @@ SECS provider adoption: deferred work and qualification limits
 ============================================================
 2026-10-29
 
-Common design and active decisions:
-  <local repository checkout>
-  <local repository checkout>
+Common design and active decisions in the nmr-provider-tools repository:
+  notes/013_common_provider_lifecycle_design_20261028.txt
+  notes/014_joint_provider_refactor_decisions_20261028.txt
 
 These items do not waive the common design's correctness requirements or
 constitute deployment approval. Independent work deadlines, original native

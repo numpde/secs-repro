@@ -62,8 +62,8 @@ Admitted input
 --------------
 
 The reader accepts one already materialized, read-only Bruker experiment
-directory.  Relevant members of
-``<local Bruker source directory>`` include:
+directory.  Relevant members of the inert Bruker fixture at
+``tests/fixtures/bruker/F3697/1`` include:
 
     F3697/1/
     |-- acqus
@@ -293,7 +293,7 @@ Local sources inspected:
   ``5ab78f61e9fb679f3f0b9823be5217ae250e213f``;
 * ``nmr-api-v1`` revision
   ``97374922bb9f418c621770de4dfdf8abf346f33e``;
-* ``<local Bruker source directory>`` as inert Bruker files.
+* ``tests/fixtures/bruker/F3697/1`` as inert Bruker files.
 
 Primary external sources inspected on 2026-08-29:
 
