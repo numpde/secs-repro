@@ -27,7 +27,7 @@ def science_child():
     assert Path(model.__file__).resolve() == Path(
         distribution("secs-inference").locate_file("secs_inference/model.py")
     ).resolve()
-    assert version("provider-core") == "0.5.3"
+    assert version("provider-core") == "0.5.4"
     import_module("provider_core.upload_file")
     import_module("secs_inference.provider.worker")
     assert all(find_spec(name) is None for name in ("httpx", "httpcore", "cryptography", "http_sf", "tomli_w"))
@@ -49,7 +49,7 @@ def native_owner():
 
     installed = distribution("provider-core")
     package = import_module("provider_core")
-    assert installed.version == "0.5.3"
+    assert installed.version == "0.5.4"
     assert sys.prefix == "/usr/local"
     assert Path(package.__file__).resolve() == Path(installed.locate_file("provider_core/__init__.py")).resolve()
     assert not Path("/opt/native").exists()
