@@ -98,12 +98,12 @@ help:
 	'      The mock index contains eight molecules and requires CPU; omitted TARGET prompts.' \
 	'      Mock runner performs no model work; it cannot be combined with a mock index.' \
 	'      Copy committed examples into private config/deployments/<name>; no services start.' \
-	'  make provider/deployment/config DEPLOYMENT=<name>' \
+	'  make provider/deployment/config DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no]' \
 	'      Render the selected local images and paths without starting services.' \
 	'  make provider/credential/install DEPLOYMENT=<name> SOURCE=<private-file>' \
 	'  make provider/interpreter-key/install DEPLOYMENT=<name> SOURCE=<private-file>' \
 	'      Install an owner-only secret once; existing files are never overwritten.' \
-	'  make provider/deployment/up DEPLOYMENT=<name>' \
+	'  make provider/deployment/up DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no]' \
 	'  make provider/deployment/status DEPLOYMENT=<name>' \
 	'  make provider/logs DEPLOYMENT=<name>' \
 	'  make provider/deployment/down DEPLOYMENT=<name>' \

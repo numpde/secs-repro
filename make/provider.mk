@@ -10,10 +10,12 @@ provider/deployment/init provider/deployment/config provider/deployment/up provi
 provider/deployment/init: private export SECS_WORKER_TARGET := $(if $(filter command line,$(origin TARGET)),$(value TARGET),)
 provider/deployment/init: private export SECS_USE_MOCK_INDEX := $(if $(filter command line,$(origin USE_MOCK_INDEX)),$(value USE_MOCK_INDEX),0)
 provider/deployment/init: private export SECS_USE_MOCK_RUNNER := $(if $(filter command line,$(origin USE_MOCK_RUNNER)),$(value USE_MOCK_RUNNER),0)
-provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs: private export SECS_MOCK_FLAG_SUPPLIED := $(if $(filter command line,$(origin USE_MOCK_INDEX) $(origin USE_MOCK_RUNNER)),1,0)
+provider/deployment/config provider/deployment/up: private export SECS_USE_MOCK_INDEX := $(if $(filter command line,$(origin USE_MOCK_INDEX)),$(value USE_MOCK_INDEX),)
+provider/deployment/config provider/deployment/up: private export SECS_MOCK_FLAG_SUPPLIED := $(if $(filter command line,$(origin USE_MOCK_RUNNER)),1,0)
+provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs: private export SECS_MOCK_FLAG_SUPPLIED := $(if $(filter command line,$(origin USE_MOCK_INDEX) $(origin USE_MOCK_RUNNER)),1,0)
 provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs:
 	@cd "$(REPOSITORY_ROOT)"
-	if [[ "$${SECS_MOCK_FLAG_SUPPLIED:-0}" == 1 ]]; then printf '%s\n' 'Select USE_MOCK_INDEX or USE_MOCK_RUNNER during provider/deployment/init; the saved worker configuration selects the mode.' >&2; exit 2; fi
+	if [[ "$${SECS_MOCK_FLAG_SUPPLIED:-0}" == 1 ]]; then printf '%s\n' 'USE_MOCK_RUNNER is selected during init; USE_MOCK_INDEX is accepted during init, config or up.' >&2; exit 2; fi
 	python3 -m deployment.provider_deployment "$(@F)" "$${DEPLOYMENT_INPUT}"
 
 .PHONY: provider/credential/install provider/interpreter-key/install

@@ -25,12 +25,21 @@ represent a full scientific search. Omitting the flag selects the full index.
 Alternatively, initialize with `TARGET=cpu USE_MOCK_RUNNER=yes` to return a
 clearly marked mock result without an interpreter, model, or candidate files.
 The mock runner and mock index cannot be selected together.
-These flags select the saved worker configuration during initialization; they do
-not change an existing deployment when it starts.
-Use either mock mode with a separate test provider principal or a disposable API.
-Reusing a scientific provider principal can consume Jobs already queued for that
-principal, even after its mock offering is advertised. A separate credential for
-the same principal does not isolate its Jobs.
+The mock runner is selected during initialization. For a deployment initialized
+with a full CPU worker, pass `USE_MOCK_INDEX=yes` to `provider/deployment/config`
+or `provider/deployment/up` to select the limited index for that invocation.
+Omitting the flag uses the saved worker configuration. Stop a running deployment
+before starting it with a different selection.
+For a deployment initialized before this option was added, create the private
+settings file once with `cp --no-clobber config/worker.mock-index.toml.example
+config/deployments/<name>/worker.mock-index.toml`, then set its mode to `0600`.
+Mock modes can consume Jobs already queued for the selected provider, even after
+its mock offering is advertised. A separate test provider principal or disposable
+API isolates those Jobs; a separate credential for the same principal does not.
+For example, initialize `localhost` with the CPU worker and use
+`make provider/deployment/up DEPLOYMENT=localhost USE_MOCK_INDEX=yes` when the
+limited index is wanted. Initialize `localhost-mock` with
+`TARGET=cpu USE_MOCK_RUNNER=yes` and install its own mock-provider credential.
 The candidate index can be built with `make candidates TARGET=cpu` or
 `TARGET=gpu CANDIDATE_GPU=GPU-<uuid>`; the existing index and its evidence are
 never replaced by that command.

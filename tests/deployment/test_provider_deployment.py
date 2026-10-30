@@ -20,6 +20,7 @@ from deployment.provider_deployment import (
     _admit_worker_image,
     _host_gpu_uuid,
     _provider_network,
+    _render_deployment,
     _status,
     install_secret,
     main,
@@ -32,6 +33,38 @@ from deployment.worker_target import worker_target
 
 
 class ProviderDeploymentTests(unittest.TestCase):
+    def test_optional_mock_index_uses_private_config_without_changing_full_worker(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config/deployments/example"
+            config.mkdir(parents=True, mode=0o700)
+            full = config / "worker.toml"
+            full.write_text('device = "cpu"\n')
+            full.chmod(0o600)
+            mock = config / "worker.mock-index.toml"
+            mock.write_text('device = "cpu"\nmock_index = true\n')
+            mock.chmod(0o600)
+            def plan(*_args):
+                return {"services": {"provider": {}, "worker": {"command": ["python -m secs_inference.provider.worker_model"]}}}
+            with patch("deployment.provider_deployment._project") as project, \
+                 patch.object(ComposeProject, "render", side_effect=plan) as render, \
+                 patch("deployment.provider_deployment._apply_provider_network"), \
+                 patch("deployment.provider_deployment._apply_shared_grants"):
+                project.return_value.name = "secs-example"
+                selected = _render_deployment(root, "example", config, {}, True)
+                self.assertEqual(render.call_args.args[2]["WORKER_CONFIG_FILE"], str(mock))
+                self.assertEqual(selected["services"]["provider"]["environment"]["SECS_MOCK_INDEX"], "1")
+                self.assertIn("mock_index_worker", selected["services"]["worker"]["command"][0])
+                ordinary = _render_deployment(root, "example", config, {})
+                self.assertEqual(render.call_args.args[2]["WORKER_CONFIG_FILE"], str(full))
+                self.assertEqual(ordinary["services"]["provider"]["environment"]["SECS_MOCK_INDEX"], "0")
+                for invalid in ('device = "cpu"\nmock_index = false\n', 'device = "cpu"\n',
+                                'device = "cuda:0"\nmock_index = true\n'):
+                    mock.write_text(invalid)
+                    with self.assertRaisesRegex(ValueError, "requires worker.mock-index.toml"):
+                        _render_deployment(root, "example", config, {}, True)
+            self.assertEqual(full.read_text(), 'device = "cpu"\n')
+
     def test_retirement_cli_reports_possible_partial_shutdown(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

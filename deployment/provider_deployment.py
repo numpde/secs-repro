@@ -28,6 +28,7 @@ from deployment.templates import (
 TEMPLATES = {
     "provider.toml": Path("config/provider.toml.example"),
     "worker.toml": Path("config/worker.toml.example"),
+    "worker.mock-index.toml": Path("config/worker.mock-index.toml.example"),
     "deployment.env": Path("config/deployment.env.example"),
     "network.toml": Path("config/network.toml.example"),
 }
@@ -169,7 +170,7 @@ def _admit_provider_network(project: ComposeProject, repository: Path, name: str
         )
 
 
-def render_deployment(repository: Path, name: str) -> dict:
+def render_deployment(repository: Path, name: str, mock_index_selection: bool | None = None) -> dict:
     """Project SECS paths and operator artifact selections into the existing recipe.
 
     Compose owns dotenv parsing. Framework-owned paths and the nonroot host
@@ -180,15 +181,30 @@ def render_deployment(repository: Path, name: str) -> dict:
     _private_directory(config)
     _private_file(config / "deployment.env")
     network = _provider_network(repository, name)
-    return _render_deployment(repository, name, config, network)
+    return _render_deployment(repository, name, config, network, mock_index_selection)
 
 
-def _render_deployment(repository: Path, name: str, config: Path, network: dict) -> dict:
+def _render_deployment(repository: Path, name: str, config: Path, network: dict, mock_index_selection: bool | None = None) -> dict:
     """Render one deployment from an already validated network policy."""
     worker_config = _toml_document(config / "worker.toml")
     worker_device = worker_config.get("device", "cuda:0")
     mock_index = worker_config.get("mock_index", False)
     mock_runner = worker_config.get("mock_runner", False)
+    if type(mock_index) is not bool or type(mock_runner) is not bool:
+        raise ValueError("Worker mock index and mock runner settings must be boolean.")
+    worker_config_file = config / "worker.toml"
+    if mock_index_selection is True:
+        if worker_device != "cpu" or mock_runner is not False:
+            raise ValueError("USE_MOCK_INDEX=yes requires a CPU scientific worker, not a mock runner.")
+        if mock_index is not True:
+            worker_config_file = config / "worker.mock-index.toml"
+            worker_config = _toml_document(worker_config_file)
+            worker_device = worker_config.get("device")
+            mock_index = worker_config.get("mock_index")
+            if worker_device != "cpu" or mock_index is not True:
+                raise ValueError("USE_MOCK_INDEX=yes requires worker.mock-index.toml to select a CPU mock index.")
+    elif mock_index_selection is False and mock_index is True:
+        raise ValueError("USE_MOCK_INDEX=no conflicts with the saved mock-index worker configuration.")
     if type(mock_runner) is not bool or (mock_runner and (worker_device != "cpu" or mock_index is not False)):
         raise ValueError("A mock runner requires device=cpu and cannot use a mock index.")
     if mock_runner and set(worker_config) != {"device", "mock_runner"}:
@@ -209,7 +225,7 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
         "SECS_CHECKOUT": str(repository.resolve()),
         "PROVIDER_CONFIG_DIRECTORY": str(config),
         "INTERPRETER_KEY_FILE": str(state / "interpreter.key"),
-        "WORKER_CONFIG_FILE": str(config / "worker.toml"),
+        "WORKER_CONFIG_FILE": str(worker_config_file),
         "MOLFORMER_LOCK_FILE": str(repository / "molformer.lock.toml"),
         "CACHE_VERIFIER_FILE": str(repository / "tools/materialize_molformer_cache.py"),
     }
@@ -498,7 +514,7 @@ def _state_root(repository: Path, name: str) -> Path:
     return path
 
 
-def start_deployment(repository: Path, name: str) -> dict:
+def start_deployment(repository: Path, name: str, mock_index_selection: bool | None = None) -> dict:
     """Render first, admit existing inputs, then create private workspaces and start.
 
     Runtime parsers remain authoritative for credential and model semantics.
@@ -510,7 +526,7 @@ def start_deployment(repository: Path, name: str) -> dict:
         raise ValueError("Cannot start deployment: old API retirement is incomplete; finish its retained cleanup first.")
     _private_file(config / "deployment.env")
     network = _provider_network(repository, name)
-    plan = _render_deployment(repository, name, config, network)
+    plan = _render_deployment(repository, name, config, network, mock_index_selection)
     project = _project(repository, name)
     try:
         _admit_provider_network(project, repository, name, network)
@@ -638,16 +654,20 @@ def main(arguments: list[str] | None = None) -> int:
             else:
                 print(f"Worker target: {target}; mock index: {'yes (eight molecules)' if mock_index else 'no'}. Build and select the matching worker image.")
             if mock_index or mock_runner:
-                print("Use a separate test provider principal or disposable API; existing queued Jobs for a reused principal can be consumed.")
+                print("Mock modes can consume queued Jobs for this provider; their results disclose the mock behavior.")
             print("Edit these files before deployment. No credentials installed or services started.")
             return 0
         config = configuration_directory(repository, options.deployment)
         _private_directory(config)
         project = _project(repository, options.deployment)
+        index_flag = os.environ.get("SECS_USE_MOCK_INDEX", "")
+        if index_flag not in ("", "0", "no", "1", "yes"):
+            raise ValueError("Select USE_MOCK_INDEX=yes or no.")
+        index_selection = None if not index_flag else index_flag in ("1", "yes")
         # Observations must remain available during a long shutdown. Inventory
         # checks ownership without promising a snapshot across lifecycle changes.
         if options.operation == "config":
-            print(json.dumps(render_deployment(repository, options.deployment), indent=2))
+            print(json.dumps(render_deployment(repository, options.deployment, index_selection), indent=2))
             return 0
         if options.operation == "status":
             print(json.dumps(_status(_old_project(repository, options.deployment).inventory()), indent=2))
@@ -662,7 +682,7 @@ def main(arguments: list[str] | None = None) -> int:
                 filename = "provider.signing.private.json" if options.operation == "credential-install" else "interpreter.key"
                 print(install_secret(repository, options.deployment, filename, options.source))
             elif options.operation == "up":
-                print(json.dumps(_status(start_deployment(repository, options.deployment)), indent=2))
+                print(json.dumps(_status(start_deployment(repository, options.deployment, index_selection)), indent=2))
                 print("Containers started. Check provider logs for hello publication or errors.")
                 print("A successful hello confirms API acceptance, not model readiness.")
             elif options.operation == "down":
