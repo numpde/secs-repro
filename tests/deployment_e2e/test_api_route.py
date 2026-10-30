@@ -10,7 +10,7 @@ from urllib.request import urlopen
 from uuid import uuid4
 
 from deployment.compose import ComposeProject
-from deployment.provider_deployment import _apply_api_route
+from deployment.provider_deployment import _apply_api_route, retire_old_api
 from test_lifecycle import binding_fixture, lifecycle_workspace
 
 
@@ -119,9 +119,9 @@ retry_initial_seconds=0.1
                 self.assertEqual(held["RestartCount"], 0)
                 project.command("start", proxy["Id"])
                 self.wait_for(lambda: observed()["hellos"] > count, "Provider did not recover its existing route")
-                stopped = project.stop()
-                self.assertEqual(stopped["provider"]["State"]["ExitCode"], 0)
-                self.assertEqual(stopped["provider"]["RestartCount"], 0)
+                retire_old_api(project, config)
+                self.assertEqual(project.inventory(), {})
+                self.assertNotIn(route_volume, project.command("volume", "ls", "--quiet").decode().splitlines())
             except BaseException as failure:
                 try:
                     project.logs()

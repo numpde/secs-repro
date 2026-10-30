@@ -23,12 +23,109 @@ from deployment.provider_deployment import (
     install_secret,
     main,
     render_deployment,
+    retire_old_api,
     start_deployment,
 )
 from deployment.templates import _locked_parent
 
 
 class ProviderDeploymentTests(unittest.TestCase):
+    def test_start_refuses_incomplete_old_api_retirement(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config/deployments/example"
+            config.mkdir(parents=True, mode=0o700)
+            (config / "old-api-retirement.json").write_text("{}")
+            with patch("deployment.provider_deployment._render_deployment") as render:
+                with self.assertRaisesRegex(ValueError, "retirement is incomplete"):
+                    start_deployment(root, "example")
+            render.assert_not_called()
+
+    def test_old_api_retirement_does_not_stop_a_new_topology(self):
+        with TemporaryDirectory() as temporary:
+            project = Mock()
+            project.inventory.return_value = {"provider": {"Id": "1" * 64, "State": {"Running": True}}}
+            with self.assertRaisesRegex(ValueError, "both old proxy roles"):
+                retire_old_api(project, Path(temporary))
+            project.stop.assert_not_called()
+            project.command.assert_not_called()
+
+    def test_old_api_retirement_preserves_dependencies_after_failed_provider_drain(self):
+        with TemporaryDirectory() as temporary:
+            project = Mock()
+            provider = {"Id": "1" * 64, "State": {"Running": False, "ExitCode": 1, "OOMKilled": False}}
+            project.inventory.return_value = {"provider": provider, "api": {}, "api-init": {}}
+            with self.assertRaisesRegex(ValueError, "clean drain"):
+                retire_old_api(project, Path(temporary))
+            project.stop.assert_not_called()
+            project.command.assert_not_called()
+
+    def test_old_api_retirement_refuses_foreign_volume_borrower(self):
+        with TemporaryDirectory() as temporary:
+            config = Path(temporary)
+            project = Mock()
+            project.name = "secs-example"
+            volume = project.name + "-route-" + "a" * 64
+            receipt = config / "old-api-retirement.json"
+            receipt.write_text(json.dumps({"project": project.name, "volume": volume,
+                                           "containers": {"api": "1" * 64}}))
+            receipt.chmod(0o600)
+            project.inventory.return_value = {}
+            inspected = {"Name": volume, "Labels": {"com.docker.compose.project": project.name,
+                         "com.docker.compose.volume": volume}}
+            project.command.side_effect = ((volume + "\n").encode(),
+                                           json.dumps([inspected]).encode(), b"2" * 64 + b"\n")
+            with self.assertRaisesRegex(ValueError, "another container"):
+                retire_old_api(project, config)
+            self.assertTrue(receipt.exists())
+            self.assertFalse(any(call.args[:2] == ("volume", "rm") for call in project.command.call_args_list))
+
+    def test_old_api_retirement_retains_receipt_after_volume_removal_failure(self):
+        with TemporaryDirectory() as temporary:
+            config = Path(temporary)
+            project = Mock()
+            project.name = "secs-example"
+            key = "a" * 64
+            volume = project.name + "-route-" + key
+            identifiers = {"provider": "1" * 64, "api": "2" * 64, "api-init": "3" * 64}
+            records = {}
+            for role, identifier in identifiers.items():
+                labels = {"org.nmr-provider-tools.route": project.name,
+                          "org.nmr-provider-tools.binding": key,
+                          "org.nmr-provider-tools.route-role": "proxy" if role == "api" else "initializer"}
+                records[role] = {"Id": identifier, "State": {"Running": False, "ExitCode": 0, "OOMKilled": False},
+                                 "Config": {"Labels": labels}, "Mounts": [
+                                     {"Type": "volume", "Name": volume, "Destination": "/route", "RW": True}]}
+            project.stop.return_value = records
+            project.inventory.return_value = records
+            volume_record = {"Name": volume, "Labels": {"com.docker.compose.project": project.name,
+                            "com.docker.compose.volume": volume}}
+            def command(*args):
+                if args[:2] == ("volume", "ls"):
+                    return (volume + "\n").encode()
+                if args[:2] == ("volume", "inspect"):
+                    return json.dumps([volume_record]).encode()
+                if args[0] == "ps":
+                    return ("\n".join(identifiers.values()) + "\n").encode()
+                if args[:2] == ("volume", "rm"):
+                    raise RuntimeError("volume removal failed")
+                return b""
+            project.command.side_effect = command
+            with self.assertRaisesRegex(RuntimeError, "volume removal failed"):
+                retire_old_api(project, config)
+            self.assertTrue((config / "old-api-retirement.json").exists())
+            project.inventory.return_value = {}
+            def resume(*args):
+                if args[:2] == ("volume", "ls"):
+                    return (volume + "\n").encode()
+                if args[:2] == ("volume", "inspect"):
+                    return json.dumps([volume_record]).encode()
+                return b""
+            project.command.side_effect = resume
+            retire_old_api(project, config)
+            self.assertFalse((config / "old-api-retirement.json").exists())
+            self.assertEqual(project.stop.call_count, 1)
+
     def test_runtime_volume_reuse_requires_peer_style_ownership_labels(self):
         project = Mock(name="project")
         project.name = "secs-example"

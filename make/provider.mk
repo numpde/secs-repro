@@ -7,9 +7,9 @@ override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools
 # Initialization is a host filesystem operation, not a build or API operation.
 # Pass the literal name through the environment to keep shell syntax out of it.
 .PHONY: provider/deployment/init provider/deployment/config provider/deployment/up
-.PHONY: provider/deployment/status provider/deployment/down provider/logs test/deployment
-provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/logs: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
-provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/logs:
+.PHONY: provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs test/deployment
+provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
+provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs:
 	@cd "$(REPOSITORY_ROOT)"
 	python3 -m deployment.provider_deployment "$(@F)" "$${DEPLOYMENT_INPUT}"
 

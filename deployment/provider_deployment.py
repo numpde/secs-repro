@@ -7,6 +7,7 @@ This adapter supplies SECS paths and serializes deployment mutations.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -19,7 +20,7 @@ import tomllib
 from deployment.compose import ComposeProject
 from deployment.templates import (
     configuration_directory, initialize_configuration, _ensure_private_parent,
-    _locked_parent, _publish_new_file,
+    _locked_parent, _publish_new_file, _sync_directory,
 )
 
 
@@ -209,10 +210,102 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
 
 def _project(repository: Path, name: str) -> ComposeProject:
     """SECS stops Job admission before its scientific worker."""
+    return _old_project(repository, name)
+
+
+def _old_project(repository: Path, name: str) -> ComposeProject:
+    """Admit the former owned API roles for their explicit retirement."""
     configuration_directory(repository, name)
     return ComposeProject(repository, f"secs-{name}",
                           ("provider", "worker", "api", "sources-init", "session-init", "api-init"),
                           ("sources-init", "session-init", "api-init"))
+
+
+def retire_old_api(project: ComposeProject, config: Path) -> None:
+    """Stop the old graph and retire its inspected API route, retaining retry evidence."""
+    receipt = config / "old-api-retirement.json"
+    if receipt.exists():
+        record = json.loads(_private_file(receipt))
+    else:
+        initial = project.inventory()
+        if not {"provider", "api", "api-init"} <= set(initial):
+            raise ValueError("Cannot retire the old API route: the owned provider and both old proxy roles must be present.")
+        provider = initial["provider"]
+        if provider["State"]["Running"]:
+            project.command("stop", "--signal", "SIGTERM", "--timeout", "-1", provider["Id"], timeout=None)
+        observed = project.inventory().get("provider")
+        if (observed is None or observed["Id"] != provider["Id"]
+                or observed["State"]["Running"] or observed["State"].get("ExitCode") != 0
+                or observed["State"].get("OOMKilled") is not False):
+            raise ValueError("Cannot retire the old API route: provider shutdown did not confirm a clean drain; its dependencies remain available.")
+        stopped = project.stop()
+        if ("provider" not in stopped or stopped["provider"]["Id"] != provider["Id"]
+                or stopped["provider"]["State"].get("ExitCode") != 0
+                or stopped["provider"]["State"].get("OOMKilled") is not False):
+            raise ValueError("Cannot retire the old API route: the drained provider changed or its final state is unconfirmed.")
+        proxy = stopped.get("api")
+        initializer = stopped.get("api-init")
+        if proxy is None or initializer is None:
+            raise ValueError("Cannot retire the old API route: both owned proxy roles are required to establish its storage.")
+        labels = proxy["Config"]["Labels"]
+        key = labels.get("org.nmr-provider-tools.binding")
+        if (labels.get("org.nmr-provider-tools.route") != project.name
+                or labels.get("org.nmr-provider-tools.route-role") != "proxy"
+                or type(key) is not str or re.fullmatch(r"[0-9a-f]{64}", key) is None):
+            raise ValueError("Cannot retire the old API route: the proxy ownership labels differ.")
+        init_labels = initializer["Config"]["Labels"]
+        if (init_labels.get("org.nmr-provider-tools.route") != project.name
+                or init_labels.get("org.nmr-provider-tools.route-role") != "initializer"
+                or init_labels.get("org.nmr-provider-tools.binding") != key):
+            raise ValueError("Cannot retire the old API route: the initializer ownership labels differ.")
+        prefix = project.name if len(project.name) <= 63 else "r-" + hashlib.sha256(project.name.encode("ascii")).hexdigest()
+        volume = prefix + "-route-" + key if len(project.name) <= 63 else prefix + "-" + key
+        for container in (proxy, initializer):
+            mounts = container.get("Mounts")
+            if type(mounts) is not list or sum(
+                type(m) is dict and m.get("Type") == "volume" and m.get("Name") == volume
+                and m.get("Destination") == "/route" and m.get("RW") is True for m in mounts
+            ) != 1:
+                raise ValueError("Cannot retire the old API route: its inspected volume grants differ.")
+        owned = {role: stopped[role]["Id"] for role in ("provider", "api", "api-init") if role in stopped}
+        record = {"project": project.name, "volume": volume, "containers": owned}
+        _publish_new_file(receipt, json.dumps(record, sort_keys=True).encode())
+    if (type(record) is not dict or set(record) != {"project", "volume", "containers"}
+            or record["project"] != project.name or type(record["volume"]) is not str
+            or type(record["containers"]) is not dict
+            or not set(record["containers"]) <= {"provider", "api", "api-init"}
+            or any(type(v) is not str or re.fullmatch(r"[0-9a-f]{64}", v) is None
+                   for v in record["containers"].values())):
+        raise ValueError("Cannot resume old API retirement: its retained ownership record is malformed.")
+    prefix = project.name if len(project.name) <= 63 else "r-" + hashlib.sha256(project.name.encode("ascii")).hexdigest()
+    separator = "-route-" if len(project.name) <= 63 else "-"
+    if re.fullmatch(re.escape(prefix + separator) + r"[0-9a-f]{64}", record["volume"]) is None:
+        raise ValueError("Cannot resume old API retirement: the retained volume name is not an owned old route.")
+    current = project.inventory()
+    if any(role in current and (current[role]["Id"] != identifier or current[role]["State"]["Running"])
+           for role, identifier in record["containers"].items()):
+        raise ValueError("Cannot retire the old API route: an owned container changed or is running.")
+    present = set(project.command("volume", "ls", "--quiet").decode("utf-8").splitlines())
+    if record["volume"] in present:
+        inspected = json.loads(project.command("volume", "inspect", record["volume"]))
+        labels = inspected[0].get("Labels") if type(inspected) is list and len(inspected) == 1 and type(inspected[0]) is dict else None
+        if (type(inspected) is not list or len(inspected) != 1 or type(inspected[0]) is not dict
+                or inspected[0].get("Name") != record["volume"]
+                or type(labels) is not dict
+                or labels.get("com.docker.compose.project") != project.name
+                or labels.get("com.docker.compose.volume") != record["volume"]):
+            raise ValueError("Cannot retire the old API volume: its Compose ownership labels differ.")
+        attached = project.command("ps", "--all", "--no-trunc", "--quiet", "--filter",
+                                   f"volume={record['volume']}").decode("ascii").splitlines()
+        if len(attached) != len(set(attached)) or not set(attached) <= set(record["containers"].values()):
+            raise ValueError("Cannot retire the old API volume: another container still borrows it.")
+    for role in ("provider", "api", "api-init"):
+        if role in current and role in record["containers"]:
+            project.command("rm", record["containers"][role])
+    if record["volume"] in present:
+        project.command("volume", "rm", record["volume"])
+    receipt.unlink()
+    _sync_directory(config)
 
 
 def _admit_runtime_volumes(project: ComposeProject, plan: dict, name: str) -> None:
@@ -314,6 +407,8 @@ def start_deployment(repository: Path, name: str) -> dict:
     """
     config = configuration_directory(repository, name)
     _private_directory(config)
+    if os.path.lexists(config / "old-api-retirement.json"):
+        raise ValueError("Cannot start deployment: old API retirement is incomplete; finish its retained cleanup first.")
     _private_file(config / "deployment.env")
     network = _provider_network(repository, name)
     plan = _render_deployment(repository, name, config, network)
@@ -431,7 +526,7 @@ def _status(records: dict) -> dict:
 def main(arguments: list[str] | None = None) -> int:
     """Dispatch one named operation; report partial effects without implying rollback."""
     parser = argparse.ArgumentParser(description="Operate a named SECS deployment.")
-    parser.add_argument("operation", choices=("init", "config", "up", "status", "down",
+    parser.add_argument("operation", choices=("init", "config", "up", "status", "down", "retire-api",
                                               "logs", "credential-install", "interpreter-key-install"))
     parser.add_argument("deployment")
     parser.add_argument("--source", type=Path)
@@ -472,6 +567,9 @@ def main(arguments: list[str] | None = None) -> int:
                 print("A successful hello confirms API acceptance, not model readiness.")
             elif options.operation == "down":
                 print(json.dumps(_status(project.stop()), indent=2))
+            elif options.operation == "retire-api":
+                retire_old_api(_old_project(repository, options.deployment), config)
+                print("Old API route retired. Shared and scientific storage was retained.")
     except (OSError, ValueError, RuntimeError) as error:
         headline = "initialization" if options.operation == "init" else options.operation
         print(f"Deployment {headline} failed: {error}", file=sys.stderr)

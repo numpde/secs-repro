@@ -99,6 +99,8 @@ help:
 	'  make provider/logs DEPLOYMENT=<name>' \
 	'  make provider/deployment/down DEPLOYMENT=<name>' \
 	'      Down drains provider, then stops worker and API proxy; state and containers remain.' \
+	'  make provider/deployment/retire-api DEPLOYMENT=<name>' \
+	'      Drain and retire the old private API route; preserve scientific and shared storage.' \
 	'  make test/provider/e2e' \
 	'      Prove hello, verified input, real model/FAISS/GA and durable handoff retry offline.' \
 	'      Uses eight fixture candidates, not the full index; see notes/004_provider_execution.txt.' \
