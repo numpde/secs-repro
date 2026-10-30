@@ -552,27 +552,25 @@ def start_deployment(repository: Path, name: str, mock_index_selection: bool | N
 def _apply_shared_grants(plan, project, config, state):
     """Consume the SDK's shared socket grants alongside SECS-owned inputs."""
     document = _toml_document(config / "provider.toml")
+    if document.get("schema_id") != "secs.provider.config.v4":
+        raise ValueError("Provider configuration requires schema_id secs.provider.config.v4.")
     selection = document.get("shared")
-    if type(selection) is not dict or set(selection) != {"settings_file"}:
-        raise ValueError("Provider configuration requires shared settings_file.")
-    definition = selection["settings_file"]
-    if (type(definition) is not str or not Path(definition).is_absolute()
-            or str(Path(definition)) != definition or ".." in Path(definition).parts
-            or not Path(definition).name or any(value in definition for value in (",", "\0", "\r", "\n"))):
-        raise ValueError("Shared settings_file must be a normalized absolute path.")
-    projection = _sdk_projection(project, plan["services"]["provider"]["image"], definition,
-                                 "provider_core.shared_grants", "--config", definition)
+    if type(selection) is not dict or set(selection) != {"project", "gid"}:
+        raise ValueError("Provider configuration requires shared project and gid.")
+    project_name, gid = selection["project"], selection["gid"]
+    if (type(project_name) is not str or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,48}", project_name) is None
+            or type(gid) is not int or not 1 <= gid <= 4294967294):
+        raise ValueError("Provider configuration requires a lowercase shared project name and nonzero socket group ID.")
+    projection = _sdk_grants(project, plan["services"]["provider"]["image"], project_name, gid)
     if type(projection) is not dict or set(projection) != {"group_add", "volumes", "mounts", "proxy_socket", "outbox_socket", "socket_group_id"}:
         raise ValueError("Installed SDK did not return its complete shared socket grants.")
     provider = plan["services"]["provider"]
     mounts = list(projection["mounts"])
-    mounts.extend([
-        {"type": "bind", "source": definition, "target": definition,
-         "read_only": True, "bind": {"create_host_path": False}},
+    mounts.append(
         {"type": "bind", "source": str(state / "provider.signing.private.json"),
          "target": "/run/secrets/provider/provider.signing.private.json",
          "read_only": True, "bind": {"create_host_path": False}},
-    ])
+    )
     if set(plan.setdefault("volumes", {})) & set(projection["volumes"]):
         raise ValueError("Shared socket volumes overlap SECS-owned volumes.")
     _add_mount_grants(provider, mounts)
@@ -592,15 +590,17 @@ def _add_mount_grants(provider, mounts):
     provider["volumes"].extend(mounts)
 
 
-def _sdk_projection(project, image, definition, module, *arguments):
-    """Run the installed SDK with only its explicit neutral definition mounted."""
+def _sdk_grants(project, image, project_name, gid):
+    """Construct the shared SDK grant from provider-owned project and group settings."""
     raw = project.command(
         "run", "--rm", "--pull", "never", "--network", "none", "--read-only",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
         "--pids-limit", "16", "--cpus", "1", "--memory", "128m", "--memory-swap", "128m",
-        "--user", f"{os.getuid()}:{os.getgid()}",
-        "--mount", f"type=bind,src={definition},dst={definition},readonly",
-        "--entrypoint", "python", image, "-I", "-B", "-m", module, *arguments,
+        "--user", f"{os.getuid()}:{os.getgid()}", "--env", "PROVIDER_CORE_IN_CONTAINER=1",
+        "--entrypoint", "python", image, "-I", "-B", "-c",
+        "import json, sys; from provider_core.shared_grants import SharedGrants; "
+        "print(json.dumps(SharedGrants(sys.argv[1], int(sys.argv[2])).compose(), sort_keys=True))",
+        project_name, str(gid),
     )
     return json.loads(raw)
 

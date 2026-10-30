@@ -99,11 +99,14 @@ help:
 	'      Mock runner performs no model work; it cannot be combined with a mock index.' \
 	'      Copy committed examples into private config/deployments/<name>; no services start.' \
 	'  make provider/deployment/config DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no]' \
-	'      Render the selected local images and paths without starting services.' \
+	'      Render saved provider.toml and worker settings; Docker runs the existing provider image to project shared grants.' \
+	'      No deployment services start.' \
+	'      [shared].project and gid must match the shared services and select their volumes and socket group.' \
 	'  make provider/credential/install DEPLOYMENT=<name> SOURCE=<private-file>' \
 	'  make provider/interpreter-key/install DEPLOYMENT=<name> SOURCE=<private-file>' \
 	'      Install an owner-only secret once; existing files are never overwritten.' \
 	'  make provider/deployment/up DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no]' \
+	'      Start the named deployment from its saved config using existing images; no build or download.' \
 	'  make provider/deployment/status DEPLOYMENT=<name>' \
 	'  make provider/logs DEPLOYMENT=<name>' \
 	'  make provider/deployment/down DEPLOYMENT=<name>' \

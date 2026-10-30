@@ -14,7 +14,7 @@ from provider_core.attempt_record import RecoveryScope
 from provider_core.chat import ChatEndpoint, ChatEndpointSpec
 from provider_core.controller import AttemptController, LiveStartPolicy
 from provider_core.shared_delivery_client import SharedDeliveryClient
-from provider_core.shared_grants import shared_grants
+from provider_core.shared_grants import SharedGrants
 from provider_core.diagnostics import failure_evidence, write_stderr
 from provider_core.failure_projection import owned_details
 from provider_core.lifetime import ProviderLifetime
@@ -88,7 +88,7 @@ async def run_provider(config_path=CONFIG_PATH):
     elif mock_index:
         config = replace(config, hello=replace(config.hello, mock_index=True,
             display_name="SECS (mock index)", provider_description="MOCK INDEX: eight starting molecules; not a full scientific search."))
-    grants = shared_grants(config.shared_settings)
+    grants = SharedGrants(config.shared_project, config.shared_gid)
     settings, provider_ref, publication = api_settings_with_material(config.api, read_startup_file)
     settings = replace(settings, http=replace(settings.http, proxy_socket=str(grants.proxy_socket)))
     if (LIFETIME_DIRECTORY / "journal").exists():

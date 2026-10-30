@@ -116,7 +116,7 @@ class ProviderEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 execution = ExecutionConfig(wire.origin + "/chat", "scripted-choice", wire.origin,
                                             work_seconds=120, interpretation_seconds=60, worker_startup_seconds=300,
                                             poll_seconds=0.1, max_turns=6)
-                config = ProviderConfig(root / "unused-settings", {}, 2, 0.1, 1,
+                config = ProviderConfig("fixture", 1234, {}, 2, 0.1, 1,
                                         HelloPolicy("SECS test", "Local workflow proof", 3600, 1, mock_index=True), execution)
                 controllers = []
                 def assemble(pending):

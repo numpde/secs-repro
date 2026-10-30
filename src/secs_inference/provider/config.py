@@ -6,12 +6,13 @@ from collections.abc import Set
 from dataclasses import dataclass
 import math
 from pathlib import Path
+import re
 import tomllib
 
 from secs_inference.provider.configuration_error import ConfigurationError
 
 
-SCHEMA_ID = "secs.provider.config.v3"
+SCHEMA_ID = "secs.provider.config.v4"
 CONFIG_PATH = Path("/run/config/provider/provider.toml")
 INTERPRETER_KEY_PATH = Path("/run/secrets/provider/interpreter.key")
 
@@ -74,7 +75,8 @@ class HelloPolicy:
 class ProviderConfig:
     """The execution table is absent for an explicitly hello-only deployment."""
 
-    shared_settings: Path
+    shared_project: str
+    shared_gid: int
     api: dict
     delivery_exchange_seconds: float
     delivery_retry_initial_seconds: float
@@ -96,13 +98,13 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
     if document["schema_id"] != SCHEMA_ID:
         raise ConfigurationError(f"Cannot load provider configuration: schema_id must be {SCHEMA_ID!r}")
 
-    shared = _require_table(document, "shared", {"settings_file"})
-    definition_file = shared["settings_file"]
-    if (type(definition_file) is not str or not definition_file.startswith("/")
-            or any(char in definition_file for char in ("\0", "\r", "\n", ","))
-            or not Path(definition_file).name or ".." in Path(definition_file).parts
-            or str(Path(definition_file)) != definition_file):
-        raise ConfigurationError("Shared settings_file must be one normalized absolute path")
+    shared = _require_table(document, "shared", {"project", "gid"})
+    shared_project, shared_gid = shared["project"], shared["gid"]
+    if (type(shared_project) is not str
+            or re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,48}", shared_project) is None):
+        raise ConfigurationError("Shared project must be a lowercase project name of at most 49 characters")
+    if type(shared_gid) is not int or not 1 <= shared_gid <= 4294967294:
+        raise ConfigurationError("Shared gid must be a nonzero group ID below 4294967295")
     api = document["api"]
     if type(api) is not dict:
         raise ConfigurationError("Provider config [api] must be a table")
@@ -140,7 +142,7 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
         table = _require_table(document, "execution", required,
                                set(ExecutionConfig.__dataclass_fields__) - required)
         execution = ExecutionConfig(**table)
-    return ProviderConfig(shared_settings=Path(definition_file), api=api,
+    return ProviderConfig(shared_project=shared_project, shared_gid=shared_gid, api=api,
                           delivery_exchange_seconds=delivery["exchange_seconds"],
                           delivery_retry_initial_seconds=delivery["retry_initial_seconds"],
                           delivery_retry_max_seconds=delivery["retry_max_seconds"], hello=policy, execution=execution)

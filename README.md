@@ -6,10 +6,17 @@ SECS deployed as an NMR API provider.
 
 The provider uses the shared [provider-core SDK](https://github.com/numpde/nmr-provider-tools/tree/main/packages/provider-core)
 for Attempt control, verified transfers, native supervision and durable delivery.
-Select the shared services' operator-owned settings and the provider's own API
-identity in `config/provider.toml.example`. The launcher borrows the independently
-managed API proxy and outbox sockets. `network.toml` separately controls interpreter
-and upload-store egress.
+Each named deployment keeps its shared socket grant in
+`config/deployments/<name>/provider.toml` under `[shared]`: set the project name
+and socket group ID to the values used by the shared services. These select the
+API proxy and outbox volumes. The same file selects that provider's API identity.
+The grant values are nonsecret; the signing credential remains in
+`secrets/deployments/<name>` and is installed separately.
+For an existing v3 deployment, change `schema_id` to `secs.provider.config.v4`
+and replace `[shared].settings_file` with `[shared].project` and `[shared].gid`
+before rendering or starting it. Keep the existing credential files unchanged.
+The launcher borrows the independently managed API proxy and outbox sockets.
+`network.toml` separately controls interpreter and upload-store egress.
 The API and scientific images install the same SDK wheel using its issued API
 and native installation locks; the scientific image retains its own dependency pins.
 Select a shared package cache with `WHEELHOUSE=/path/to/wheelhouse` for dependency

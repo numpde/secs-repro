@@ -1,8 +1,9 @@
-schema_id = "secs.provider.config.v3"
+schema_id = "secs.provider.config.v4"
 
-# The shared service owner supplies this operator-owned settings file.
+# Set these nonsecret values to the shared project and its socket group.
 [shared]
-settings_file = "/private/nmr/shared.toml"
+project = "replace-me"
+gid = 1
 
 [api]
 origin = "https://api.example.test"
