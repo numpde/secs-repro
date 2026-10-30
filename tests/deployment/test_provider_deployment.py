@@ -464,10 +464,10 @@ class ProviderDeploymentTests(unittest.TestCase):
             network.write_text('mode = "standard"\n')
             network.chmod(0o600)
             self.assertEqual(_provider_network(root, "example"), {"mode": "standard"})
-            network.write_text('mode = "forwarded-services"\nhost_address = "172.22.0.1"\n')
+            network.write_text('mode = "forwarded-services"\nhost_address = "198.51.100.1"\n')
             self.assertEqual(
                 _provider_network(root, "example"),
-                {"mode": "forwarded-services", "host_address": "172.22.0.1"},
+                {"mode": "forwarded-services", "host_address": "198.51.100.1"},
             )
 
     def test_network_configuration_rejects_ambiguous_or_unsafe_values(self):
@@ -475,7 +475,7 @@ class ProviderDeploymentTests(unittest.TestCase):
             "",
             "not toml",
             'mode = "unknown"\n',
-            'mode = "standard"\nhost_address = "172.22.0.1"\n',
+            'mode = "standard"\nhost_address = "198.51.100.1"\n',
             'mode = "standard"\nextra = true\n',
             'mode = "forwarded-services"\n',
             'mode = "forwarded-services"\nhost_address = "host-gateway"\n',
@@ -509,9 +509,9 @@ class ProviderDeploymentTests(unittest.TestCase):
         _apply_provider_network(
             plan,
             "example",
-            {"mode": "forwarded-services", "host_address": "172.22.0.1"},
+            {"mode": "forwarded-services", "host_address": "198.51.100.1"},
         )
-        self.assertEqual(plan["services"]["provider"]["extra_hosts"], ["nmr.localhost=172.22.0.1"])
+        self.assertEqual(plan["services"]["provider"]["extra_hosts"], ["nmr.localhost=198.51.100.1"])
         self.assertEqual(
             plan["networks"]["provider-egress"],
             {"external": True, "name": "secs-example-egress"},
@@ -539,7 +539,7 @@ class ProviderDeploymentTests(unittest.TestCase):
                     "io.secs-repro.checkout": str(root),
                     "io.secs-repro.deployment": "example",
                 },
-                "IPAM": {"Config": [{"Subnet": "172.22.0.0/16", "Gateway": "172.22.0.1"}]},
+                "IPAM": {"Config": [{"Subnet": "198.51.100.0/24", "Gateway": "198.51.100.1"}]},
                 "Containers": {},
             }]).encode()
             project.inventory.return_value = {}
@@ -547,7 +547,7 @@ class ProviderDeploymentTests(unittest.TestCase):
                 project,
                 root,
                 "example",
-                {"mode": "forwarded-services", "host_address": "172.22.0.1"},
+                {"mode": "forwarded-services", "host_address": "198.51.100.1"},
             )
             project.command.assert_called_once_with("network", "inspect", "secs-example-egress")
 
@@ -565,7 +565,7 @@ class ProviderDeploymentTests(unittest.TestCase):
                 "io.secs-repro.checkout": "/repository",
                 "io.secs-repro.deployment": "example",
             },
-            "IPAM": {"Config": [{"Subnet": "172.22.0.0/16", "Gateway": "172.22.0.1"}]},
+            "IPAM": {"Config": [{"Subnet": "198.51.100.0/24", "Gateway": "198.51.100.1"}]},
             "Containers": {},
         }
         changes = (
@@ -573,7 +573,7 @@ class ProviderDeploymentTests(unittest.TestCase):
             ({"Driver": "overlay"}, "non-internal bridge"),
             ({"Internal": True}, "non-internal bridge"),
             ({"Labels": {}}, "io.secs-repro.checkout"),
-            ({"IPAM": {"Config": [{"Subnet": "172.23.0.0/16", "Gateway": "172.23.0.1"}]}}, "inspected default bridge gateway"),
+            ({"IPAM": {"Config": [{"Subnet": "192.0.2.0/24", "Gateway": "192.0.2.1"}]}}, "inspected default bridge gateway"),
             ({"Containers": {"c" * 64: {}}}, "not owned"),
         )
         for change, message in changes:
@@ -587,21 +587,21 @@ class ProviderDeploymentTests(unittest.TestCase):
                         project,
                         Path("/repository"),
                         "example",
-                        {"mode": "forwarded-services", "host_address": "172.22.0.1"},
+                        {"mode": "forwarded-services", "host_address": "198.51.100.1"},
                     )
 
     def test_forwarded_services_can_use_inspected_default_bridge_gateway(self):
         project = unittest.mock.Mock()
         external = {"Name": "secs-example-egress", "Driver": "bridge", "Internal": False,
                     "Labels": {"io.secs-repro.checkout": "/repository", "io.secs-repro.deployment": "example"},
-                    "IPAM": {"Config": [{"Subnet": "172.22.0.0/16", "Gateway": "172.22.0.1"}]},
+                    "IPAM": {"Config": [{"Subnet": "198.51.100.0/24", "Gateway": "198.51.100.1"}]},
                     "Containers": {}}
         bridge = {"Name": "bridge", "Driver": "bridge",
-                  "IPAM": {"Config": [{"Subnet": "172.17.0.0/16", "Gateway": "172.17.0.1"}]}}
+                  "IPAM": {"Config": [{"Subnet": "203.0.113.0/24", "Gateway": "203.0.113.1"}]}}
         project.command.side_effect = [json.dumps([external]).encode(), json.dumps([bridge]).encode()]
         project.inventory.return_value = {}
         _admit_provider_network(project, Path("/repository"), "example",
-                                {"mode": "forwarded-services", "host_address": "172.17.0.1"})
+                                {"mode": "forwarded-services", "host_address": "203.0.113.1"})
 
     def test_start_rejects_foreign_network_before_runtime_state_or_containers(self):
         with TemporaryDirectory() as temporary:
@@ -613,7 +613,7 @@ class ProviderDeploymentTests(unittest.TestCase):
                     "PROVIDER_IMAGE_REF=a\nWORKER_IMAGE_REF=b\n"
                     "CHECKPOINT_DIRECTORY=/checkpoint\nMOLFORMER_CACHE_DIRECTORY=/cache\n"
                 ),
-                "network.toml": 'mode = "forwarded-services"\nhost_address = "172.22.0.1"\n',
+                "network.toml": 'mode = "forwarded-services"\nhost_address = "198.51.100.1"\n',
                 "provider.toml": '[api]\norigin = "https://api.example.test"\n',
                 "worker.toml": "worker = true\n",
             }
@@ -636,7 +636,7 @@ class ProviderDeploymentTests(unittest.TestCase):
                     "io.secs-repro.checkout": str(root.resolve()),
                     "io.secs-repro.deployment": "foreign",
                 },
-                "IPAM": {"Config": [{"Subnet": "172.22.0.0/16", "Gateway": "172.22.0.1"}]},
+                "IPAM": {"Config": [{"Subnet": "198.51.100.0/24", "Gateway": "198.51.100.1"}]},
                 "Containers": {},
             }]).encode()
             project.inventory.return_value = {}

@@ -170,8 +170,10 @@ mode = "standard". A provider that reaches a forwarded interpreter or upload
 store instead uses (API transport continues through the shared proxy):
 
   mode = "forwarded-services"
-  host_address = "172.22.0.1"
+  host_address = "198.51.100.1"
 
+These TEST-NET addresses are documentation placeholders; select a non-overlapping
+subnet and gateway for the host before using the example.
 That mode maps nmr.localhost to the address and requires an existing external
 bridge named secs-<name>-egress. The host_address must equal that bridge's
 gateway or the inspected Docker default bridge gateway. The external bridge
@@ -183,7 +185,7 @@ commands from the repository root before starting the deployment:
 
   checkout=$(pwd -P)
   docker --context default network create --driver bridge \
-    --subnet 172.22.0.0/16 --gateway 172.22.0.1 \
+    --subnet 198.51.100.0/24 --gateway 198.51.100.1 \
     --label "io.secs-repro.checkout=$checkout" \
     --label "io.secs-repro.deployment=<name>" \
     "secs-<name>-egress"

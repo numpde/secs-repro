@@ -4,7 +4,10 @@
 /wheelhouse/
 /cache/
 /secrets/
-/config/deployments/
+/config/deployments/*
+!/config/deployments/*/
+/config/deployments/*/*
+!/config/deployments/*/*.toml.example
 /config/host.toml
 /qualification/
 /checkpoints/*/candidates/*

@@ -265,7 +265,7 @@ class LifecycleEndToEndTests(unittest.TestCase):
             (config / "worker.toml").write_text('device = "cuda:0"\n')
             (config / "worker.toml").chmod(0o600)
             (config / "network.toml").write_text(
-                'mode = "forwarded-services"\nhost_address = "172.22.0.1"\n'
+                'mode = "forwarded-services"\nhost_address = "198.51.100.1"\n'
             )
             (config / "network.toml").chmod(0o600)
             env = config / "deployment.env"
@@ -278,7 +278,7 @@ class LifecycleEndToEndTests(unittest.TestCase):
             plan = render_deployment(root, "fw-remote")
             self.assertEqual(
                 plan["services"]["provider"]["extra_hosts"],
-                ["nmr.localhost=172.22.0.1"],
+                ["nmr.localhost=198.51.100.1"],
             )
             self.assertEqual(
                 plan["networks"]["provider-egress"],
