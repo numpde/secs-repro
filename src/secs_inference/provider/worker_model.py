@@ -232,6 +232,9 @@ def main(arguments=None) -> int:
         if document.get("mock_index", False) is not False:
             raise ConfigurationError("The full scientific worker cannot run with a mock index")
         document.pop("mock_index", None)
+        if document.get("mock_runner", False) is not False:
+            raise ConfigurationError("The full scientific worker cannot run as a mock runner")
+        document.pop("mock_runner", None)
         try:
             config = ScientificWorkerConfig(**document)
         except TypeError as error:

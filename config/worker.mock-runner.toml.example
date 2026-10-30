@@ -1,0 +1,3 @@
+# This runner performs no model or candidate search and returns a mock result.
+device = "cpu"
+mock_runner = true

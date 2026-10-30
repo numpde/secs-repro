@@ -188,6 +188,11 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
     worker_config = _toml_document(config / "worker.toml")
     worker_device = worker_config.get("device", "cuda:0")
     mock_index = worker_config.get("mock_index", False)
+    mock_runner = worker_config.get("mock_runner", False)
+    if type(mock_runner) is not bool or (mock_runner and (worker_device != "cpu" or mock_index is not False)):
+        raise ValueError("A mock runner requires device=cpu and cannot use a mock index.")
+    if mock_runner and set(worker_config) != {"device", "mock_runner"}:
+        raise ValueError("The mock runner accepts only device and mock_runner.")
     if type(mock_index) is not bool or (mock_index and worker_device != "cpu"):
         raise ValueError("A mock index requires mock_index=true and device=cpu.")
     if mock_index and set(worker_config) != {"device", "mock_index"}:
@@ -208,6 +213,10 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
         "MOLFORMER_LOCK_FILE": str(repository / "molformer.lock.toml"),
         "CACHE_VERIFIER_FILE": str(repository / "tools/materialize_molformer_cache.py"),
     }
+    if mock_runner:
+        # Compose interpolation occurs before the unused scientific grants are removed.
+        environment.update({"WORKER_IMAGE_REF": "sha256:" + "0" * 64,
+                            "CHECKPOINT_DIRECTORY": "/", "MOLFORMER_CACHE_DIRECTORY": "/"})
     project = _project(repository, name)
     base_recipe = ComposeProject(repository, project.name, ("provider", "worker", "sources-init", "session-init"))
     plan = base_recipe.render(
@@ -217,8 +226,26 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
     _apply_shared_grants(plan, project, config, state)
     worker = plan["services"]["worker"]
     worker.setdefault("environment", {}).update({"SECS_WORKER_DEVICE": worker_device,
-                                                "SECS_MOCK_INDEX": "1" if mock_index else "0"})
-    plan["services"]["provider"].setdefault("environment", {})["SECS_MOCK_INDEX"] = "1" if mock_index else "0"
+                                                "SECS_MOCK_INDEX": "1" if mock_index else "0",
+                                                "SECS_MOCK_RUNNER": "1" if mock_runner else "0"})
+    provider = plan["services"]["provider"]
+    provider.setdefault("environment", {}).update({"SECS_MOCK_INDEX": "1" if mock_index else "0",
+                                                   "SECS_MOCK_RUNNER": "1" if mock_runner else "0"})
+    if mock_runner:
+        for role in ("provider", "worker"):
+            plan["services"][role].setdefault("labels", {})["io.secs.mock-runner"] = "1"
+        provider["volumes"] = [mount for mount in provider["volumes"]
+                               if mount["target"] != "/run/secrets/provider/interpreter.key"]
+        worker["image"] = provider["image"]
+        worker["volumes"] = [mount for mount in worker["volumes"]
+                             if mount["target"] not in {"/checkpoint", "/cache", "/input/molformer.lock.toml", "/opt/materialize.py"}]
+        worker["command"] = ["mkdir -m 700 /tmp/native-config /tmp/native-scratch /tmp/native-status && "
+                             "python -I -m secs_inference.provider.worker_config_snapshot && "
+                             "exec python -I -m provider_core.runner --role secs "
+                             "--socket /run/secs/worker/worker.sock --scratch /tmp/native-scratch "
+                             "--status-directory /tmp/native-status --owner-session-lifetime "
+                             "--startup-seconds 2 --terminate-seconds 2 --kill-seconds 2 --cleanup-seconds 2 "
+                             "-- python -I -m secs_inference.provider.mock_runner_worker"]
     if mock_index:
         for role in ("provider", "worker"):
             plan["services"][role].setdefault("labels", {})["io.secs.mock-index"] = "eight-molecule"
@@ -243,6 +270,11 @@ def _admit_worker_image(project: ComposeProject, plan: dict) -> None:
         raise ValueError("Cannot start worker: Docker did not inspect the selected image identity.")
     config = records[0].get("Config")
     labels = config.get("Labels") if type(config) is dict else None
+    if worker.get("environment", {}).get("SECS_MOCK_RUNNER") == "1":
+        if (worker["image"] != plan["services"]["provider"]["image"] or type(labels) is not dict
+                or labels.get("io.secs-repro.provider.mock-runner") != "1"):
+            raise ValueError("Cannot start mock runner: the provider image lacks its mock-runner contract.")
+        return
     if (type(labels) is not dict or labels.get("io.secs-repro.packages.variant") != expected
             or labels.get("io.secs-repro.worker.device-contract") != "explicit-v1"):
         raise ValueError(f"Cannot start worker: its image must be the SECS {expected} packages variant.")
@@ -489,8 +521,10 @@ def start_deployment(repository: Path, name: str) -> dict:
         )
         raise
     state = repository / "secrets/deployments" / name
-    for path in (config / "provider.toml", config / "worker.toml", state / "interpreter.key",
-                 state / "provider.signing.private.json"):
+    required = [config / "provider.toml", config / "worker.toml", state / "provider.signing.private.json"]
+    if plan["services"]["worker"].get("environment", {}).get("SECS_MOCK_RUNNER") != "1":
+        required.append(state / "interpreter.key")
+    for path in required:
         _private_input(path)
     state = _state_root(repository, name)
     if any(os.path.lexists(state / part) for part in ("state", "sources", "socket")):
@@ -563,6 +597,8 @@ def _status(records: dict) -> dict:
                    "oom_killed": record["State"]["OOMKilled"],
                    **({"mock_index": "eight molecules"}
                       if record.get("Config", {}).get("Labels", {}).get("io.secs.mock-index") == "eight-molecule" else {}),
+                   **({"mock_runner": True}
+                      if record.get("Config", {}).get("Labels", {}).get("io.secs.mock-runner") == "1" else {}),
                    **({"health": record["State"]["Health"]["Status"]}
                       if "Health" in record["State"] else {})}
             for role, record in records.items()}
@@ -584,14 +620,25 @@ def main(arguments: list[str] | None = None) -> int:
         if options.operation == "init":
             target = worker_target(os.environ.get("SECS_WORKER_TARGET", ""))
             selection = os.environ.get("SECS_USE_MOCK_INDEX", "0")
+            runner_selection = os.environ.get("SECS_USE_MOCK_RUNNER", "0")
             if selection not in ("0", "no", "1", "yes") or (selection in ("1", "yes") and target != "cpu"):
                 raise ValueError("Select USE_MOCK_INDEX=yes or no; yes requires TARGET=cpu.")
+            if runner_selection not in ("0", "no", "1", "yes") or (runner_selection in ("1", "yes") and target != "cpu"):
+                raise ValueError("Select USE_MOCK_RUNNER=yes or no; yes requires TARGET=cpu.")
             mock_index = selection in ("1", "yes")
-            suffix = ".mock-index" if mock_index else (".cpu" if target == "cpu" else "")
+            mock_runner = runner_selection in ("1", "yes")
+            if mock_runner and mock_index:
+                raise ValueError("USE_MOCK_RUNNER and USE_MOCK_INDEX cannot both be enabled.")
+            suffix = ".mock-runner" if mock_runner else (".mock-index" if mock_index else (".cpu" if target == "cpu" else ""))
             templates = TEMPLATES | {"worker.toml": Path(f"config/worker{suffix}.toml.example")}
             destination = initialize_configuration(repository, options.deployment, templates)
             print(f"Configuration created: {destination}")
-            print(f"Worker target: {target}; mock index: {'yes (eight molecules)' if mock_index else 'no'}. Build and select the matching worker image.")
+            if mock_runner:
+                print("Mock runner selected: no interpreter or scientific model will run; select the provider image.")
+            else:
+                print(f"Worker target: {target}; mock index: {'yes (eight molecules)' if mock_index else 'no'}. Build and select the matching worker image.")
+            if mock_index or mock_runner:
+                print("Use a separate test provider principal or disposable API; existing queued Jobs for a reused principal can be consumed.")
             print("Edit these files before deployment. No credentials installed or services started.")
             return 0
         config = configuration_directory(repository, options.deployment)

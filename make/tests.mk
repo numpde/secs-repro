@@ -206,7 +206,41 @@ interpreter/model-behavior:
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/tests/model_behavior,dst=/tests,readonly" \
 		--entrypoint python "$$provider_image" -P /tests/test_interpreter_live.py --failfast
 
-.PHONY: test/provider/e2e
+.PHONY: test/provider/e2e test/provider/mock-runner/e2e
+test/provider/mock-runner/e2e:
+	provider_image=$$($(MAKE) --no-print-directory provider/image)
+	stage=$$(mktemp -d /tmp/secs-mock-runner-e2e.XXXXXXXX)
+	started=0
+	cleanup() {
+		status=$$?
+		if test "$$started" -eq 1; then
+			if ! test -s "$$stage/container.cid"; then
+				printf '%s\n' "Test container identity is unconfirmed; retaining $$stage" >&2; exit 1
+			fi
+			read -r container_id < "$$stage/container.cid" || true
+			[[ "$$container_id" =~ ^[a-f0-9]{64}$$ ]] || exit 1
+			if ! $(DOCKER) rm --force "$$container_id" >/dev/null; then
+				printf '%s\n' "Test container retirement is unconfirmed; retaining $$stage" >&2; exit 1
+			fi
+		fi
+		rm -rf -- "$$stage"
+		exit "$$status"
+	}
+	trap cleanup EXIT
+	started=1
+	timeout --signal=TERM --kill-after=5s 30s $(DOCKER) run --cidfile "$$stage/container.cid" --init --pull never --network none --read-only \
+		--user "$(HOST_UID):$(HOST_GID)" --cap-drop ALL --security-opt no-new-privileges:true \
+		--pids-limit 64 --cpus 1 --memory 512m --memory-swap 512m \
+		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777 \
+		--tmpfs /run/secs:rw,nosuid,nodev,noexec,size=8m,uid=$(HOST_UID),gid=$(HOST_GID),mode=700 \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/e2e",dst=/tests,readonly \
+		--entrypoint /bin/sh "$$provider_image" -c '
+		mkdir -m 700 /run/secs/worker /run/secs/sources /tmp/native-scratch /tmp/native-status
+		touch /run/secs/worker/.owner-session.lock; chmod 600 /run/secs/worker/.owner-session.lock
+		python -I -m provider_core.runner --role secs --socket /run/secs/worker/worker.sock --scratch /tmp/native-scratch --status-directory /tmp/native-status --owner-session-lifetime --startup-seconds 2 --terminate-seconds 2 --kill-seconds 2 --cleanup-seconds 2 -- python -I -m secs_inference.provider.mock_runner_worker &
+		runner=$$!
+		trap "kill $$runner 2>/dev/null || true; wait $$runner 2>/dev/null || true" EXIT
+		python -m unittest discover -v -s /tests -p test_mock_runner_e2e.py'
 # A single retained log file has no rotated files to compress. Override the
 # daemon's compression default so this bounded test logger works on either host.
 test/provider/e2e:

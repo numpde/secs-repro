@@ -92,8 +92,11 @@ help:
 	'      Test configuration publication, saved-state ownership and container lifecycle rules.' \
 	'  make test/deployment/e2e' \
 	'      Test offline Compose start/stop/restart and retained state using disposable services.' \
-	'  make provider/deployment/init DEPLOYMENT=<name> [TARGET=cpu|gpu] [USE_MOCK_INDEX=yes|no]' \
+	'  make test/provider/mock-runner/e2e' \
+	'      Test the mock runner and durable delivery handoff without model files.' \
+	'  make provider/deployment/init DEPLOYMENT=<name> [TARGET=cpu|gpu] [USE_MOCK_INDEX=yes|no] [USE_MOCK_RUNNER=yes|no]' \
 	'      The mock index contains eight molecules and requires CPU; omitted TARGET prompts.' \
+	'      Mock runner performs no model work; it cannot be combined with a mock index.' \
 	'      Copy committed examples into private config/deployments/<name>; no services start.' \
 	'  make provider/deployment/config DEPLOYMENT=<name>' \
 	'      Render the selected local images and paths without starting services.' \

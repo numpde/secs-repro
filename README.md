@@ -22,6 +22,15 @@ For deployment checks, `make provider/deployment/init DEPLOYMENT=<name> TARGET=c
 USE_MOCK_INDEX=yes` selects a real model with an eight-molecule starting index.
 Its advertised offering and results identify the limited index; it does not
 represent a full scientific search. Omitting the flag selects the full index.
+Alternatively, initialize with `TARGET=cpu USE_MOCK_RUNNER=yes` to return a
+clearly marked mock result without an interpreter, model, or candidate files.
+The mock runner and mock index cannot be selected together.
+These flags select the saved worker configuration during initialization; they do
+not change an existing deployment when it starts.
+Use either mock mode with a separate test provider principal or a disposable API.
+Reusing a scientific provider principal can consume Jobs already queued for that
+principal, even after its mock offering is advertised. A separate credential for
+the same principal does not isolate its Jobs.
 The candidate index can be built with `make candidates TARGET=cpu` or
 `TARGET=gpu CANDIDATE_GPU=GPU-<uuid>`; the existing index and its evidence are
 never replaced by that command.

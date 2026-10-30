@@ -3,7 +3,8 @@ FROM ${PYTHON_BASE}
 
 ARG PROVIDER_INPUT_ID
 LABEL io.secs-repro.provider.input-id="${PROVIDER_INPUT_ID}" \
-      io.secs-repro.provider.mock-index="1"
+      io.secs-repro.provider.mock-index="1" \
+      io.secs-repro.provider.mock-runner="1"
 
 COPY requirements/provider.lock /opt/provider/requirements.lock
 COPY --from=wheelhouse . /opt/provider/wheelhouse/
@@ -18,6 +19,7 @@ RUN cd /opt/provider/wheelhouse \
 COPY src/secs_inference/__init__.py /opt/secs_inference/__init__.py
 COPY src/secs_inference/model_failure.py /opt/secs_inference/model_failure.py
 COPY src/secs_inference/provider/ /opt/secs_inference/provider/
+RUN python -c 'import pathlib, site; (pathlib.Path(site.getsitepackages()[0]) / "secs-provider.pth").write_text("/opt\n")'
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PROVIDER_CORE_IN_CONTAINER=1 \
     PYTHONPATH=/opt \

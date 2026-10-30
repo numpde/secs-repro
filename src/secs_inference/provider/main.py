@@ -27,6 +27,7 @@ from secs_inference.provider.configuration_error import ConfigurationError
 from secs_inference.provider.diagnostics import scientific_failure_evidence
 from secs_inference.provider.process import publish_hello_until_stopped
 from secs_inference.provider.runtime import _drain_controller, run_services
+from secs_inference.provider.mock_runner_session import MockRunnerSession
 from secs_inference.provider.session import SecsSession
 from secs_inference.provider.sources import AttemptSources
 from secs_inference.provider.worker import WorkerClient
@@ -73,7 +74,14 @@ async def run_provider(config_path=CONFIG_PATH):
     if mock_marker not in ("0", "1"):
         raise ConfigurationError("Cannot start SECS provider: mock index selection must be 0 or 1")
     mock_index = mock_marker == "1"
-    if mock_index:
+    runner_marker = os.environ.get("SECS_MOCK_RUNNER", "0")
+    if runner_marker not in ("0", "1") or (runner_marker == "1" and mock_index):
+        raise ConfigurationError("Cannot start SECS provider: mock runner and mock index selections conflict")
+    mock_runner = runner_marker == "1"
+    if mock_runner:
+        config = replace(config, hello=replace(config.hello, mock_runner=True,
+            display_name="SECS (mock runner)", provider_description="MOCK RUNNER: no model or scientific analysis is run."))
+    elif mock_index:
         config = replace(config, hello=replace(config.hello, mock_index=True,
             display_name="SECS (mock index)", provider_description="MOCK INDEX: eight starting molecules; not a full scientific search."))
     grants = shared_grants(config.shared_settings)
@@ -101,12 +109,13 @@ async def run_provider(config_path=CONFIG_PATH):
             await publish_hello_until_stopped(api=hello_api, provider_ref=provider_ref, policy=config.hello, stop=stop)
         else:
             execution = config.execution
-            chat_spec, chat_http = _read_chat_settings(execution, settings.http.retirement_seconds)
-            store_table = {"exchange_seconds": execution.work_seconds,
-                           "retirement_seconds": settings.http.retirement_seconds}
-            if execution.upload_store_use_private_ca:
-                store_table["ca_file"] = "/run/config/provider/upload-store-ca.crt"
-            store_http = https_settings(store_table, "Upload store", read_startup_file)
+            if not mock_runner:
+                chat_spec, chat_http = _read_chat_settings(execution, settings.http.retirement_seconds)
+                store_table = {"exchange_seconds": execution.work_seconds,
+                               "retirement_seconds": settings.http.retirement_seconds}
+                if execution.upload_store_use_private_ca:
+                    store_table["ca_file"] = "/run/config/provider/upload-store-ca.crt"
+                store_http = https_settings(store_table, "Upload store", read_startup_file)
             worker = WorkerClient(WORKER_SOCKET, startup_seconds=execution.worker_startup_seconds,
                                    retirement_seconds=10, observation_seconds=2)
             claims = AttemptClaims.live(limits=LiveAttemptLimits(
@@ -114,18 +123,22 @@ async def run_provider(config_path=CONFIG_PATH):
             ))
             scope = RecoveryScope(settings.identity.origin, provider_ref, "secs", token_hex(16))
             def assemble(pending):
-                sources = AttemptSources(
-                    job_ref=pending.input.job_ref, api=new_api(), store=store_http.new_transport(),
-                    store_origin=execution.upload_store_origin, directory=SOURCE_DIRECTORY,
-                    max_upload_bytes=execution.max_upload_bytes, max_total_bytes=execution.max_total_bytes,
-                    retirement_seconds=store_http.retirement_seconds,
-                )
-                chat = ChatEndpoint(chat_spec, transport=chat_http.new_transport(),
-                                    request_bytes=2097152, response_bytes=262144)
-                session = SecsSession(worker=worker, sources=sources, chat=chat, work_seconds=execution.work_seconds,
-                                      interpretation_seconds=execution.interpretation_seconds,
-                                      startup_seconds=execution.worker_startup_seconds, max_turns=execution.max_turns,
-                                      secrets=(chat_spec.api_key,), mock_index=mock_index)
+                if mock_runner:
+                    session = MockRunnerSession(worker=worker, work_seconds=execution.work_seconds,
+                                                startup_seconds=execution.worker_startup_seconds)
+                else:
+                    sources = AttemptSources(
+                        job_ref=pending.input.job_ref, api=new_api(), store=store_http.new_transport(),
+                        store_origin=execution.upload_store_origin, directory=SOURCE_DIRECTORY,
+                        max_upload_bytes=execution.max_upload_bytes, max_total_bytes=execution.max_total_bytes,
+                        retirement_seconds=store_http.retirement_seconds,
+                    )
+                    chat = ChatEndpoint(chat_spec, transport=chat_http.new_transport(),
+                                        request_bytes=2097152, response_bytes=262144)
+                    session = SecsSession(worker=worker, sources=sources, chat=chat, work_seconds=execution.work_seconds,
+                                          interpretation_seconds=execution.interpretation_seconds,
+                                          startup_seconds=execution.worker_startup_seconds, max_turns=execution.max_turns,
+                                          secrets=(chat_spec.api_key,), mock_index=mock_index)
                 delivery = SharedDeliveryClient(grants.endpoint(settings.identity.origin, provider_ref), publication,
                                                 exchange_seconds=config.delivery_exchange_seconds,
                                                 retirement_seconds=settings.http.retirement_seconds)

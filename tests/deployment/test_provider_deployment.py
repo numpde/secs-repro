@@ -277,7 +277,7 @@ class ProviderDeploymentTests(unittest.TestCase):
             (state / "provider.signing.private.json").chmod(0o600)
             project = Mock()
             with patch("deployment.provider_deployment._provider_network", return_value={}), patch(
-                "deployment.provider_deployment._render_deployment", return_value={}
+                "deployment.provider_deployment._render_deployment", return_value={"services": {"worker": {"environment": {}}}}
             ), patch("deployment.provider_deployment._admit_provider_network"), patch(
                 "deployment.provider_deployment._admit_worker_image"
             ), patch(
