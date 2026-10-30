@@ -21,6 +21,45 @@ from secs_inference.provider.worker import WorkerClient
 
 
 class PreStartReadinessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unsettled_controller_blocks_discovery_of_another_job(self):
+        stop, entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        facts = FeedInputFacts("job:chosen", "nmr.job.specification.text.v1",
+                               "sha256:" + sha256(b"C2H6O").hexdigest(), 5)
+        queries = []
+
+        class Discovery:
+            async def jobs(self, **query):
+                queries.append(query)
+                return SimpleNamespace(jobs=(SimpleNamespace(input=facts),))
+
+        class Controller:
+            shutdown_ready = True
+
+            async def run(self, _pending):
+                entered.set()
+                await release.wait()
+                stop.set()
+
+        class Worker:
+            async def check_ready(self, *, deadline):
+                pass
+
+        claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
+        task = asyncio.create_task(run_execution(
+            api=Discovery(), scope=RecoveryScope("https://api.test", "provider:test", "secs", "serial"),
+            claims=claims, stop=stop, poll_seconds=0.01, assemble=lambda _pending: Controller(),
+            worker=Worker(), startup_seconds=5,
+        ))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            await asyncio.sleep(0.05)
+            self.assertEqual(len(queries), 1)
+            self.assertIs(queries[0]["has_provider_execution_attempt"], False)
+            self.assertFalse(task.done())
+        finally:
+            release.set()
+            await asyncio.wait_for(task, 2)
+
     async def test_idle_exit_is_retired_and_replaced_before_controller_admission(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
