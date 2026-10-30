@@ -1,326 +1,193 @@
-SECS adoption of the independent shared API proxy
-=================================================
-2026-10-30
+SECS adoption of the shared API proxy and outbox
+================================================
 
-Authority: nmr-provider-tools notes/020_shared_api_proxy_redesign_20261030.txt
-and 021_container_network_topology.txt. The shared-package owner owns the host
-proxy, SDK interface/release and canonical 020; SECS owns its client projection,
-scientific composition, local integration and deployment/retirement tooling.
+The joint design is nmr-provider-tools notes/020_shared_api_proxy_redesign_20261030.txt
+and 021_container_network_topology.txt. The shared-package owner owns the proxy,
+outbox and SDK; SECS owns its integration and scientific lifecycle.
 
-Outcome and boundaries
-----------------------
-
-The joint first milestone is all four providers AND delivery using one independent
-host API proxy against the existing local API at nmr.localhost, with the eight
-old proxies retired. SECS completion contributes to that outcome; its build or
-signed read alone does not establish joint completion. Remote deployments need
-separate host-local builds and runtime observations against their selected API.
-
-After that first deployment, later SECS improvements must leave the proxy image,
-configuration, destination/network, client contract, access group and socket
-volume undisturbed. SECS up/down, replacement, SDK upgrades and cleanup cannot
-start, stop, restart, replace or reconfigure the host proxy or recreate its volume.
-Any later deliberate host-baseline change is a separate shared-owner operation.
-
-Only NMR API transport changes. SECS retains signing identity, API origin, TLS
-verification, delivery binding/intake, exact queued commands, START uncertainty,
-native retirement, source retention and scientific behavior. Interpreter and
-upload-store connections retain their own required routes and access limits.
-The scientific worker retains network_mode: none and receives no API socket.
-Existing sources/session initializers remain scientific storage owners; removal
-of api-init is not permission to delete them or loosen their ownership checks.
-
-Inspected current seams
-------------------------
-
-deployment/provider_deployment.py::_apply_delivery_binding asks the installed SDK
-to describe the selected binding, mounts definition/input files and delivery IPC,
-and sets the provider's supplementary delivery group. _apply_api_route then asks
-deployment_route render for private proxy services, volume and dependencies.
-It merges those roles into the SECS plan and sets SECS_API_PROXY_SOCKET.
-
-src/secs_inference/provider/main.py requires that socket environment variable and
-passes it to the signed API transport. Missing grant already blocks startup.
-It reads API credentials/trust from the selected shared binding. It does not
-need a SECS-specific router protocol or a direct-network fallback.
-
-_project includes api/api-init in inventory and ordered stop. ComposeProject.stop
-waits indefinitely for provider drain before stopping worker and proxy; it keeps
-containers and data. ComposeProject.start refuses running replacements and checks
-the exact resulting service set. Merely deleting api/api-init from inventory will
-make existing old containers foreign and obstruct conversion. Neither this module
-nor the current Make deployment interface provides resource retirement.
-
-_admit_runtime_volumes inspects only lifetime, sources and session. Keep these
-checks: borrowing the host API volume does not make it SECS-owned. The independent
-provider-egress/network.toml admission supports interpreter/store access and must
-survive the API route change. A bridge alone is not a destination allowlist.
-
-Current SDK acquisition is pinned to 0.5.2 in make/provider.mk and provider/native
-locks, with installed-version checks. No new release or interface is assumed.
-
-Shared contract required before implementation
------------------------------------------------
-
-Use one SDK-admitted client projection, from the existing operator definition,
-that supplies the exact external named volume, read-only nocopy client mount,
-absolute socket path and supplementary access GID. The CLI/result fields are
-the working agreement with the shared owner and peers; the concrete contract
-is recorded in the SDK client contract section below. Preserve the existing
-installed-image projection mechanism; do not write another binding parser.
-Client projection has no proxy services, initializer, router network settings,
-cross-project depends_on, registration or host up/down side effects.
-
-The host owner initializes the volume for a dedicated nonroot proxy UID distinct
-from clients, with group traversal/connect and private lock/readiness internals.
-Consumers cannot modify socket state or take the proxy lock. Restricted birth
-permissions, stale-socket safety and lifetime exclusion belong to the SDK proxy.
-SECS needs ordinary CONNECT tunneling with client signing/TLS, temporary-loss
-handling under existing exchange rules, and independent restart-policy recovery.
-
-The first host baseline must reach the existing local API while retaining its
-TLS name; local address mapping, resolver/interface and destination authority
-belong to the proxy owner. API CA and credential remain client inputs. No later
-SECS tier below needs another listener, destination, permission or proxy feature.
-Settle bounded capacity for normal combined traffic during initial bringup;
-known maintenance bursts use their existing client concurrency controls.
-
-Actual names, IDs, credentials and host settings belong in private operator
-inputs/handoffs. This note intentionally does not pick instance settings. Missing
-external volume blocks launch and needs the shared owner; it does not block
-source conversion or authorize an initializer, root client or fallback route.
-
-Concrete SECS changes
-----------------------
-
-1. Replace _apply_api_route's private render/merge with the shared client grant.
-   Preserve _add_mount_grants overlap rejection; add the external volume by its
-   exact name without overwriting an occupied declaration. Add the API GID to
-   existing supplementary groups, deduplicating an already present GID. Preserve
-   delivery intake, input mounts, scientific mounts and worker dependencies.
-   Keep SECS_API_PROXY_SOCKET as the local transport input unless the agreed SDK
-   contract requires a concrete correction; cosmetic renaming buys no capability.
-2. Consume the SDK's revised input_paths/admission so credentials and CA remain
-   granted while obsolete per-binding API resolver/interface/address copies go.
-   Select the SDK-issued client-only binding document for the provider's existing
-   definition_file input, preserving its selected name and delivery settings.
-   Do not mount the original host-policy document into the long-lived provider.
-   Correct the maintained provider configuration example's description of API
-   routing ownership. Retain interpreter/store configuration and network policy.
-3. Change the ordinary production inventory/stop order to provider, worker,
-   sources-init and session-init. Introduce a narrowly scoped maintained retirement
-   operation for the owned former api/api-init roles and their private API volume.
-   It must inspect exact project/checkout/service ownership, require settled and
-   stopped old clients, remove admitted stopped container IDs, then remove only
-   the now-unused old API volume identified by those inspected mounts. Refuse
-   ambiguous ownership or attachments; retain evidence and state on failure.
-   Never scan peers, delete lifetime/source/session/delivery storage, relabel the
-   shared volume or infer settlement from a missing socket or healthy process.
-4. Keep old-topology retirement distinct from normal new-topology admission.
-   The operation may recognize the removed API roles for this explicit purpose;
-   that does not create a private-route rendering branch or fallback in up.
-   It must also support draining an old deployment from the upgraded checkout:
-   admit the original six roles, stop provider admission and await its existing
-   settlement, then stop worker and API dependencies in their original order.
-   Ordinary new down cannot do that after api/api-init leave its strict inventory.
-   Run this scoped old-topology drain/retirement without parsing a new binding or
-   requiring a newly issued SDK in the old image. On interruption, keep status/
-   logs and a retry of this operation available through the same old-role owner.
-   Wire it through deployment/provider_deployment.py and make/provider.mk with
-   maintained help and focused tests. Decide its final command name with the
-   lifecycle implementation; no undocumented docker-rm recipe is the rollout.
-5. Update requirements inputs/locks, wheel acquisition and installed-version
-   checks through the issued SDK release path. Build provider and selected worker
-   images through existing targets; do not rebuild scientific artifacts or alter
-   model/index identity as part of a transport cutover. Do not copy SDK source.
-
-Tier 1: implementation, first local deployment and retirement
--------------------------------------------------------------
-
-Default joint order is host proxy, one real candidate signed read, delivery on
-its retained queue/intakes, then ready providers through their owned replacement
-paths. Candidate/source/build preparation can proceed in parallel. Ready SECS
-work need not wait for other providers. Delivery may be interrupted during its
-replacement; existing producer retention/retry and queue ownership rules apply.
-
-1. Converge the shared projection/definition and socket contract with all owners.
-   Build on issued artifacts, acquire through maintained wheelhouse/lock targets,
-   and make the client and retirement changes in this main checkout.
-2. Run make test/deployment for projection, inventory, stop and ownership behavior.
-   Adapt tests/deployment_e2e/test_api_route.py: its current private owner/UID
-   assumptions must become an independent test-owned proxy plus borrowed client
-   group, with fixture cleanup retaining ownership. Use the existing e2e lane;
-   do not build a separate topology environment. Disposable fixture proxy stops
-   test recovery without disturbing the deployed host baseline.
-3. Relevant assertions: provider keeps both API/delivery groups and all scientific
-   grants; no production API services/dependencies; absent external volume fails
-   before client creation; signed TLS traffic uses the granted socket; cleanup
-   preserves shared and scientific storage; old owned route removal works.
-   Keep existing drain, no-fallback, image identity and native exclusion checks.
-4. Shared owner brings up the local router and configures delivery's existing
-   binding for the new topology. SECS prepares origin, CA, credential,
-   interpreter/store access and existing science inputs. Use provider/deployment/config and the
-   intended installed image/runtime UID/GID for the existing signed API path or
-   startup evidence. No new pre-stop command is needed for Tier 1; preserving
-   incumbent availability is not a prerequisite.
-5. Inspect actual outstanding START, active/native, terminal and held obligations
-   through their existing owners. Use the maintained scoped old-topology operation
-   to stop admission and await real drain while worker and old proxy remain.
-   Ordinary down is sufficient only while using the original launcher that still
-   admits the old roles; the upgraded normal inventory cannot be assumed to do so.
-   An interrupted or blocked stop retains the needed owners and storage. Do not
-   force-kill, edit queues, replay an ambiguous START or rerun science to unblock.
-6. Once old clients settle, use the maintained retirement operation, then apply
-   the new plan through provider/deployment/up. Preserve original binding and
-   delivery queue; a healthy publisher may retain exact pending retries. Repair
-   wrong grants/credentials rather than treating a paused publisher as retrying.
-   Other ready providers continue independently of a SECS-local fault.
-7. Observe the selected images, actual mount/GID/socket, signed API acceptance,
-   provider/worker health, logs and restart counts; check interpreter/store access
-   and usable original delivery intake. Observe delivery progress when work is
-   available. Record privately what was observed, and report sanitized scope.
-   A hello proves API acceptance, not science readiness or a scientific result.
-8. Confirm ordinary SECS replacement/down leaves the shared proxy and socket
-   volume intact; count proxy roles explicitly. Shared owner confirms all four
-   providers AND delivery and the complete old-proxy retirement. Carry remote
-   deployment separately through GitHub push/pull and host-local maintained build
-   and deployment paths. No bundles, overlays, side checkouts or image transfers.
-
-Cutover policy
+First deployment
 ----------------
 
-For this refactor, preserving old configuration while preparing the new one and
-preventing interruption of old delivery while it has results to send are not
-requirements. Configuration replacement and service interruption during cutover
-are accepted. Update the existing inputs through maintained configuration paths;
-do not add old/new staging, matching-selector recovery, rollback machinery or a
-continuity system as deployment prerequisites.
+Run all four providers and the shared outbox against the existing nmr.localhost
+API through one independently managed API CONNECT proxy. All providers use one
+shared outbox intake. Retire eight replaced API proxies and unused private API
+and delivery socket resources through their owners. Source and build results do
+not prove live operation; remote hosts require their own observed deployments.
 
-Storage ownership, signing/TLS, exact pending command bytes, binding identity and
-existing queue/retry/uncertainty rules retain their current owners. Interruption
-is not permission to delete acknowledged obligations, overlap queue owners,
-retarget commands or replay an ambiguous START. Use existing stop, replacement
-and retirement behavior; address an actual launcher blocker at its narrow owner.
-The old-role inventory operation is needed to stop/remove the actual old graph,
-not to preserve availability or provide a private-route fallback.
+Provider and outbox changes leave the proxy running with its socket volume intact.
+Its first deployment supports live capacity, logging and allowed CONNECT authority
+controls. The outbox independently reloads capacity, retry and logging settings
+from the same operator-owned file. Process identity, network setup and socket
+storage remain host deployment responsibilities. Providers do not register with
+or edit this operator file. The API origin, signing identity, TLS and scientific
+source/store/interpreter access remain with their existing client owners.
 
-Delivery's all-binding export uses the shared client-definition --all operation
-(binding_name=None in Python); SECS uses the selected-binding export. Both retain
-the existing delivery settings and original SECS intake identity. One delivery
-mount/GID covers its common API grant; SECS adds that API GID alongside its
-existing delivery intake grant. The shared owner manages delivery replacement
-and the host proxy; SECS does not acquire their lifecycle ownership.
+Configuration replacement and service interruptions during cutover are accepted,
+including while delivery has pending work. Do not add staging, rollback or
+incumbent-continuity machinery as a prerequisite. Existing queue ownership,
+accepted-command bytes, signing/TLS and effect-uncertainty rules continue to apply;
+never overlap queue owners, discard acknowledged work or replay an ambiguous START.
 
-Alternatives and reasons
--------------------------
+Current SECS seams
+------------------
 
-Borrow delivery's old private proxy: rejected because its lifetime and identity
-remain delivery-owned. The host grant survives replacement of either client.
+deployment/provider_deployment.py::_apply_delivery_binding currently reads the
+provider's selected static binding, obtains its private delivery intake grant and
+mounts definition and input files. _apply_api_route merges api/api-init roles and
+sets SECS_API_PROXY_SOCKET. src/secs_inference/provider/config.py requires a
+binding definition and name; main.py loads that binding, builds API settings and
+constructs DeliveryClient from its endpoint and delivery retry settings. These
+are current implementation facts, not the new shared contract.
 
-Keep production render_api_route for fallback or preflight: rejected because it
-preserves competing transport ownership and tests a different running topology.
-Authored disposable API fixtures retain their separately owned test route.
+The provider signs its own API requests. Its scientific session constructs the
+terminal result, and the existing SDK lifecycle hands it to delivery. The worker
+uses network_mode: none; interpreter and upload-store connectivity belong to
+separate provider network policy. _admit_runtime_volumes protects lifetime,
+sources and session storage. Preserve these boundaries and their owned grants.
 
-Give SECS host networking, root or world-writable socket access: rejected because
-the read-only mount and supplementary group provide the needed API capability.
-Scientific service routes remain separate; TLS and credentials stay at clients.
+The deployment inventory includes api/api-init and stop retains containers.
+Removing those roles from the new strict inventory alone would make old project
+containers foreign, blocking status and cleanup. Current normal deployment
+commands do not retire their private route volume.
 
-Delete all old project volumes during migration: rejected because durable work
-and scientific exclusion/source retention outlive transport changes. Exact former
-API-role retirement is small and sufficient; a general cleanup framework is not.
+SECS changes
+------------
 
-Tune/redeploy the router for a later client enhancement: rejected by the stable
-baseline requirement. These tiers need no extra proxy capability; an actual
-combined-load problem must be resolved during the first integration tier.
+* Adopt the issued shared SDK grant interface for both host-owned socket volumes.
+  Add read-only nocopy mounts and supplementary API/outbox access groups to the
+  provider without replacing existing mounts, groups or worker dependencies.
+  Declare the shared volumes external and never initialize, relabel or delete
+  them. A missing volume fails client launch. No provider-owned API proxy,
+  initializer, cross-project dependency or direct-network fallback remains.
+* Replace the static binding selection in config.py, provider.toml.example,
+  deployment/provider_deployment.py and main.py with the shared SDK's actual
+  client configuration and handoff. Keep SECS's own issued credential, API origin,
+  trust and relevant API timeout/topology settings with the provider; remove copied
+  host router policy and the static registration/per-provider intake assumption.
+  Do not invent SDK symbols, wire fields, socket paths or an unissued release.
+* Use the SDK to hand off the exact terminal operation/body and Job/Attempt and
+  API/provider identity, along with usable issued credential, optional CA and
+  publication settings. An in-memory key/context or provider-container path is
+  not sufficient publication material. The SDK/outbox own the format and fresh
+  publication signing; SECS does not serialize private keys into logs or add a
+  second protocol. Accepted result and publication material must be durably
+  committed together before acknowledgement. An uncertain acknowledgement keeps
+  the producer obligation and follows the existing identical-handoff rules.
+* Preserve API signing/TLS and existing START, native retirement, scientific
+  input retention and result semantics. A durable outbox acknowledgement proves
+  acceptance for delivery, not API acceptance. Outbox removal or provider exit
+  cannot remove accepted work. Credential revocation or missing old publication
+  inputs must leave the affected work held and visible through the outbox owner.
+* Adapt the maintained deployment retirement path to admit and stop the observed
+  old six-role graph from the upgraded main checkout, including status and retry
+  after interruption. Inspect owner and mounts, stop using existing ordering,
+  remove only the old admitted API roles and their unused private volume. Preserve
+  ownership evidence on failure. Do not remove lifetime, sources, session, shared
+  API/outbox storage or another owner's delivery resources. The shared owner
+  retires old delivery intakes and delivery-owned API routes after their users stop.
+* Adopt the actual issued SDK through existing lock, wheelhouse and image build
+  paths. Adjust installed-version checks and focused tests with the changed input
+  contract. Do not copy SDK source or build a second configuration model.
 
-Later tiers and concerns
--------------------------
+The shared outbox socket is a submission-only capability. It accepts a result
+handoff and returns its durable acknowledgement or refusal; it exposes no pending,
+status, inventory or capacity reads. Operator inspection remains separate.
+The shared owner validates the submitted credential's structure and matching key
+pair, keeps publication material out of replies, and retains bounded per-provider
+and total backpressure. Local parsing alone does not prove API issuance or
+authorization; the API authenticates publication. The shared socket trusts its
+local submitters and does not cryptographically authenticate each provider. A
+conflict refusal for a guessed matching identity can reveal limited existence
+information, even though there is no queue-read operation.
+This limited disclosure is accepted for the controlled host.
+Private durable publication material, database/WAL and backups stay with its
+owner and out of status, diagnostics and public artifacts. SECS does not own
+outbox queue policy or independently alter its stored rows.
 
-Tier 2: client help/status and safe API/store failure context, small regression
-cases for demonstrated integration faults, and incidental client cleanup. Owners:
-SECS runtime/deployment and shared diagnostics maintainers, as appropriate.
-Trigger: first joint topology works or a concrete operational need is observed.
-Use the existing deferred note 009 and shared diagnostics note 015 for that work;
-it must not require a router change or become a polishing gate for deployment.
+SECS currently configures a 2 MiB pending terminal-body budget in main.py. The
+shared intake must accept that supported body plus separately bounded credential,
+CA and encoding overhead; retain the body budget's meaning without shrinking it
+or truncating results. Account for retained publication material's storage
+footprint in the outbox's capacity limits.
 
-A separate maintained check-api command is optional Tier 2 work, owned by the
-SECS deployment maintainer. Trigger: a concrete operator need for a standalone
-signed read after joint deployment, or a demonstrated integration blocker that
-existing signed API/startup evidence cannot resolve. It would use the installed
-SDK client, intended runtime identity, shared mount/group and trust, without
-science, hello publication, Job admission or lifetime acquisition. One-off
-launch must inspect the exact external volume before docker run, since nocopy
-does not prevent its creation. Do not add this command as a cutover prerequisite.
+SECS admission and retained results
+-----------------------------------
 
-The earlier intermittent read/write failure after proxy stop in note 009 remains
-an unexplained bounded witness, not a proven current defect or permission to
-change retry classifications. Revisit if reproduced in the changed client lane;
-fix an observed blocker at its owner. Other historical deployment deferrals in
-009 are baseline records, not proof of the current installation's state. Check
-latest owner evidence before calling them open requirements for this cutover.
+runtime.py discovers at most one Job with has_provider_execution_attempt=False,
+waits for the controller and drains it before proceeding. main.py configures one
+live Attempt and a 2 MiB pending terminal-body limit. SECS does not directly call
+delivery pending/status for admission. A full or unavailable outbox can therefore
+be discovered only when submitting the selected result: retain that exact handoff
+under the existing live claim, retry using SDK backpressure rules, and do not admit
+another Attempt while it remains unacknowledged. Preserve the bounded claim and
+stop/drain behavior rather than adding a capacity read or registration. After
+durable acknowledgement the outbox owns the accepted work and its bounded queue.
 
-Tier 3 exclusions: multi-API routing, discovery/registration, provider fairness,
-central signing/trust, generic migration/validation infrastructure, chaos/load
-campaigns and unrelated scientific retry/full-index changes. No promised follow-up.
+The API's unattempted-Job feed and existing START uncertainty rules remain the
+authority for discovery, including after restart; do not infer queue membership
+from that feed or promise the old pre-start outbox capacity check. An unaccepted
+result's live owner is not durable across provider process loss: the existing
+pre-ack producer-crash uncertainty remains. A lost acknowledgement must settle
+the original exchange and retry the identical handoff through a submission-only
+SDK; do not require a status lookup. Verify idempotent replay and refusal behavior
+with the issued SDK before claiming this works, including full/unavailable outbox,
+lost acknowledgement, provider stop and restart. A full refusal after science is
+backpressure, not evidence that capacity was reserved before science started.
+An acknowledgement must describe the inputs actually retained: different
+publication inputs cannot silently replace the original or be reported as stored.
+Verify the provider-relative Attempt-filtered feed against the deployed API during
+integration, retaining the original provider identity.
 
-SDK client contract
----------------------
+Local cutover and proof
+-----------------------
 
-Use the contract in shared note 020:
+1. Coordinate the SDK's concrete grants and handoff with the shared owner, then
+   build through maintained targets in the main checkout. Start the proxy and
+   outbox through their independent owner, then bring up ready providers using
+   their maintained workflows. No separate provider registration is needed.
+2. Run make test/deployment and affected existing provider/delivery tests. Adapt
+   tests/deployment_e2e/test_api_route.py to a test-owned route and the shared
+   grant; disposable authored-API fixtures remain independent. Check that both
+   socket mounts/groups coexist with scientific grants, absent external volumes
+   fail, and normal cleanup leaves shared storage intact. Use a one-off docker
+   run only after checking that the exact borrowed volume exists: nocopy alone
+   does not prevent implicit creation.
+3. Stop and retire the old SECS graph through the maintained owning path, then
+   apply the new configuration and start with provider/deployment/up. Service
+   interruption and replacement of old configuration are acceptable; do not
+   block on an empty queue or individual retry receipts. Preserve actual storage
+   and obligations using their existing owners, without manufacturing settlement.
+4. Observe the actual provider and worker, selected images, shared grants, signed
+   API/startup evidence and outbox intake. Check logs, health and restarts; with
+   available work observe outbox progress and account for pending/held items. A
+   paused publisher with wrong material is a blocker, not an ordinary retry.
+   Verify that provider replacement leaves the proxy and outbox running. Joint
+   completion additionally needs all other providers and retirement of all old
+   proxy and private intake roles; count roles, not only total containers.
+5. Each remote host separately acquires issued source and artifacts via GitHub,
+   builds locally and uses its maintained deployment workflows. No bundle
+   transfers, private overlays, side checkouts or one-off operational repairs.
 
-* The existing binding TOML gains api_proxy project/uid/gid/origin plus
-  api_proxy.route; repeated bindings.route disappears. API identity/trust/budgets
-  and delivery settings remain binding-owned. Host origin and client API origin
-  agree at SDK admission. Host UID/GID stay explicit operator inputs.
-* render_api_client(binding) returns ApiClientProjection with exactly compose,
-  client_socket, client_mount and client_group_add. compose contains only the
-  shared-api alias with external: true and name <api_proxy.project>-socket.
-  SECS merges that declaration and read-only nocopy mount, then adds the decimal
-  string GID list to existing groups. It passes no image, UID, namespace or
-  resolver-relocation arguments to client projection.
-* The installed-image command is python -m provider_core.deployment_route client
-  --definition FILE --binding NAME. _apply_api_route can use _sdk_projection with
-  that command and require the four fields above. SECS_API_PROXY_SOCKET receives
-  /run/nmr-api-proxy/proxy.sock; the client mount target is /run/nmr-api-proxy.
-  The intentionally public example project is nmr-api-proxy. No private instance
-  volume, UID/GID or host configuration is selected by this note.
-* input_paths grants only credentials and optional CA; router resolver inputs
-  remain host-owned. Any one-off client resolves the shared-api mount alias
-  through compose.volumes to its exact external name before volume inspection/
-  docker run. Passing the alias as a Docker volume name is incorrect.
+Alternatives and follow-up
+--------------------------
 
-The admitted DeploymentBinding.api_proxy carries only project/gid. The SDK
-operation client_definition_bytes(definition, *, binding_name), exposed by
-deployment_binding client-definition --definition FILE --binding NAME, emits
-the same binding TOML restricted to that selected binding, unchanged delivery
-settings and api_proxy.project/gid. The normal client loader accepts it without
-host uid/origin/route; host render/config continues to require original host
-fields.
+An outbox alone cannot serve direct provider API exchanges. Combining it with the
+proxy would couple proxy availability to outbox replacement and queue recovery.
+Separate services and socket grants preserve the required independent lifecycles.
+Keeping a static provider registry or separate intake sockets would require an
+operator update for each joining provider; a self-contained SDK handoff supplies
+publication inputs with each result instead. Moving signing into the proxy would
+expose provider keys to a transport that does not need them.
 
-The existing SECS launcher mounts its selected definition_file and selected SDK
-input paths; it has no Magnet-style immutable candidate capture. Point that
-existing input at the SDK-produced client document through maintained operator
-provisioning. Both deployment describe-binding/client calls and provider runtime
-then load the same admitted client document. Its selected binding name, delivery
-identity and credential/CA paths stay unchanged. The original full host document
-remains with the shared owner's configuration/capture operation. SECS needs no
-second parser, new schema or local router-policy capture. A read-only mount is
-not an immutable content snapshot; preserve that existing evidence limit.
+Tier 2: client help/status and safe API/store failure context, small regressions
+for observed integration faults, and an optional standalone signed API check if
+an operator need remains. Owner: SECS deployment/runtime maintainers; trigger:
+joint deployment works or a demonstrated blocker cannot be resolved by existing
+checks. One-off checks must enforce exact external-volume existence. These changes
+must not restart or replace the proxy.
 
-When provisioning the selected client document, consume raw TOML bytes via the
-SDK client-definition operation. _sdk_projection currently JSON-decodes every
-result and therefore cannot directly consume that
-CLI's output; do not JSON-decode it, embed TOML in the four-field client grant or
-write another TOML serializer. Use maintained configuration publication;
-client-only projection must not open router resolver files.
-
-Related lifecycle designs
----------------------------
-
-Magnet: ../magnet-deploy/notes/048_shared_api_proxy_adoption_20261030.txt
-NMRNet: ../nmrnet-repro/notes/023_shared_api_proxy_adoption_20261030.txt
-NMRPeak: ../nmrpeak-repro/notes/010_shared_api_proxy_adoption_20261030.txt
-
-Paths above are relative to the SECS repository root. Their distinct capture and
-retirement owners explain why this design uses a SECS-specific old-role operation
-while sharing the SDK client grant and existing storage/queue boundaries.
+Tier 3 excludes registry/registration systems, general migration frameworks,
+per-provider proxy fairness and speculative load or chaos campaigns. A demonstrated
+integration failure belongs in Tier 1 regardless of category. SDK socket names,
+client symbols and handoff representation are shared-owner decisions to settle
+before release; they are not inferred from the superseded static-binding design.
