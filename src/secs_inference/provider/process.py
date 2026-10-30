@@ -41,9 +41,11 @@ async def publish_hello_until_stopped(*, api, provider_ref, policy, stop):
             await api.retire()
             if not api.can_refresh_hello(cause):
                 raise
+            advised = cause.retry_after_seconds
+            delay = max(retry_seconds, advised) if advised is not None else retry_seconds
             _LOG.warning("Provider hello unavailable; refreshing current presentation in %g seconds (HTTP %s; request %s)",
-                         retry_seconds, cause.status, cause.request_id)
-            await wait_until_stopped(stop, retry_seconds)
+                         delay, cause.status, cause.request_id)
+            await wait_until_stopped(stop, delay)
             retry_seconds = min(retry_seconds * 2, 300)
         else:
             _LOG.info("Provider hello published")

@@ -80,9 +80,11 @@ async def run_execution(*, api, scope, claims, stop, poll_seconds, assemble, wor
             await api.retire()
             if not api.can_retry_job_discovery(cause):
                 raise
+            advised = cause.retry_after_seconds
+            delay = max(retry_seconds, advised) if advised is not None else retry_seconds
             _LOG.warning("Job discovery unavailable; retrying in %g seconds (HTTP %s; request %s)",
-                         retry_seconds, cause.status, cause.request_id)
-            await wait_until_stopped(stop, retry_seconds)
+                         delay, cause.status, cause.request_id)
+            await wait_until_stopped(stop, delay)
             retry_seconds = min(300, retry_seconds * 2)
             continue
         retry_seconds = poll_seconds

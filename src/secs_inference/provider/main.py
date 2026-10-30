@@ -52,6 +52,10 @@ def _retry_notice(*_facts):
     _LOG.warning("Shared Attempt owner is retrying its retained operation; no scientific rerun was requested")
 
 
+def _recovered_notice(*_facts):
+    _LOG.info("Shared Attempt START recovered; no scientific rerun was requested")
+
+
 def _read_chat_settings(execution, retirement_seconds):
     key = read_startup_file(INTERPRETER_KEY_PATH, maximum_bytes=16384,
                             label="interpreter API key", secret=True)
@@ -145,7 +149,7 @@ async def run_provider(config_path=CONFIG_PATH):
                 return AttemptController.live(
                     new_api(), claims, session, scope=scope, stopping=science_stopping, admission_stopping=stop,
                     start_policy=LiveStartPolicy(cadence_seconds=execution.poll_seconds,
-                                                on_retry=_retry_notice, on_recovered=_retry_notice),
+                                                on_retry=_retry_notice, on_recovered=_recovered_notice),
                     delivery=delivery, on_delivery_retry=_retry_notice,
                     delivery_retry_initial_seconds=config.delivery_retry_initial_seconds,
                     delivery_retry_max_seconds=config.delivery_retry_max_seconds,
