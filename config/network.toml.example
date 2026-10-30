@@ -1,2 +1,2 @@
-# Interpreter and upload-store egress only; binding.route owns the control API.
+# Interpreter and upload-store egress only; the shared proxy owns the control API route.
 mode = "standard"

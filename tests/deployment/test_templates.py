@@ -185,7 +185,8 @@ class InitializationTests(unittest.TestCase):
         error = OSError("sync failed")
         error.add_note("Configuration is visible; crash durability is unconfirmed.")
         output = StringIO()
-        with patch("deployment.provider_deployment.initialize_configuration", side_effect=error):
+        with patch("deployment.provider_deployment.initialize_configuration", side_effect=error), patch.dict(
+                "os.environ", {"SECS_WORKER_TARGET": "cpu"}):
             with redirect_stderr(output):
                 self.assertEqual(main(["init", "production"]), 1)
         self.assertIn("initialization failed", output.getvalue())

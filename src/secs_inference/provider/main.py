@@ -3,18 +3,17 @@
 import asyncio
 from dataclasses import replace
 import logging
-import os
 from pathlib import Path
 from secrets import token_hex
 import signal
 
 from provider_core.api import ProviderAPI
-from provider_core.api_config import api_settings, https_settings
+from provider_core.api_config import api_settings_with_material, https_settings
 from provider_core.attempt_record import RecoveryScope
 from provider_core.chat import ChatEndpoint, ChatEndpointSpec
 from provider_core.controller import AttemptController, LiveStartPolicy
-from provider_core.delivery_client import DeliveryClient
-from provider_core.deployment_binding import load_deployment_bindings
+from provider_core.shared_delivery_client import SharedDeliveryClient
+from provider_core.shared_grants import shared_grants
 from provider_core.diagnostics import failure_evidence, write_stderr
 from provider_core.failure_projection import owned_details
 from provider_core.lifetime import ProviderLifetime
@@ -69,13 +68,9 @@ def _read_chat_settings(execution, retirement_seconds):
 
 async def run_provider(config_path=CONFIG_PATH):
     config = decode_provider_config(read_startup_file(config_path, maximum_bytes=65536, label="SECS provider configuration"))
-    definition = load_deployment_bindings(config.binding_definition)
-    binding = definition.selected(config.binding_name)
-    settings, provider_ref = api_settings(binding.api, read_startup_file)
-    proxy_socket = os.environ.get("SECS_API_PROXY_SOCKET")
-    if proxy_socket is None:
-        raise ConfigurationError("Cannot start SECS provider: the launcher did not grant its shared API proxy socket")
-    settings = replace(settings, http=replace(settings.http, proxy_socket=proxy_socket))
+    grants = shared_grants(config.shared_settings)
+    settings, provider_ref, publication = api_settings_with_material(config.api, read_startup_file)
+    settings = replace(settings, http=replace(settings.http, proxy_socket=str(grants.proxy_socket)))
     if (LIFETIME_DIRECTORY / "journal").exists():
         raise ConfigurationError("Legacy Attempt journal remains: drain its obligations under the old runtime and retain its evidence before selecting a fresh SDK lifetime directory")
     stop, science_stopping = asyncio.Event(), asyncio.Event()
@@ -123,15 +118,16 @@ async def run_provider(config_path=CONFIG_PATH):
                                       interpretation_seconds=execution.interpretation_seconds,
                                       startup_seconds=execution.worker_startup_seconds, max_turns=execution.max_turns,
                                       secrets=(chat_spec.api_key,))
-                delivery = DeliveryClient(binding.endpoint, exchange_seconds=definition.request_seconds,
-                                          retirement_seconds=settings.http.retirement_seconds)
+                delivery = SharedDeliveryClient(grants.endpoint(settings.identity.origin, provider_ref), publication,
+                                                exchange_seconds=config.delivery_exchange_seconds,
+                                                retirement_seconds=settings.http.retirement_seconds)
                 return AttemptController.live(
                     new_api(), claims, session, scope=scope, stopping=science_stopping, admission_stopping=stop,
                     start_policy=LiveStartPolicy(cadence_seconds=execution.poll_seconds,
                                                 on_retry=_retry_notice, on_recovered=_retry_notice),
                     delivery=delivery, on_delivery_retry=_retry_notice,
-                    delivery_retry_initial_seconds=definition.retry_initial_seconds,
-                    delivery_retry_max_seconds=definition.retry_max_seconds,
+                    delivery_retry_initial_seconds=config.delivery_retry_initial_seconds,
+                    delivery_retry_max_seconds=config.delivery_retry_max_seconds,
                     allowed_job_states=frozenset({"open", "closed"}), poll_seconds=execution.poll_seconds,
                     task_settle_seconds=10,
                 )

@@ -13,7 +13,6 @@ from contextlib import contextmanager
 import shutil
 from time import monotonic, sleep
 import unittest
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 from deployment.compose import ComposeProject
@@ -37,44 +36,36 @@ def lifecycle_workspace():
         shutil.rmtree(temporary)
 
 
-def binding_fixture(root, config, *, origin="https://api.example", credential=None, ca_file=None, uid=65532, gid=65532):
-    """Grant synthetic paths through the actual installed SDK definition parser."""
+def shared_fixture(root, config, *, origin="https://api.example", credential=None, ca_file=None, gid=65532,
+                   project="secs-render-fixture"):
+    """Project synthetic shared grants through the installed SDK."""
     if credential is None:
         credential = root / "synthetic-signing.json"
         credential.write_text("fixture credential is projected, never opened")
         credential.chmod(0o600)
-    definition = root / "bindings.toml"
-    definition.write_text(f'''project = "secs-render-fixture"
-uid = {uid}
+    definition = root / "shared.toml"
+    definition.write_text(f'''[deployment]
+project = "{project}"
 gid = {gid}
-request_seconds = 1
-retry_initial_seconds = 0.01
-retry_max_seconds = 0.1
-[limits]
-provider_items = 1
-provider_bytes = 4096
-total_items = 16
-total_bytes = 65536
-[[bindings]]
-name = "secs"
-socket_path = "/run/delivery/delivery.sock"
-[bindings.api]
+''')
+    definition.chmod(0o600)
+    (config / "provider.toml").write_text(f'''schema_id = "secs.provider.config.v3"
+[shared]
+settings_file = "{definition}"
+[api]
 origin = "{origin}"
 provider_ref = "provider:secs-route"
 profile = "dev-local"
 topology = "dev-local"
-credential_file = "{credential}"
-{'' if ca_file is None else f'ca_file = "{ca_file}"'}
+credential_file = "/run/secrets/provider/provider.signing.private.json"
+{'' if ca_file is None else 'ca_file = "/run/config/provider/api-ca.crt"'}
 exchange_seconds = 1
 retirement_seconds = 0.2
-[bindings.route]
-mode = "mapped"
-interface = "lo"
-log_level = "INFO"
-addresses = ["{urlsplit(origin).hostname}=127.0.0.1"]
+[delivery]
+exchange_seconds = 1
+retry_initial_seconds = 0.01
+retry_max_seconds = 0.1
 ''')
-    definition.chmod(0o600)
-    (config / "provider.toml").write_text(f'[binding]\ndefinition_file = "{definition}"\nname = "secs"\n')
     (config / "provider.toml").chmod(0o600)
     return credential
 
@@ -212,6 +203,8 @@ class LifecycleEndToEndTests(unittest.TestCase):
                 'worker_gpu_uuid = "GPU-00000000-0000-0000-0000-000000000000"\n'
             )
             (root / "config/host.toml").chmod(0o600)
+            (config / "worker.toml").write_text('device = "cuda:0"\n')
+            (config / "worker.toml").chmod(0o600)
             (config / "network.toml").write_text('mode = "standard"\n')
             (config / "network.toml").chmod(0o600)
             env = config / "deployment.env"
@@ -219,7 +212,7 @@ class LifecycleEndToEndTests(unittest.TestCase):
                            f"CHECKPOINT_DIRECTORY={root}/checkpoint\n"
                            f"MOLFORMER_CACHE_DIRECTORY={root}/cache\n")
             env.chmod(0o600)
-            credential_path = binding_fixture(root, config)
+            shared_fixture(root, config)
             plan = render_deployment(root, "example")
             provider, worker = plan["services"]["provider"], plan["services"]["worker"]
             self.assertEqual(provider["restart"], "unless-stopped")
@@ -234,12 +227,12 @@ class LifecycleEndToEndTests(unittest.TestCase):
             self.assertNotIn("ports", worker)
             provider_mounts = {v["target"]: v for v in provider["volumes"]}
             worker_mounts = {v["target"]: v for v in worker["volumes"]}
-            credential = provider_mounts[str(credential_path)]
+            credential = provider_mounts["/run/secrets/provider/provider.signing.private.json"]
             self.assertTrue(credential["read_only"])
-            self.assertEqual(credential["source"], str(credential_path))
-            self.assertNotIn(str(credential_path), worker_mounts)
+            self.assertNotIn("/run/secrets/provider/provider.signing.private.json", worker_mounts)
             self.assertTrue(provider_mounts["/run/secs/worker"]["read_only"])
-            self.assertTrue(provider_mounts["/run/delivery"]["read_only"])
+            self.assertTrue(provider_mounts["/run/nmr-api-proxy"]["read_only"])
+            self.assertTrue(provider_mounts["/run/nmr-api-outbox"]["read_only"])
             command = " ".join(worker["command"])
             self.assertIn("python -I -m secs_inference.provider.worker_config_snapshot", command)
             self.assertLess(command.index("secs_inference.provider.worker_config_snapshot"),
@@ -250,6 +243,11 @@ class LifecycleEndToEndTests(unittest.TestCase):
             self.assertFalse(any("/secrets/" in target for target in worker_mounts))
             self.assertTrue(worker_mounts["/checkpoint"]["read_only"])
             self.assertFalse((root / "secrets").exists())
+            (config / "worker.toml").write_text('device = "cpu"\n')
+            (root / "config/host.toml").unlink()
+            cpu_plan = render_deployment(root, "example")
+            self.assertNotIn("deploy", cpu_plan["services"]["worker"])
+            self.assertEqual(cpu_plan["services"]["worker"]["network_mode"], "none")
 
     def test_forwarded_api_network_is_valid_compose_input(self):
         image = os.environ["DEPLOYMENT_TEST_IMAGE"]
@@ -264,6 +262,8 @@ class LifecycleEndToEndTests(unittest.TestCase):
                 'worker_gpu_uuid = "GPU-00000000-0000-0000-0000-000000000000"\n'
             )
             (root / "config/host.toml").chmod(0o600)
+            (config / "worker.toml").write_text('device = "cuda:0"\n')
+            (config / "worker.toml").chmod(0o600)
             (config / "network.toml").write_text(
                 'mode = "forwarded-services"\nhost_address = "172.22.0.1"\n'
             )
@@ -274,7 +274,7 @@ class LifecycleEndToEndTests(unittest.TestCase):
                 f"CHECKPOINT_DIRECTORY={root}/checkpoint\nMOLFORMER_CACHE_DIRECTORY={root}/cache\n"
             )
             env.chmod(0o600)
-            binding_fixture(root, config)
+            shared_fixture(root, config)
             plan = render_deployment(root, "fw-remote")
             self.assertEqual(
                 plan["services"]["provider"]["extra_hosts"],

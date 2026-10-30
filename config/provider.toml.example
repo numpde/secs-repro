@@ -1,10 +1,23 @@
-schema_id = "secs.provider.config.v2"
+schema_id = "secs.provider.config.v3"
 
-# Use the same operator-owned definition as shared delivery.
-# API identity, trust, routing and the delivery socket are defined there once.
-[binding]
-definition_file = "/private/nmr/delivery-bindings.toml"
-name = "secs"
+# The shared service owner supplies this operator-owned settings file.
+[shared]
+settings_file = "/private/nmr/shared.toml"
+
+[api]
+origin = "https://api.example.test"
+profile = "dev-local"
+topology = "dev-local"
+provider_ref = "provider:replace-me"
+credential_file = "/run/secrets/provider/provider.signing.private.json"
+exchange_seconds = 30
+retirement_seconds = 10
+# ca_file = "/run/config/provider/api-ca.crt"
+
+[delivery]
+exchange_seconds = 30
+retry_initial_seconds = 1
+retry_max_seconds = 30
 
 [hello]
 display_name = "SECS"

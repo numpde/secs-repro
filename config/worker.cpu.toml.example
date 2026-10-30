@@ -1,0 +1,15 @@
+# Paths are inside the offline worker, not host paths.
+# The worker captures this file at container startup. For a device change, use
+# deployment down, select the matching image, then deployment up.
+checkpoint_directory = "/checkpoint"
+molformer_lock = "/input/molformer.lock.toml"
+device = "cpu"
+compute_dtype = "float32"
+smiles_batch_size = 256
+initial_population_size = 512
+neighbours = 100000
+threads = 8
+population_size = 512
+offspring_size = 1024
+max_generations = 10
+seed = 42

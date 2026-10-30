@@ -1,9 +1,11 @@
 # Paths are inside the offline worker, not host paths.
-# The worker captures this file at container startup; restart the worker container to apply changes.
+# The worker captures this file at container startup. For a device change, use
+# deployment down, select the matching image, then deployment up.
 checkpoint_directory = "/checkpoint"
 molformer_lock = "/input/molformer.lock.toml"
 device = "cuda:0"
 compute_dtype = "bfloat16"
+# For a CPU host, select device = "cpu", compute_dtype = "float32", and the CPU worker image.
 smiles_batch_size = 256
 initial_population_size = 512
 neighbours = 100000

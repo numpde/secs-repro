@@ -19,7 +19,7 @@ class WorkerConfigSnapshotTests(unittest.TestCase):
             source.chmod(0o600)
             with patch("secs_inference.provider.worker_config_snapshot.os.fchmod", side_effect=OSError("refused")):
                 with self.assertRaises(OSError):
-                    capture(source, destination)
+                    capture(source, destination, "cuda:0")
             self.assertFalse(destination.exists())
             self.assertEqual(source.read_text(), "seed = 42\n")
 
@@ -30,7 +30,7 @@ class WorkerConfigSnapshotTests(unittest.TestCase):
             source.write_bytes(b" " * 65537)
             source.chmod(0o600)
             with self.assertRaises(StartupFileRejected):
-                capture(source, destination)
+                capture(source, destination, "cuda:0")
             self.assertFalse(destination.exists())
 
     def test_snapshot_keeps_original_bytes_when_operator_edits_source(self):
@@ -41,15 +41,24 @@ class WorkerConfigSnapshotTests(unittest.TestCase):
             source.chmod(0o600)
             previous = os.umask(0o777)
             try:
-                capture(source, destination)
+                capture(source, destination, "cuda:0")
             finally:
                 os.umask(previous)
             source.write_bytes(b"seed = 99\n")
             self.assertEqual(destination.read_bytes(), b"seed = 42\n")
             self.assertEqual(destination.stat().st_mode & 0o777, 0o400)
             with self.assertRaises(FileExistsError):
-                capture(source, destination)
+                capture(source, destination, "cuda:0")
             self.assertEqual(destination.read_bytes(), b"seed = 42\n")
+
+    def test_changed_device_is_rejected_before_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, destination = Path(directory) / "source", Path(directory) / "snapshot"
+            source.write_text('device = "cuda:0"\n')
+            source.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "differs from the deployed"):
+                capture(source, destination, "cpu")
+            self.assertFalse(destination.exists())
 
 
 if __name__ == "__main__":

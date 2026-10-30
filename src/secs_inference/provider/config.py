@@ -11,7 +11,7 @@ import tomllib
 from secs_inference.provider.configuration_error import ConfigurationError
 
 
-SCHEMA_ID = "secs.provider.config.v2"
+SCHEMA_ID = "secs.provider.config.v3"
 CONFIG_PATH = Path("/run/config/provider/provider.toml")
 INTERPRETER_KEY_PATH = Path("/run/secrets/provider/interpreter.key")
 
@@ -72,8 +72,11 @@ class HelloPolicy:
 class ProviderConfig:
     """The execution table is absent for an explicitly hello-only deployment."""
 
-    binding_definition: Path
-    binding_name: str
+    shared_settings: Path
+    api: dict
+    delivery_exchange_seconds: float
+    delivery_retry_initial_seconds: float
+    delivery_retry_max_seconds: float
     hello: HelloPolicy
     execution: ExecutionConfig | None = None
 
@@ -87,19 +90,31 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
         document = tomllib.loads(raw.decode("utf-8"))
     except (UnicodeError, tomllib.TOMLDecodeError) as error:
         raise ConfigurationError("Provider config is not valid TOML") from error
-    _require_fields("top level", document, {"binding", "hello", "schema_id"}, {"execution"})
+    _require_fields("top level", document, {"shared", "api", "delivery", "hello", "schema_id"}, {"execution"})
     if document["schema_id"] != SCHEMA_ID:
         raise ConfigurationError(f"Cannot load provider configuration: schema_id must be {SCHEMA_ID!r}")
 
-    binding = _require_table(document, "binding", {"definition_file", "name"})
-    definition_file, binding_name = binding["definition_file"], binding["name"]
+    shared = _require_table(document, "shared", {"settings_file"})
+    definition_file = shared["settings_file"]
     if (type(definition_file) is not str or not definition_file.startswith("/")
             or any(char in definition_file for char in ("\0", "\r", "\n", ","))
             or not Path(definition_file).name or ".." in Path(definition_file).parts
             or str(Path(definition_file)) != definition_file):
-        raise ConfigurationError("Binding definition_file must be one normalized absolute path")
-    if type(binding_name) is not str:
-        raise ConfigurationError("Binding name must be text selecting a binding from the shared definition")
+        raise ConfigurationError("Shared settings_file must be one normalized absolute path")
+    api = document["api"]
+    if type(api) is not dict:
+        raise ConfigurationError("Provider config [api] must be a table")
+    if api.get("credential_file") != "/run/secrets/provider/provider.signing.private.json":
+        raise ConfigurationError("API credential_file must select the installed provider credential")
+    ca = api.get("ca_file")
+    if ca is not None and (type(ca) is not str or str(Path(ca)) != ca
+                           or Path(ca).parent != Path("/run/config/provider")):
+        raise ConfigurationError("API ca_file must select a file in /run/config/provider")
+    delivery = _require_table(document, "delivery", {"exchange_seconds", "retry_initial_seconds", "retry_max_seconds"})
+    for key, value in delivery.items():
+        _require_positive_seconds(value, "delivery " + key)
+    if delivery["retry_initial_seconds"] > delivery["retry_max_seconds"]:
+        raise ConfigurationError("Delivery initial retry delay cannot exceed its maximum")
 
     hello = _require_table(
         document,
@@ -123,7 +138,10 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
         table = _require_table(document, "execution", required,
                                set(ExecutionConfig.__dataclass_fields__) - required)
         execution = ExecutionConfig(**table)
-    return ProviderConfig(binding_definition=Path(definition_file), binding_name=binding_name, hello=policy, execution=execution)
+    return ProviderConfig(shared_settings=Path(definition_file), api=api,
+                          delivery_exchange_seconds=delivery["exchange_seconds"],
+                          delivery_retry_initial_seconds=delivery["retry_initial_seconds"],
+                          delivery_retry_max_seconds=delivery["retry_max_seconds"], hello=policy, execution=execution)
 
 
 def _require_table(

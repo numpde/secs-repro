@@ -248,7 +248,7 @@ class NativeWorkerTests(unittest.IsolatedAsyncioTestCase):
         source, snapshot = self.root / "operator.toml", self.root / "snapshot.toml"
         source.write_text("seed = 42\n")
         source.chmod(0o600)
-        capture(source, snapshot)
+        capture(source, snapshot, "cuda:0")
         await self.start(config_file=snapshot)
         await self.worker.check_ready(deadline=monotonic() + 10)
         first = await self.worker.request({"operation": "config"}, deadline=monotonic() + 3)

@@ -37,6 +37,9 @@ class GpuSelectionTests(unittest.TestCase):
         (self.work / "checkpoint").mkdir()
         (self.work / "checkpoint/candidates.toml").touch()
         (self.work / "cache").mkdir()
+        (self.work / "tools").mkdir()
+        (self.work / "tools/retain_uncertain_stage.sh").write_bytes(
+            (REPOSITORY / "tools/retain_uncertain_stage.sh").read_bytes())
         (self.work / "tests/challenges").mkdir(parents=True)
         (self.work / "tests/challenges/test_published_challenges.py").touch()
         (self.work / "tests/fixtures/challenges").mkdir(parents=True)
@@ -45,12 +48,13 @@ class GpuSelectionTests(unittest.TestCase):
         (self.work / "Makefile").write_text(
             'SHELL := /bin/bash\n.SHELLFLAGS := -eu -o pipefail -c\n.ONESHELL:\n'
             'HOST_UID := 1000\nCHECKPOINT_DIRECTORY := checkpoint\n'
+            f'REPOSITORY_ROOT := {REPOSITORY}\n'
             'MOLFORMER_CACHE := cache\nDOCKER := docker\n'
             'packages_image_tag = fixture\n'
             f'include {REPOSITORY}/make/candidates.mk\n'
             f'include {REPOSITORY}/make/candidate-qualification.mk\n'
             f'include {REPOSITORY}/make/tests.mk\n'
-            'checkpoint/image packages/gpu/image:\n\t@:\n'
+            'checkpoint/image packages/gpu/image packages/cpu/image:\n\t@:\n'
         )
         self.environment = {
             "PATH": f"{commands}:/usr/bin:/bin",
@@ -71,6 +75,8 @@ class GpuSelectionTests(unittest.TestCase):
 
     def run_target(self, target, selector=None):
         arguments = ["make", "--no-print-directory", target, f"ARCHIVE={self.archive}"]
+        if target == "candidates":
+            arguments.append("TARGET=gpu")
         if selector is not None:
             arguments.append(f"CANDIDATE_GPU={selector}")
         return subprocess.run(
@@ -111,3 +117,21 @@ class GpuSelectionTests(unittest.TestCase):
                         position = arguments.index("--gpus")
                         self.assertEqual(arguments[position + 1], f"device={selector}")
                     self.assertIn("79", result.stderr)
+
+    @unittest.skipIf(os.getuid() == 0, "Candidate recipes reject host UID 0.")
+    def test_cpu_candidates_do_not_grant_a_gpu(self):
+        result = subprocess.run(
+            ["make", "--no-print-directory", "candidates", "TARGET=cpu", f"ARCHIVE={self.archive}"],
+            cwd=self.work, env=self.environment, capture_output=True, text=True, timeout=10,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("--gpus", self.log.read_text())
+
+    def test_empty_dtype_is_rejected_before_build(self):
+        result = subprocess.run(
+            ["make", "--no-print-directory", "candidates", "TARGET=cpu", "CANDIDATE_DTYPE="],
+            cwd=self.work, env=self.environment, capture_output=True, text=True, timeout=10,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("select float32 or bfloat16", result.stderr)
+        self.assertFalse(self.log.exists())

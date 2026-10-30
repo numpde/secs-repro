@@ -2,13 +2,14 @@ PROVIDER_IMAGE_TAG := secs-repro/provider:local
 PROVIDER_WHEELHOUSE := $(REPOSITORY_ROOT)/wheelhouse/provider
 NATIVE_WHEELHOUSE := $(REPOSITORY_ROOT)/wheelhouse/native
 override PROVIDER_PYTHON_BASE := docker.io/library/python:3.12.16-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
-override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.2/provider_core-0.5.2-py3-none-any.whl
+override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.3/provider_core-0.5.3-py3-none-any.whl
 
 # Initialization is a host filesystem operation, not a build or API operation.
 # Pass the literal name through the environment to keep shell syntax out of it.
 .PHONY: provider/deployment/init provider/deployment/config provider/deployment/up
 .PHONY: provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs test/deployment
 provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
+provider/deployment/init: private export SECS_WORKER_TARGET := $(if $(filter command line,$(origin TARGET)),$(value TARGET),)
 provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs:
 	@cd "$(REPOSITORY_ROOT)"
 	python3 -m deployment.provider_deployment "$(@F)" "$${DEPLOYMENT_INPUT}"

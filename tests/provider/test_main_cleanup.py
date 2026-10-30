@@ -133,15 +133,15 @@ raise SystemExit(main.main())
             raise close_failure
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
-            config = ProviderConfig(root / "definition", "secs", HelloPolicy("SECS", "fixture", 10, 1))
-            definition = SimpleNamespace(selected=lambda _name: SimpleNamespace(api={}))
+            config = ProviderConfig(root / "settings", {}, 1, 1, 5, HelloPolicy("SECS", "fixture", 10, 1))
+            grants = SimpleNamespace(proxy_socket=Path("/route/proxy.sock"))
             with (
                 patch.object(main, "LIFETIME_DIRECTORY", root),
                 patch.dict(os.environ, {"SECS_API_PROXY_SOCKET": "/route/proxy.sock"}),
                 patch.object(main, "read_startup_file", return_value=b"fixture"),
                 patch.object(main, "decode_provider_config", return_value=config),
-                patch.object(main, "load_deployment_bindings", return_value=definition),
-                patch.object(main, "api_settings", return_value=(settings, "provider:fixture")),
+                patch.object(main, "shared_grants", return_value=grants),
+                patch.object(main, "api_settings_with_material", return_value=(settings, "provider:fixture", object())),
                 patch.object(main, "ProviderAPI", side_effect=(hello, discovery)),
                 patch.object(main, "publish_hello_until_stopped", side_effect=runtime_failure),
                 patch.object(ProviderLifetime, "close", autospec=True, side_effect=failing_close),

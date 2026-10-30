@@ -6,11 +6,18 @@ SECS deployed as an NMR API provider.
 
 The provider uses the shared [provider-core SDK](https://github.com/numpde/nmr-provider-tools/tree/main/packages/provider-core)
 for Attempt control, verified transfers, native supervision and durable delivery.
-Select its operator-owned binding definition in `config/provider.toml.example`.
-The launcher projects the binding's private API proxy; the provider requires
-that route. `network.toml` separately controls interpreter and upload-store egress.
+Select the shared services' operator-owned settings and the provider's own API
+identity in `config/provider.toml.example`. The launcher borrows the independently
+managed API proxy and outbox sockets. `network.toml` separately controls interpreter
+and upload-store egress.
 The API and scientific images install the same SDK wheel using its issued API
 and native installation locks; the scientific image retains its own dependency pins.
+Initialize a named deployment with `TARGET=cpu` or `TARGET=gpu`; an interactive
+terminal offers the choice when omitted. Build and select the corresponding CPU
+or GPU packages image. GPU deployments also require the host GPU UUID selection.
+The candidate index can be built with `make candidates TARGET=cpu` or
+`TARGET=gpu CANDIDATE_GPU=GPU-<uuid>`; the existing index and its evidence are
+never replaced by that command.
 
 Networked acquisition requires `NETWORK_INTERFACE=<device>` or
 `NETWORK_INTERFACE=system`, supplied on the make command line or in the
@@ -31,7 +38,7 @@ the stopped deployment's old `state`, `sources`, and `socket` directories out of
 its runtime directory; startup refuses to silently leave those owners behind.
 [Legacy recovery instructions](notes/005_closed_attempt_archival.txt) apply to
 the old runtime. Provider lifetime, source files, worker IPC and API routing use
-Docker-managed volumes; the shared delivery queue remains separately owned.
+Docker-managed volumes; the shared API route and delivery queue remain separately owned.
 
 [GPU selection and checks after host software upgrades](notes/004_provider_execution.txt).
 

@@ -1,17 +1,17 @@
-"""One actual signed provider process uses only its private shared API route."""
+"""Exercise the provider through a disposable shared proxy and socket grants."""
 
 import json
 import os
 from pathlib import Path
-import ssl
+import shutil
 from time import monotonic, sleep
 import unittest
-from urllib.request import urlopen
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from deployment.compose import ComposeProject
-from deployment.provider_deployment import _apply_api_route, retire_old_api
-from test_lifecycle import binding_fixture, lifecycle_workspace
+from deployment.provider_deployment import _apply_shared_grants
+from test_lifecycle import lifecycle_workspace, shared_fixture
 
 
 class ApiRouteProcessTests(unittest.TestCase):
@@ -24,20 +24,18 @@ class ApiRouteProcessTests(unittest.TestCase):
             self.assertLess(monotonic(), deadline, message)
             sleep(0.05)
 
-    def test_signed_main_uses_private_route_and_recovers_without_direct_fallback(self):
+    def test_signed_main_uses_shared_route_without_direct_fallback(self):
         image = os.environ["DEPLOYMENT_TEST_IMAGE"]
         source = Path(__file__).resolve().parents[2]
         with lifecycle_workspace() as temporary:
             root = Path(temporary)
-            name = "route-" + uuid4().hex[:12]
-            project = ComposeProject(root, "secs-" + name, ("provider", "api", "api-init"), ("api-init",))
-            peer, config = root / "peer", root / "config/deployments" / name
-            state = root / "state"
+            name = "secs-route-" + uuid4().hex[:12]
+            project = ComposeProject(root, name, ("provider",))
+            peer, config, state = root / "peer", root / "config", root / "state"
             for directory in (peer, config, state):
-                directory.mkdir(mode=0o700, parents=True)
-            peer_id = root / "peer.cid"
-            route_volume = None
-            shared_volume = project.name + "-shared-test"
+                directory.mkdir(mode=0o700)
+            peer_id, proxy_id = root / "peer.cid", root / "proxy.cid"
+            volumes = [name + "-proxy-socket", name + "-outbox-socket"]
             try:
                 project.command(
                     "run", "--detach", "--init", "--pull", "never", "--cidfile", str(peer_id),
@@ -53,67 +51,66 @@ class ApiRouteProcessTests(unittest.TestCase):
                 ready = self.wait_for(lambda: (peer / "ready.json").exists() and json.loads(
                     (peer / "ready.json").read_text()), "Synthetic TLS peer did not become ready")
                 origin = ready["origin"]
-                credential = binding_fixture(root, config, origin=origin, credential=peer / "credential.json",
-                                             ca_file=peer / "ca.pem", uid=os.getuid(), gid=os.getgid())
+                shared_fixture(root, config, origin=origin, credential=peer / "credential.json",
+                               ca_file=peer / "ca.pem", gid=os.getgid(), project=name)
+                shutil.copyfile(peer / "credential.json", state / "provider.signing.private.json")
+                (state / "provider.signing.private.json").chmod(0o600)
+                shutil.copyfile(peer / "ca.pem", config / "api-ca.crt")
+                (config / "api-ca.crt").chmod(0o600)
                 provider_config = config / "provider.toml"
-                provider_config.write_text('schema_id="secs.provider.config.v2"\n' + provider_config.read_text() + '''
-[hello]
+                with provider_config.open("a") as stream:
+                    stream.write('''\n[hello]
 display_name="SECS route qualification"
 provider_description="Synthetic signed route proof"
 publication_interval_seconds=0.2
 retry_initial_seconds=0.1
 ''')
-                definition = root / "bindings.toml"
-                mounts = [{"type": "bind", "source": str(config), "target": "/run/config/provider", "read_only": True},
-                          {"type": "bind", "source": str(state), "target": "/state"}]
-                mounts.extend({"type": "bind", "source": str(path), "target": str(path), "read_only": True}
-                              for path in (definition, credential, peer / "ca.pem"))
+                for volume in volumes:
+                    project.command("volume", "create", volume)
+                project.command(
+                    "run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--cap-drop", "ALL",
+                    "--cap-add", "CHOWN", "--user", "0:0", "--mount", f"type=volume,src={volumes[0]},dst=/route",
+                    "--entrypoint", "python", image, "-I", "-m", "provider_core.deployment_route", "initialize",
+                    "--uid", str(os.getuid()), "--gid", str(os.getgid()), "--shared-group",
+                )
+                parsed = urlsplit(origin)
+                project.command(
+                    "run", "--detach", "--init", "--pull", "never", "--cidfile", str(proxy_id), "--network", "host",
+                    "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+                    "--user", f"{os.getuid()}:{os.getgid()}", "--tmpfs", f"/run:rw,nosuid,nodev,noexec,size=16m,mode=0700,uid={os.getuid()},gid={os.getgid()}",
+                    "--mount", f"type=volume,src={volumes[0]},dst=/route", "--entrypoint", "python", image,
+                    "-I", "-m", "provider_core.provider_proxy", "--mode", "mapped", "--interface", "lo",
+                    "--authority", f"{parsed.hostname}:{parsed.port or 443}", "--address", f"{parsed.hostname}=127.0.0.1",
+                    "--log-level", "INFO", "--socket", "/route/proxy.sock", "--ready-file", "/route/ready",
+                    "--status-directory", "/run", "--socket-group-id", str(os.getgid()),
+                )
+                proxy = proxy_id.read_text().strip()
+                def proxy_ready():
+                    return project.command("exec", proxy, "python", "-I", "-c",
+                                           "import os; print(os.path.isfile('/route/ready'))").strip() == b"True"
+                self.wait_for(proxy_ready, "Synthetic shared proxy did not become ready")
                 provider = {"image": image, "pull_policy": "never", "init": True, "restart": "unless-stopped",
                             "user": f"{os.getuid()}:{os.getgid()}", "network_mode": "none", "read_only": True,
                             "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],
                             "pids_limit": 32, "cpus": 1, "mem_limit": "256m", "memswap_limit": "256m",
                             "stop_grace_period": "1s", "tmpfs": ["/tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777"],
-                            "volumes": mounts}
+                            "volumes": [{"type": "bind", "source": str(config), "target": "/run/config/provider", "read_only": True},
+                                        {"type": "bind", "source": str(state), "target": "/state"}]}
                 plan = {"services": {"provider": provider}}
-                _apply_api_route(plan, project, config, str(definition), "secs")
-                self.assertEqual(len(plan["volumes"]), 1)
-                route_volume = next(iter(plan["volumes"]))
-                project.command("volume", "create", shared_volume)
-                plan["volumes"]["shared-test"] = {"external": True, "name": shared_volume}
-                provider["volumes"].append({"type": "volume", "source": "shared-test", "target": "/shared-test",
-                                            "read_only": True, "volume": {"nocopy": True}})
+                _apply_shared_grants(plan, project, config, state)
                 records = project.start(plan)
-                self.assertEqual(records["api-init"]["State"]["ExitCode"], 0)
-                self.assertEqual(records["api-init"]["State"]["Status"], "exited")
                 provider_id = records["provider"]["Id"]
-                proxy = records["api"]
                 self.assertEqual(records["provider"]["HostConfig"]["NetworkMode"], "none")
-                socket_path = provider["environment"]["SECS_API_PROXY_SOCKET"]
-                mount = next(mount for mount in records["provider"]["Mounts"]
-                             if mount["Destination"] == str(Path(socket_path).parent))
-                self.assertFalse(mount["RW"])
-                self.assertEqual(mount["Name"], route_volume)
-                self.assertFalse(any(mount["Source"] == str(credential) for mount in proxy["Mounts"]))
+                for target, volume in zip(("/run/nmr-api-proxy", "/run/nmr-api-outbox"), volumes):
+                    mount = next(item for item in records["provider"]["Mounts"] if item["Destination"] == target)
+                    self.assertFalse(mount["RW"])
+                    self.assertEqual(mount["Name"], volume)
                 def observed():
                     captured = json.loads((peer / "capture.json").read_text())
                     self.assertIsNone(captured["error"], "Synthetic peer rejected the actual signature or SNI")
                     return captured
                 self.wait_for(lambda: observed()["hellos"] > 0, "Provider did not send an authenticated Hello")
-                wrong_uid = 65532 if os.getuid() != 65532 else 65533
-                project.command(
-                    "run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--cap-drop", "ALL",
-                    "--security-opt", "no-new-privileges:true", "--user", f"{wrong_uid}:{os.getgid()}",
-                    "--pids-limit", "16", "--memory", "64m", "--memory-swap", "64m", "--cpus", "1",
-                    "--mount", f"type=volume,src={route_volume},dst=/route,readonly", "--entrypoint", "python", image, "-I", "-c",
-                    "import errno,socket; s=socket.socket(socket.AF_UNIX);\n"
-                    "try: s.connect('/route/proxy.sock')\n"
-                    "except PermissionError as e: assert e.errno in (errno.EACCES,errno.EPERM)\n"
-                    "else: raise AssertionError('Wrong UID received a private route grant')",
-                )
-                project.command("stop", "--signal", "SIGTERM", "--timeout", "-1", proxy["Id"], timeout=None)
-                context = ssl.create_default_context(cafile=str(peer / "ca.pem"))
-                with urlopen(origin + "/health", context=context, timeout=2) as health:
-                    self.assertEqual(health.status, 200)
+                project.command("stop", "--signal", "SIGTERM", "--timeout", "15", proxy)
                 sleep(0.2)
                 count = observed()["hellos"]
                 sleep(0.7)
@@ -122,30 +119,33 @@ retry_initial_seconds=0.1
                 self.assertEqual(held["Id"], provider_id)
                 self.assertTrue(held["State"]["Running"])
                 self.assertEqual(held["RestartCount"], 0)
-                project.command("start", proxy["Id"])
-                self.wait_for(lambda: observed()["hellos"] > count, "Provider did not recover its existing route")
-                retire_old_api(project, config)
-                self.assertEqual(project.inventory(), {})
-                volumes = project.command("volume", "ls", "--quiet").decode().splitlines()
-                self.assertNotIn(route_volume, volumes)
-                self.assertIn(shared_volume, volumes)
+                project.command("start", proxy)
+                self.wait_for(lambda: observed()["hellos"] > count, "Provider did not recover its shared route")
+                project.stop()
+                existing = project.command("volume", "ls", "--quiet").decode().splitlines()
+                self.assertTrue(all(volume in existing for volume in volumes))
             except BaseException as failure:
                 try:
                     project.logs()
                 except BaseException as diagnostics:
-                    raise BaseExceptionGroup("Route qualification and log capture failed", (failure, diagnostics)) from None
+                    raise BaseExceptionGroup("Shared route qualification and log capture failed", (failure, diagnostics)) from None
                 raise
             finally:
                 try:
                     for record in project.inventory().values():
                         project.command("rm", "--force", record["Id"])
-                    volumes = project.command("volume", "ls", "--quiet").decode().splitlines()
-                    if route_volume is not None and route_volume in volumes:
-                        project.command("volume", "rm", route_volume)
-                    if shared_volume in volumes:
-                        project.command("volume", "rm", shared_volume)
                 finally:
-                    if peer_id.exists():
-                        identity = peer_id.read_text().strip()
-                        self.assertRegex(identity, r"^[a-f0-9]{64}$")
-                        project.command("rm", "--force", identity)
+                    try:
+                        if proxy_id.exists():
+                            identity = proxy_id.read_text().strip()
+                            self.assertRegex(identity, r"^[a-f0-9]{64}$")
+                            project.command("rm", "--force", identity)
+                    finally:
+                        if peer_id.exists():
+                            identity = peer_id.read_text().strip()
+                            self.assertRegex(identity, r"^[a-f0-9]{64}$")
+                            project.command("rm", "--force", identity)
+                existing = project.command("volume", "ls", "--quiet").decode().splitlines()
+                for volume in volumes:
+                    if volume in existing:
+                        project.command("volume", "rm", volume)

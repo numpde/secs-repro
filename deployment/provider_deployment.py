@@ -18,6 +18,7 @@ import sys
 import tomllib
 
 from deployment.compose import ComposeProject
+from deployment.worker_target import worker_target
 from deployment.templates import (
     configuration_directory, initialize_configuration, _ensure_private_parent,
     _locked_parent, _publish_new_file, _sync_directory,
@@ -179,7 +180,10 @@ def render_deployment(repository: Path, name: str) -> dict:
 
 def _render_deployment(repository: Path, name: str, config: Path, network: dict) -> dict:
     """Render one deployment from an already validated network policy."""
-    gpu_uuid = _host_gpu_uuid(repository)
+    worker_device = _toml_document(config / "worker.toml").get("device", "cuda:0")
+    if worker_device not in ("cpu", "cuda:0"):
+        raise ValueError("Worker device must be cpu or cuda:0 for this deployment.")
+    gpu_uuid = _host_gpu_uuid(repository) if worker_device == "cuda:0" else None
     state = repository / "secrets/deployments" / name
     if os.getuid() == 0 or os.getgid() == 0:
         raise ValueError("SECS deployment requires a nonroot host UID and GID.")
@@ -192,7 +196,6 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
         "WORKER_CONFIG_FILE": str(config / "worker.toml"),
         "MOLFORMER_LOCK_FILE": str(repository / "molformer.lock.toml"),
         "CACHE_VERIFIER_FILE": str(repository / "tools/materialize_molformer_cache.py"),
-        "SECS_HOST_WORKER_GPU_UUID": gpu_uuid,
     }
     project = _project(repository, name)
     base_recipe = ComposeProject(repository, project.name, ("provider", "worker", "sources-init", "session-init"))
@@ -200,17 +203,36 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
         repository / "compose/provider.yml", config / "deployment.env", environment,
     )
     _apply_provider_network(plan, name, network)
-    _apply_delivery_binding(plan, project, config)
-    devices = plan["services"]["worker"]["deploy"]["resources"]["reservations"]["devices"]
-    identifiers = devices[0]["device_ids"]
-    if identifiers != [gpu_uuid]:
-        raise ValueError("The rendered worker GPU differs from config/host.toml.")
+    _apply_shared_grants(plan, project, config, state)
+    plan["services"]["worker"].setdefault("environment", {})["SECS_WORKER_DEVICE"] = worker_device
+    if gpu_uuid is not None:
+        plan["services"]["worker"]["deploy"] = {"resources": {"reservations": {"devices": [
+            {"driver": "nvidia", "device_ids": [gpu_uuid], "capabilities": ["gpu"]}
+        ]}}}
     return plan
+
+
+def _admit_worker_image(project: ComposeProject, plan: dict) -> None:
+    """Match the selected hardware grant to the built scientific image variant."""
+    worker = plan["services"]["worker"]
+    expected = "gpu" if "deploy" in worker else "cpu"
+    records = json.loads(project.command("image", "inspect", worker["image"]))
+    if (type(records) is not list or len(records) != 1 or type(records[0]) is not dict
+            or records[0].get("Id") != worker["image"]):
+        raise ValueError("Cannot start worker: Docker did not inspect the selected image identity.")
+    config = records[0].get("Config")
+    labels = config.get("Labels") if type(config) is dict else None
+    if (type(labels) is not dict or labels.get("io.secs-repro.packages.variant") != expected
+            or labels.get("io.secs-repro.worker.device-contract") != "explicit-v1"):
+        raise ValueError(f"Cannot start worker: its image must be the SECS {expected} packages variant.")
 
 
 def _project(repository: Path, name: str) -> ComposeProject:
     """SECS stops Job admission before its scientific worker."""
-    return _old_project(repository, name)
+    configuration_directory(repository, name)
+    return ComposeProject(repository, f"secs-{name}",
+                          ("provider", "worker", "sources-init", "session-init"),
+                          ("sources-init", "session-init"))
 
 
 def _old_project(repository: Path, name: str) -> ComposeProject:
@@ -428,13 +450,15 @@ def start_deployment(repository: Path, name: str) -> dict:
     project = _project(repository, name)
     try:
         _admit_provider_network(project, repository, name, network)
+        _admit_worker_image(project, plan)
     except (OSError, ValueError, RuntimeError) as error:
         error.add_note(
             "Startup stopped before this attempt changed attempt ownership, runtime workspaces, or containers."
         )
         raise
     state = repository / "secrets/deployments" / name
-    for path in (config / "provider.toml", config / "worker.toml", state / "interpreter.key"):
+    for path in (config / "provider.toml", config / "worker.toml", state / "interpreter.key",
+                 state / "provider.signing.private.json"):
         _private_input(path)
     state = _state_root(repository, name)
     if any(os.path.lexists(state / part) for part in ("state", "sources", "socket")):
@@ -443,39 +467,35 @@ def start_deployment(repository: Path, name: str) -> dict:
     return project.start(plan)
 
 
-def _apply_delivery_binding(plan, project, config):
-    """Consume the installed SDK's projection, not a second binding parser."""
+def _apply_shared_grants(plan, project, config, state):
+    """Consume the SDK's shared socket grants alongside SECS-owned inputs."""
     document = _toml_document(config / "provider.toml")
-    selection = document.get("binding")
-    if type(selection) is not dict or set(selection) != {"definition_file", "name"}:
-        raise ValueError("Provider configuration requires its shared binding definition_file and name.")
-    definition, name = selection["definition_file"], selection["name"]
+    selection = document.get("shared")
+    if type(selection) is not dict or set(selection) != {"settings_file"}:
+        raise ValueError("Provider configuration requires shared settings_file.")
+    definition = selection["settings_file"]
     if (type(definition) is not str or not Path(definition).is_absolute()
-            or not Path(definition).name or any(value in definition for value in (",", "\0", "\r", "\n"))
-            or type(name) is not str):
-        raise ValueError("Delivery selection requires an absolute definition file and a text binding name.")
+            or str(Path(definition)) != definition or ".." in Path(definition).parts
+            or not Path(definition).name or any(value in definition for value in (",", "\0", "\r", "\n"))):
+        raise ValueError("Shared settings_file must be a normalized absolute path.")
     projection = _sdk_projection(project, plan["services"]["provider"]["image"], definition,
-                                 "provider_core.deployment_binding", "describe-binding",
-                                 "--definition", definition, "--binding", name)
-    if type(projection) is not dict or set(projection) != {"ipc_volume", "socket_path", "socket_group_id", "input_paths"}:
-        raise ValueError("Installed SDK did not return its complete delivery-binding projection.")
-    volume, socket_path, group, inputs = (projection[key] for key in (
-        "ipc_volume", "socket_path", "socket_group_id", "input_paths"))
-    if (type(volume) is not str or not volume or type(socket_path) is not str
-            or not Path(socket_path).is_absolute() or Path(socket_path).parent == Path("/")
-            or type(group) is not int or group <= 0 or type(inputs) is not list
-            or any(type(path) is not str or not Path(path).is_absolute() for path in inputs)):
-        raise ValueError("Installed SDK delivery projection contains invalid container grants.")
+                                 "provider_core.shared_grants", "--config", definition)
+    if type(projection) is not dict or set(projection) != {"group_add", "volumes", "mounts", "proxy_socket", "outbox_socket", "socket_group_id"}:
+        raise ValueError("Installed SDK did not return its complete shared socket grants.")
     provider = plan["services"]["provider"]
-    mounts = [{"type": "volume", "source": volume, "target": str(Path(socket_path).parent),
-               "read_only": True, "volume": {"nocopy": True}}]
-    mounts.extend({"type": "bind", "source": filename, "target": filename,
-                   "read_only": True, "bind": {"create_host_path": False}}
-                  for filename in (definition, *inputs))
+    mounts = list(projection["mounts"])
+    mounts.extend([
+        {"type": "bind", "source": definition, "target": definition,
+         "read_only": True, "bind": {"create_host_path": False}},
+        {"type": "bind", "source": str(state / "provider.signing.private.json"),
+         "target": "/run/secrets/provider/provider.signing.private.json",
+         "read_only": True, "bind": {"create_host_path": False}},
+    ])
+    if set(plan.setdefault("volumes", {})) & set(projection["volumes"]):
+        raise ValueError("Shared socket volumes overlap SECS-owned volumes.")
     _add_mount_grants(provider, mounts)
-    provider["group_add"] = [str(group)]
-    plan.setdefault("volumes", {})[volume] = {"name": volume, "external": True}
-    _apply_api_route(plan, project, config, definition, name)
+    provider.setdefault("group_add", []).extend(projection["group_add"])
+    plan["volumes"].update(projection["volumes"])
 
 
 def _add_mount_grants(provider, mounts):
@@ -503,28 +523,6 @@ def _sdk_projection(project, image, definition, module, *arguments):
     return json.loads(raw)
 
 
-def _apply_api_route(plan, project, config, definition, binding_name):
-    """Merge SDK-owned API routing while keeping the scientific service isolated."""
-    provider = plan["services"]["provider"]
-    route = _sdk_projection(
-        project, provider["image"], definition, "provider_core.deployment_route", "render",
-        "--definition", definition, "--binding", binding_name, "--image", provider["image"],
-        "--interpreter", "/usr/local/bin/python", "--namespace", project.name, "--service-name", "api",
-        "--uid", str(os.getuid()), "--gid", str(os.getgid()), "--named-volume",
-    )
-    if type(route) is not dict or set(route) != {"compose", "client_socket", "client_mount", "client_depends_on"}:
-        raise ValueError("Installed SDK did not return its complete API route grants.")
-    for section, grants in route["compose"].items():
-        occupied = plan.setdefault(section, {})
-        if set(occupied) & set(grants):
-            raise ValueError("Shared API route roles overlap the existing deployment; no route grants were applied.")
-    _add_mount_grants(provider, (route["client_mount"],))
-    for section, grants in route["compose"].items():
-        plan[section].update(grants)
-    provider.setdefault("depends_on", {}).update(route["client_depends_on"])
-    provider.setdefault("environment", {})["SECS_API_PROXY_SOCKET"] = route["client_socket"]
-
-
 def _status(records: dict) -> dict:
     """Expose lifecycle evidence, not Docker environment or credential-bearing metadata."""
     return {role: {"id": record["Id"], "status": record["State"]["Status"],
@@ -550,8 +548,11 @@ def main(arguments: list[str] | None = None) -> int:
     repository = Path(__file__).resolve().parents[1]
     try:
         if options.operation == "init":
-            destination = initialize_configuration(repository, options.deployment, TEMPLATES)
+            target = worker_target(os.environ.get("SECS_WORKER_TARGET", ""))
+            templates = TEMPLATES | {"worker.toml": Path(f"config/worker{'.cpu' if target == 'cpu' else ''}.toml.example")}
+            destination = initialize_configuration(repository, options.deployment, templates)
             print(f"Configuration created: {destination}")
+            print(f"Worker target: {target}. Build and select the matching worker image.")
             print("Edit these files before deployment. No credentials installed or services started.")
             return 0
         config = configuration_directory(repository, options.deployment)
@@ -563,10 +564,10 @@ def main(arguments: list[str] | None = None) -> int:
             print(json.dumps(render_deployment(repository, options.deployment), indent=2))
             return 0
         if options.operation == "status":
-            print(json.dumps(_status(project.inventory()), indent=2))
+            print(json.dumps(_status(_old_project(repository, options.deployment).inventory()), indent=2))
             return 0
         if options.operation == "logs":
-            project.logs()
+            _old_project(repository, options.deployment).logs()
             return 0
         # Serialize mutations, including their ownership admission. Acquiring
         # the lock needs no credential contents.

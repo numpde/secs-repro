@@ -9,14 +9,15 @@ from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, mock_open, patch
 
 from deployment.compose import ComposeProject
 from deployment.provider_deployment import (
     _apply_provider_network,
     _admit_provider_network,
     _admit_runtime_volumes,
-    _apply_delivery_binding,
+    _apply_shared_grants,
+    _admit_worker_image,
     _host_gpu_uuid,
     _provider_network,
     _status,
@@ -27,6 +28,7 @@ from deployment.provider_deployment import (
     start_deployment,
 )
 from deployment.templates import _locked_parent
+from deployment.worker_target import worker_target
 
 
 class ProviderDeploymentTests(unittest.TestCase):
@@ -271,10 +273,14 @@ class ProviderDeploymentTests(unittest.TestCase):
             (root / "secrets/deployments").chmod(0o700)
             (state / "interpreter.key").write_text("test")
             (state / "interpreter.key").chmod(0o600)
+            (state / "provider.signing.private.json").write_text("test")
+            (state / "provider.signing.private.json").chmod(0o600)
             project = Mock()
             with patch("deployment.provider_deployment._provider_network", return_value={}), patch(
                 "deployment.provider_deployment._render_deployment", return_value={}
             ), patch("deployment.provider_deployment._admit_provider_network"), patch(
+                "deployment.provider_deployment._admit_worker_image"
+            ), patch(
                 "deployment.provider_deployment._project", return_value=project
             ):
                 for name in ("state", "sources", "socket"):
@@ -286,22 +292,72 @@ class ProviderDeploymentTests(unittest.TestCase):
                         old.rmdir()
             project.start.assert_not_called()
 
+    def test_worker_target_and_matching_image_are_explicit(self):
+        self.assertEqual(worker_target("cpu"), "cpu")
+        self.assertEqual(worker_target("gpu"), "gpu")
+        with self.assertRaisesRegex(ValueError, "cpu or gpu"):
+            worker_target("automatic")
+        project = Mock()
+        image = "sha256:" + "1" * 64
+        plan = {"services": {"worker": {"image": image}}}
+        project.command.return_value = json.dumps([{"Id": image, "Config": {"Labels": {
+            "io.secs-repro.packages.variant": "cpu", "io.secs-repro.worker.device-contract": "explicit-v1"}}}]).encode()
+        _admit_worker_image(project, plan)
+        plan["services"]["worker"]["deploy"] = {"resources": {}}
+        with self.assertRaisesRegex(ValueError, "gpu packages variant"):
+            _admit_worker_image(project, plan)
+
+    def test_worker_target_prompts_or_requires_an_explicit_choice(self):
+        for answer, expected in (("1\n", "cpu"), ("2\n", "gpu")):
+            with self.subTest(answer=answer), patch("builtins.open", mock_open(read_data=answer)):
+                self.assertEqual(worker_target(""), expected)
+        with patch("builtins.open", mock_open(read_data="")), self.assertRaisesRegex(ValueError, "cpu or gpu"):
+            worker_target("")
+        with patch("builtins.open", side_effect=OSError("no tty")), self.assertRaisesRegex(ValueError, "no interactive terminal"):
+            worker_target("")
+
     def test_shared_grants_cannot_shadow_scientific_or_configuration_mounts(self):
-        for socket_path, inputs in (("/run/secs/delivery.sock", ["/private/credential"]),
-                                    ("/run/delivery/delivery.sock", ["/run/secs/sources/credential"])):
-            with self.subTest(socket=socket_path, inputs=inputs), TemporaryDirectory() as temporary:
+        for socket_path in ("/run/secs/sources/delivery.sock", "/run/secs/delivery.sock"):
+            with self.subTest(socket=socket_path), TemporaryDirectory() as temporary:
                 config = Path(temporary)
-                (config / "provider.toml").write_text('[binding]\ndefinition_file="/private/bindings.toml"\nname="secs"\n')
+                (config / "provider.toml").write_text('[shared]\nsettings_file="/private/shared.toml"\n')
                 (config / "provider.toml").chmod(0o600)
-                projection = {"ipc_volume": "fixture-ipc", "socket_path": socket_path,
-                              "socket_group_id": 1000, "input_paths": inputs}
+                projection = {"group_add": ["1000"], "volumes": {"fixture-ipc": {"external": True}},
+                              "mounts": [{"type": "volume", "source": "fixture-ipc", "target": str(Path(socket_path).parent)}],
+                              "proxy_socket": "/route/proxy.sock", "outbox_socket": socket_path, "socket_group_id": 1000}
                 project = Mock()
                 project.command.return_value = json.dumps(projection).encode()
                 mounts = [{"type": "bind", "target": "/run/secs/sources", "source": "/owned/sources"}]
                 plan = {"services": {"provider": {"image": "sha256:" + "a" * 64, "volumes": mounts.copy()}}}
                 with self.assertRaisesRegex(ValueError, "overlap"):
-                    _apply_delivery_binding(plan, project, config)
+                    _apply_shared_grants(plan, project, config, config)
                 self.assertEqual(plan["services"]["provider"]["volumes"], mounts)
+
+    def test_shared_grants_preserve_existing_groups_and_scientific_mounts(self):
+        with TemporaryDirectory() as temporary:
+            config = Path(temporary)
+            (config / "provider.toml").write_text('[shared]\nsettings_file="/private/shared.toml"\n')
+            (config / "provider.toml").chmod(0o600)
+            projection = {
+                "group_add": ["1234"],
+                "volumes": {name: {"name": name, "external": True} for name in ("proxy", "outbox")},
+                "mounts": [{"type": "volume", "source": name, "target": "/run/" + name,
+                            "read_only": True, "volume": {"nocopy": True}} for name in ("proxy", "outbox")],
+                "proxy_socket": "/run/proxy/proxy.sock", "outbox_socket": "/run/outbox/http.sock",
+                "socket_group_id": 1234,
+            }
+            project = Mock()
+            project.command.return_value = json.dumps(projection).encode()
+            mount = {"type": "volume", "source": "sources", "target": "/run/secs/sources"}
+            plan = {"services": {"provider": {"image": "image", "volumes": [mount], "group_add": ["42"]}},
+                    "volumes": {"sources": {}}}
+            _apply_shared_grants(plan, project, config, config)
+            provider = plan["services"]["provider"]
+            self.assertEqual(provider["group_add"], ["42", "1234"])
+            self.assertIn(mount, provider["volumes"])
+            self.assertEqual(plan["volumes"]["proxy"], {"name": "proxy", "external": True})
+            self.assertEqual(plan["volumes"]["outbox"], {"name": "outbox", "external": True})
+            self.assertEqual(provider["volumes"][1:3], projection["mounts"])
 
     def test_host_gpu_is_one_strict_shared_input(self):
         with TemporaryDirectory() as temporary:

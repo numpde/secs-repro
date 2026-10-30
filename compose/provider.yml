@@ -69,13 +69,6 @@ services:
     mem_limit: 64g
     memswap_limit: 64g
     stop_grace_period: 20s
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ["${SECS_HOST_WORKER_GPU_UUID:?set config/host.toml worker_gpu_uuid}"]
-              capabilities: [gpu]
     environment:
       HF_HUB_CACHE: /cache/hub
       HF_HUB_OFFLINE: "1"
