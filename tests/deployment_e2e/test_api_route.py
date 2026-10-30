@@ -37,6 +37,7 @@ class ApiRouteProcessTests(unittest.TestCase):
                 directory.mkdir(mode=0o700, parents=True)
             peer_id = root / "peer.cid"
             route_volume = None
+            shared_volume = project.name + "-shared-test"
             try:
                 project.command(
                     "run", "--detach", "--init", "--pull", "never", "--cidfile", str(peer_id),
@@ -77,6 +78,10 @@ retry_initial_seconds=0.1
                 _apply_api_route(plan, project, config, str(definition), "secs")
                 self.assertEqual(len(plan["volumes"]), 1)
                 route_volume = next(iter(plan["volumes"]))
+                project.command("volume", "create", shared_volume)
+                plan["volumes"]["shared-test"] = {"external": True, "name": shared_volume}
+                provider["volumes"].append({"type": "volume", "source": "shared-test", "target": "/shared-test",
+                                            "read_only": True, "volume": {"nocopy": True}})
                 records = project.start(plan)
                 self.assertEqual(records["api-init"]["State"]["ExitCode"], 0)
                 self.assertEqual(records["api-init"]["State"]["Status"], "exited")
@@ -121,7 +126,9 @@ retry_initial_seconds=0.1
                 self.wait_for(lambda: observed()["hellos"] > count, "Provider did not recover its existing route")
                 retire_old_api(project, config)
                 self.assertEqual(project.inventory(), {})
-                self.assertNotIn(route_volume, project.command("volume", "ls", "--quiet").decode().splitlines())
+                volumes = project.command("volume", "ls", "--quiet").decode().splitlines()
+                self.assertNotIn(route_volume, volumes)
+                self.assertIn(shared_volume, volumes)
             except BaseException as failure:
                 try:
                     project.logs()
@@ -135,6 +142,8 @@ retry_initial_seconds=0.1
                     volumes = project.command("volume", "ls", "--quiet").decode().splitlines()
                     if route_volume is not None and route_volume in volumes:
                         project.command("volume", "rm", route_volume)
+                    if shared_volume in volumes:
+                        project.command("volume", "rm", shared_volume)
                 finally:
                     if peer_id.exists():
                         identity = peer_id.read_text().strip()
