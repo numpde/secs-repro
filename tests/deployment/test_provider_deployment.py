@@ -30,6 +30,33 @@ from deployment.templates import _locked_parent
 
 
 class ProviderDeploymentTests(unittest.TestCase):
+    def test_retirement_cli_reports_possible_partial_shutdown(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config/deployments/example"
+            config.mkdir(parents=True, mode=0o700)
+            errors = StringIO()
+            with patch("deployment.provider_deployment.__file__", str(root / "deployment/provider_deployment.py")), \
+                 patch("deployment.provider_deployment.retire_old_api", side_effect=ValueError("volume ownership differs")), \
+                 redirect_stderr(errors):
+                self.assertEqual(main(["retire-api", "example"]), 1)
+            self.assertIn("volume ownership differs", errors.getvalue())
+            self.assertIn("may already be stopped", errors.getvalue())
+            self.assertIn("route resources may remain", errors.getvalue())
+
+    def test_retirement_interrupt_keeps_signal_and_partial_effect_context(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = root / "config/deployments/example"
+            config.mkdir(parents=True, mode=0o700)
+            interruption = KeyboardInterrupt()
+            with patch("deployment.provider_deployment.__file__", str(root / "deployment/provider_deployment.py")), \
+                 patch("deployment.provider_deployment.retire_old_api", side_effect=interruption):
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    main(["retire-api", "example"])
+            self.assertIs(caught.exception, interruption)
+            self.assertIn("may already be stopped", " ".join(interruption.__notes__))
+
     def test_start_refuses_incomplete_old_api_retirement(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -53,9 +80,29 @@ class ProviderDeploymentTests(unittest.TestCase):
     def test_old_api_retirement_preserves_dependencies_after_failed_provider_drain(self):
         with TemporaryDirectory() as temporary:
             project = Mock()
+            project.name = "secs-example"
+            key = "a" * 64
+            mount = {"Type": "volume", "Name": project.name + "-route-" + key,
+                     "Destination": "/route", "RW": True}
+            def route(role):
+                return {"Config": {"Labels": {"org.nmr-provider-tools.route": project.name,
+                         "org.nmr-provider-tools.binding": key,
+                         "org.nmr-provider-tools.route-role": role}}, "Mounts": [mount]}
             provider = {"Id": "1" * 64, "State": {"Running": False, "ExitCode": 1, "OOMKilled": False}}
-            project.inventory.return_value = {"provider": provider, "api": {}, "api-init": {}}
+            project.inventory.return_value = {"provider": provider, "api": route("proxy"),
+                                              "api-init": route("initializer")}
             with self.assertRaisesRegex(ValueError, "clean drain"):
+                retire_old_api(project, Path(temporary))
+            project.stop.assert_not_called()
+            project.command.assert_not_called()
+
+    def test_old_api_retirement_rejects_foreign_route_before_stopping_provider(self):
+        with TemporaryDirectory() as temporary:
+            project = Mock()
+            project.name = "secs-example"
+            project.inventory.return_value = {"provider": {"State": {"Running": True}},
+                                               "api": {"Config": {"Labels": {}}}, "api-init": {}}
+            with self.assertRaisesRegex(ValueError, "proxy ownership"):
                 retire_old_api(project, Path(temporary))
             project.stop.assert_not_called()
             project.command.assert_not_called()
@@ -79,6 +126,29 @@ class ProviderDeploymentTests(unittest.TestCase):
                 retire_old_api(project, config)
             self.assertTrue(receipt.exists())
             self.assertFalse(any(call.args[:2] == ("volume", "rm") for call in project.command.call_args_list))
+
+    def test_old_api_retirement_checks_borrowers_before_stopping_proxy(self):
+        with TemporaryDirectory() as temporary:
+            project = Mock()
+            project.name = "secs-example"
+            key = "a" * 64
+            volume = project.name + "-route-" + key
+            mount = {"Type": "volume", "Name": volume, "Destination": "/route", "RW": True}
+            def route(role, identifier):
+                return {"Id": identifier, "Config": {"Labels": {
+                    "org.nmr-provider-tools.route": project.name,
+                    "org.nmr-provider-tools.binding": key,
+                    "org.nmr-provider-tools.route-role": role}}, "Mounts": [mount]}
+            provider = {"Id": "1" * 64, "State": {"Running": False, "ExitCode": 0, "OOMKilled": False}}
+            project.inventory.return_value = {"provider": provider, "api": route("proxy", "2" * 64),
+                                              "api-init": route("initializer", "3" * 64)}
+            inspected = {"Name": volume, "Labels": {"com.docker.compose.project": project.name,
+                         "com.docker.compose.volume": volume}}
+            project.command.side_effect = ((volume + "\n").encode(), json.dumps([inspected]).encode(), b"4" * 64 + b"\n")
+            with self.assertRaisesRegex(ValueError, "another container"):
+                retire_old_api(project, Path(temporary))
+            project.stop.assert_not_called()
+            self.assertFalse((Path(temporary) / "old-api-retirement.json").exists())
 
     def test_old_api_retirement_retains_receipt_after_volume_removal_failure(self):
         with TemporaryDirectory() as temporary:

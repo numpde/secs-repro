@@ -221,6 +221,49 @@ def _old_project(repository: Path, name: str) -> ComposeProject:
                           ("sources-init", "session-init", "api-init"))
 
 
+def _old_route_volume(project: ComposeProject, proxy: dict, initializer: dict) -> str:
+    """Identify the old route from the inspected proxy and initializer grants."""
+    labels = proxy["Config"]["Labels"]
+    key = labels.get("org.nmr-provider-tools.binding")
+    if (labels.get("org.nmr-provider-tools.route") != project.name
+            or labels.get("org.nmr-provider-tools.route-role") != "proxy"
+            or type(key) is not str or re.fullmatch(r"[0-9a-f]{64}", key) is None):
+        raise ValueError("Cannot retire the old API route: the proxy ownership labels differ.")
+    init_labels = initializer["Config"]["Labels"]
+    if (init_labels.get("org.nmr-provider-tools.route") != project.name
+            or init_labels.get("org.nmr-provider-tools.route-role") != "initializer"
+            or init_labels.get("org.nmr-provider-tools.binding") != key):
+        raise ValueError("Cannot retire the old API route: the initializer ownership labels differ.")
+    prefix = project.name if len(project.name) <= 63 else "r-" + hashlib.sha256(project.name.encode("ascii")).hexdigest()
+    volume = prefix + "-route-" + key if len(project.name) <= 63 else prefix + "-" + key
+    for container in (proxy, initializer):
+        mounts = container.get("Mounts")
+        if type(mounts) is not list or sum(
+            type(m) is dict and m.get("Type") == "volume" and m.get("Name") == volume
+            and m.get("Destination") == "/route" and m.get("RW") is True for m in mounts
+        ) != 1:
+            raise ValueError("Cannot retire the old API route: its inspected volume grants differ.")
+    return volume
+
+
+def _check_old_route_borrowers(project: ComposeProject, volume: str, owners: set[str]) -> bool:
+    present = set(project.command("volume", "ls", "--quiet").decode("utf-8").splitlines())
+    if volume not in present:
+        return False
+    inspected = json.loads(project.command("volume", "inspect", volume))
+    labels = inspected[0].get("Labels") if type(inspected) is list and len(inspected) == 1 and type(inspected[0]) is dict else None
+    if (type(inspected) is not list or len(inspected) != 1 or type(inspected[0]) is not dict
+            or inspected[0].get("Name") != volume or type(labels) is not dict
+            or labels.get("com.docker.compose.project") != project.name
+            or labels.get("com.docker.compose.volume") != volume):
+        raise ValueError("Cannot retire the old API volume: its Compose ownership labels differ.")
+    attached = project.command("ps", "--all", "--no-trunc", "--quiet", "--filter",
+                               f"volume={volume}").decode("ascii").splitlines()
+    if len(attached) != len(set(attached)) or not set(attached) <= owners:
+        raise ValueError("Cannot retire the old API volume: another container still borrows it.")
+    return True
+
+
 def retire_old_api(project: ComposeProject, config: Path) -> None:
     """Stop the old graph and retire its inspected API route, retaining retry evidence."""
     receipt = config / "old-api-retirement.json"
@@ -230,6 +273,7 @@ def retire_old_api(project: ComposeProject, config: Path) -> None:
         initial = project.inventory()
         if not {"provider", "api", "api-init"} <= set(initial):
             raise ValueError("Cannot retire the old API route: the owned provider and both old proxy roles must be present.")
+        volume = _old_route_volume(project, initial["api"], initial["api-init"])
         provider = initial["provider"]
         if provider["State"]["Running"]:
             project.command("stop", "--signal", "SIGTERM", "--timeout", "-1", provider["Id"], timeout=None)
@@ -238,35 +282,17 @@ def retire_old_api(project: ComposeProject, config: Path) -> None:
                 or observed["State"]["Running"] or observed["State"].get("ExitCode") != 0
                 or observed["State"].get("OOMKilled") is not False):
             raise ValueError("Cannot retire the old API route: provider shutdown did not confirm a clean drain; its dependencies remain available.")
+        owners = {initial[role]["Id"] for role in ("provider", "api", "api-init")}
+        if not _check_old_route_borrowers(project, volume, owners):
+            raise ValueError("Cannot retire the old API route: its inspected volume is absent.")
         stopped = project.stop()
         if ("provider" not in stopped or stopped["provider"]["Id"] != provider["Id"]
                 or stopped["provider"]["State"].get("ExitCode") != 0
                 or stopped["provider"]["State"].get("OOMKilled") is not False):
             raise ValueError("Cannot retire the old API route: the drained provider changed or its final state is unconfirmed.")
-        proxy = stopped.get("api")
-        initializer = stopped.get("api-init")
-        if proxy is None or initializer is None:
-            raise ValueError("Cannot retire the old API route: both owned proxy roles are required to establish its storage.")
-        labels = proxy["Config"]["Labels"]
-        key = labels.get("org.nmr-provider-tools.binding")
-        if (labels.get("org.nmr-provider-tools.route") != project.name
-                or labels.get("org.nmr-provider-tools.route-role") != "proxy"
-                or type(key) is not str or re.fullmatch(r"[0-9a-f]{64}", key) is None):
-            raise ValueError("Cannot retire the old API route: the proxy ownership labels differ.")
-        init_labels = initializer["Config"]["Labels"]
-        if (init_labels.get("org.nmr-provider-tools.route") != project.name
-                or init_labels.get("org.nmr-provider-tools.route-role") != "initializer"
-                or init_labels.get("org.nmr-provider-tools.binding") != key):
-            raise ValueError("Cannot retire the old API route: the initializer ownership labels differ.")
-        prefix = project.name if len(project.name) <= 63 else "r-" + hashlib.sha256(project.name.encode("ascii")).hexdigest()
-        volume = prefix + "-route-" + key if len(project.name) <= 63 else prefix + "-" + key
-        for container in (proxy, initializer):
-            mounts = container.get("Mounts")
-            if type(mounts) is not list or sum(
-                type(m) is dict and m.get("Type") == "volume" and m.get("Name") == volume
-                and m.get("Destination") == "/route" and m.get("RW") is True for m in mounts
-            ) != 1:
-                raise ValueError("Cannot retire the old API route: its inspected volume grants differ.")
+        if any(role not in stopped or stopped[role]["Id"] != initial[role]["Id"]
+               for role in ("api", "api-init")):
+            raise ValueError("Cannot retire the old API route: its inspected proxy roles changed during drain.")
         owned = {role: stopped[role]["Id"] for role in ("provider", "api", "api-init") if role in stopped}
         record = {"project": project.name, "volume": volume, "containers": owned}
         _publish_new_file(receipt, json.dumps(record, sort_keys=True).encode())
@@ -285,24 +311,11 @@ def retire_old_api(project: ComposeProject, config: Path) -> None:
     if any(role in current and (current[role]["Id"] != identifier or current[role]["State"]["Running"])
            for role, identifier in record["containers"].items()):
         raise ValueError("Cannot retire the old API route: an owned container changed or is running.")
-    present = set(project.command("volume", "ls", "--quiet").decode("utf-8").splitlines())
-    if record["volume"] in present:
-        inspected = json.loads(project.command("volume", "inspect", record["volume"]))
-        labels = inspected[0].get("Labels") if type(inspected) is list and len(inspected) == 1 and type(inspected[0]) is dict else None
-        if (type(inspected) is not list or len(inspected) != 1 or type(inspected[0]) is not dict
-                or inspected[0].get("Name") != record["volume"]
-                or type(labels) is not dict
-                or labels.get("com.docker.compose.project") != project.name
-                or labels.get("com.docker.compose.volume") != record["volume"]):
-            raise ValueError("Cannot retire the old API volume: its Compose ownership labels differ.")
-        attached = project.command("ps", "--all", "--no-trunc", "--quiet", "--filter",
-                                   f"volume={record['volume']}").decode("ascii").splitlines()
-        if len(attached) != len(set(attached)) or not set(attached) <= set(record["containers"].values()):
-            raise ValueError("Cannot retire the old API volume: another container still borrows it.")
+    present = _check_old_route_borrowers(project, record["volume"], set(record["containers"].values()))
     for role in ("provider", "api", "api-init"):
         if role in current and role in record["containers"]:
             project.command("rm", record["containers"][role])
-    if record["volume"] in present:
+    if present:
         project.command("volume", "rm", record["volume"])
     receipt.unlink()
     _sync_directory(config)
@@ -568,7 +581,11 @@ def main(arguments: list[str] | None = None) -> int:
             elif options.operation == "down":
                 print(json.dumps(_status(project.stop()), indent=2))
             elif options.operation == "retire-api":
-                retire_old_api(_old_project(repository, options.deployment), config)
+                try:
+                    retire_old_api(_old_project(repository, options.deployment), config)
+                except (OSError, ValueError, RuntimeError, KeyboardInterrupt) as error:
+                    error.add_note("Retirement is incomplete; the provider or dependencies may already be stopped and route resources may remain. Inspect status before retrying.")
+                    raise
                 print("Old API route retired. Shared and scientific storage was retained.")
     except (OSError, ValueError, RuntimeError) as error:
         headline = "initialization" if options.operation == "init" else options.operation
