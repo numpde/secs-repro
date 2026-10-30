@@ -60,6 +60,15 @@ class WorkerConfigSnapshotTests(unittest.TestCase):
                 capture(source, destination, "cpu")
             self.assertFalse(destination.exists())
 
+    def test_changed_index_mode_is_rejected_before_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, destination = Path(directory) / "source", Path(directory) / "snapshot"
+            source.write_text('device = "cpu"\nmock_index = true\n')
+            source.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "differs from the deployed"):
+                capture(source, destination, "cpu", False)
+            self.assertFalse(destination.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

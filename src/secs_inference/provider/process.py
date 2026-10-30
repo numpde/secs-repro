@@ -27,10 +27,13 @@ async def publish_hello_until_stopped(*, api, provider_ref, policy, stop):
     retry_seconds = min(policy.retry_initial_seconds, 300)
     while not stop.is_set():
         try:
+            offering = analysis_offering_description()
+            if policy.mock_index:
+                offering = "MOCK INDEX: starts from eight demonstration molecules. Results do not represent a full candidate search."
             await api.publish_hello(
                 provider_ref=provider_ref, display_name=policy.display_name,
                 description=policy.provider_description,
-                analysis_offerings=(AnalysisOffering(ANALYSIS_KIND_REF, analysis_offering_description()),),
+                analysis_offerings=(AnalysisOffering(ANALYSIS_KIND_REF, offering),),
             )
         except ApiFailure as cause:
             await api.retire()

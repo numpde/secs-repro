@@ -229,6 +229,9 @@ def main(arguments=None) -> int:
         except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
             raise ConfigurationError("Worker configuration must be UTF-8 text with valid TOML syntax") from error
         operation = f"configuring the scientific worker from {path}"
+        if document.get("mock_index", False) is not False:
+            raise ConfigurationError("The full scientific worker cannot run with a mock index")
+        document.pop("mock_index", None)
         try:
             config = ScientificWorkerConfig(**document)
         except TypeError as error:

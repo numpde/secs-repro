@@ -5,7 +5,7 @@ No engine, credentials, model assets, or external network are involved.
 """
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager, redirect_stderr
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from io import StringIO
 import os
 from pathlib import Path
@@ -191,6 +191,19 @@ class InitializationTests(unittest.TestCase):
                 self.assertEqual(main(["init", "production"]), 1)
         self.assertIn("initialization failed", output.getvalue())
         self.assertIn("Configuration is visible", output.getvalue())
+
+    def test_init_selects_mock_index_only_when_explicitly_requested(self):
+        for value in ("yes", "1"):
+            with self.subTest(value=value), patch.dict("os.environ", {
+                    "SECS_WORKER_TARGET": "cpu", "SECS_USE_MOCK_INDEX": value}), patch(
+                        "deployment.provider_deployment.initialize_configuration", return_value=Path('/tmp/example')) as init:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["init", "example"]), 0)
+                self.assertEqual(init.call_args.args[2]["worker.toml"], Path('config/worker.mock-index.toml.example'))
+        with patch.dict("os.environ", {"SECS_WORKER_TARGET": "gpu", "SECS_USE_MOCK_INDEX": "yes"}), patch(
+                "deployment.provider_deployment.initialize_configuration") as init, redirect_stderr(StringIO()):
+            self.assertEqual(main(["init", "example"]), 1)
+            init.assert_not_called()
 
     def test_file_publication_survives_failed_directory_sync(self):
         with TemporaryDirectory() as temporary:

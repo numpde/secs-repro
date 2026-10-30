@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 import logging
+import os
 from pathlib import Path
 from secrets import token_hex
 import signal
@@ -68,6 +69,13 @@ def _read_chat_settings(execution, retirement_seconds):
 
 async def run_provider(config_path=CONFIG_PATH):
     config = decode_provider_config(read_startup_file(config_path, maximum_bytes=65536, label="SECS provider configuration"))
+    mock_marker = os.environ.get("SECS_MOCK_INDEX", "0")
+    if mock_marker not in ("0", "1"):
+        raise ConfigurationError("Cannot start SECS provider: mock index selection must be 0 or 1")
+    mock_index = mock_marker == "1"
+    if mock_index:
+        config = replace(config, hello=replace(config.hello, mock_index=True,
+            display_name="SECS (mock index)", provider_description="MOCK INDEX: eight starting molecules; not a full scientific search."))
     grants = shared_grants(config.shared_settings)
     settings, provider_ref, publication = api_settings_with_material(config.api, read_startup_file)
     settings = replace(settings, http=replace(settings.http, proxy_socket=str(grants.proxy_socket)))
@@ -117,7 +125,7 @@ async def run_provider(config_path=CONFIG_PATH):
                 session = SecsSession(worker=worker, sources=sources, chat=chat, work_seconds=execution.work_seconds,
                                       interpretation_seconds=execution.interpretation_seconds,
                                       startup_seconds=execution.worker_startup_seconds, max_turns=execution.max_turns,
-                                      secrets=(chat_spec.api_key,))
+                                      secrets=(chat_spec.api_key,), mock_index=mock_index)
                 delivery = SharedDeliveryClient(grants.endpoint(settings.identity.origin, provider_ref), publication,
                                                 exchange_seconds=config.delivery_exchange_seconds,
                                                 retirement_seconds=settings.http.retirement_seconds)

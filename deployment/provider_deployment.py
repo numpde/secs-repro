@@ -180,7 +180,13 @@ def render_deployment(repository: Path, name: str) -> dict:
 
 def _render_deployment(repository: Path, name: str, config: Path, network: dict) -> dict:
     """Render one deployment from an already validated network policy."""
-    worker_device = _toml_document(config / "worker.toml").get("device", "cuda:0")
+    worker_config = _toml_document(config / "worker.toml")
+    worker_device = worker_config.get("device", "cuda:0")
+    mock_index = worker_config.get("mock_index", False)
+    if type(mock_index) is not bool or (mock_index and worker_device != "cpu"):
+        raise ValueError("A mock index requires mock_index=true and device=cpu.")
+    if mock_index and set(worker_config) != {"device", "mock_index"}:
+        raise ValueError("The mock index worker accepts only device and mock_index; its search settings are fixed.")
     if worker_device not in ("cpu", "cuda:0"):
         raise ValueError("Worker device must be cpu or cuda:0 for this deployment.")
     gpu_uuid = _host_gpu_uuid(repository) if worker_device == "cuda:0" else None
@@ -204,7 +210,17 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict)
     )
     _apply_provider_network(plan, name, network)
     _apply_shared_grants(plan, project, config, state)
-    plan["services"]["worker"].setdefault("environment", {})["SECS_WORKER_DEVICE"] = worker_device
+    worker = plan["services"]["worker"]
+    worker.setdefault("environment", {}).update({"SECS_WORKER_DEVICE": worker_device,
+                                                "SECS_MOCK_INDEX": "1" if mock_index else "0"})
+    plan["services"]["provider"].setdefault("environment", {})["SECS_MOCK_INDEX"] = "1" if mock_index else "0"
+    if mock_index:
+        for role in ("provider", "worker"):
+            plan["services"][role].setdefault("labels", {})["io.secs.mock-index"] = "eight-molecule"
+        command = worker["command"]
+        if type(command) is not list or len(command) != 1 or command[0].count("secs_inference.provider.worker_model") != 1:
+            raise ValueError("Cannot select mock index: the worker command differs from the maintained recipe.")
+        command[0] = command[0].replace("secs_inference.provider.worker_model", "secs_inference.provider.mock_index_worker")
     if gpu_uuid is not None:
         plan["services"]["worker"]["deploy"] = {"resources": {"reservations": {"devices": [
             {"driver": "nvidia", "device_ids": [gpu_uuid], "capabilities": ["gpu"]}
@@ -225,6 +241,17 @@ def _admit_worker_image(project: ComposeProject, plan: dict) -> None:
     if (type(labels) is not dict or labels.get("io.secs-repro.packages.variant") != expected
             or labels.get("io.secs-repro.worker.device-contract") != "explicit-v1"):
         raise ValueError(f"Cannot start worker: its image must be the SECS {expected} packages variant.")
+    if worker.get("environment", {}).get("SECS_MOCK_INDEX") == "1":
+        if labels.get("io.secs-repro.worker.mock-index") != "1":
+            raise ValueError("Cannot start worker: its image does not include the mock-index worker.")
+        provider_image = plan["services"]["provider"]["image"]
+        providers = json.loads(project.command("image", "inspect", provider_image))
+        if (type(providers) is not list or len(providers) != 1 or type(providers[0]) is not dict
+                or providers[0].get("Id") != provider_image
+                or type(providers[0].get("Config")) is not dict
+                or type(providers[0]["Config"].get("Labels")) is not dict
+                or providers[0]["Config"]["Labels"].get("io.secs-repro.provider.mock-index") != "1"):
+            raise ValueError("Cannot start mock-index deployment: the provider image cannot label its offering and results.")
 
 
 def _project(repository: Path, name: str) -> ComposeProject:
@@ -529,6 +556,8 @@ def _status(records: dict) -> dict:
                    "image": record["Image"], "restart_count": record["RestartCount"],
                    "exit_code": record["State"]["ExitCode"],
                    "oom_killed": record["State"]["OOMKilled"],
+                   **({"mock_index": "eight molecules"}
+                      if record.get("Config", {}).get("Labels", {}).get("io.secs.mock-index") == "eight-molecule" else {}),
                    **({"health": record["State"]["Health"]["Status"]}
                       if "Health" in record["State"] else {})}
             for role, record in records.items()}
@@ -549,10 +578,15 @@ def main(arguments: list[str] | None = None) -> int:
     try:
         if options.operation == "init":
             target = worker_target(os.environ.get("SECS_WORKER_TARGET", ""))
-            templates = TEMPLATES | {"worker.toml": Path(f"config/worker{'.cpu' if target == 'cpu' else ''}.toml.example")}
+            selection = os.environ.get("SECS_USE_MOCK_INDEX", "0")
+            if selection not in ("0", "no", "1", "yes") or (selection in ("1", "yes") and target != "cpu"):
+                raise ValueError("Select USE_MOCK_INDEX=yes or no; yes requires TARGET=cpu.")
+            mock_index = selection in ("1", "yes")
+            suffix = ".mock-index" if mock_index else (".cpu" if target == "cpu" else "")
+            templates = TEMPLATES | {"worker.toml": Path(f"config/worker{suffix}.toml.example")}
             destination = initialize_configuration(repository, options.deployment, templates)
             print(f"Configuration created: {destination}")
-            print(f"Worker target: {target}. Build and select the matching worker image.")
+            print(f"Worker target: {target}; mock index: {'yes (eight molecules)' if mock_index else 'no'}. Build and select the matching worker image.")
             print("Edit these files before deployment. No credentials installed or services started.")
             return 0
         config = configuration_directory(repository, options.deployment)

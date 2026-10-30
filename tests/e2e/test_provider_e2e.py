@@ -21,12 +21,15 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
 from provider_core.api import ProviderAPI
+from provider_core.api_config import api_settings_with_material
 from provider_core.attempt_record import RecoveryScope
 from provider_core.chat import ChatEndpoint, ChatEndpointSpec
 from provider_core.controller import AttemptController, LiveStartPolicy
-from provider_core.delivery_client import DeliveryClient, DeliveryEndpoint
-from provider_core.delivery_ipc import DeliveryInbox
+from provider_core.delivery_client import DeliveryEndpoint
+from provider_core.shared_delivery_client import SharedDeliveryClient
+from provider_core.shared_delivery_ipc import SharedDeliveryInbox, SharedDeliverySocket
 from provider_core.delivery_store import DeliveryQueue, QueueLimits
 from provider_core.ownership import AttemptClaims, LiveAttemptLimits
 from provider_core.signing import SigningIdentity
@@ -69,7 +72,20 @@ class ProviderEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 trust = ssl.create_default_context(cafile=str(root / "ca.pem"))
                 def transport():
                     return HttpTransport(trust=trust, exchange_seconds=10, retirement_seconds=2)
-                identity = SigningIdentity(wire.origin, "credential:test", Ed25519PrivateKey.from_private_bytes(bytes(range(32))))
+                key = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+                identity = SigningIdentity(wire.origin, "credential:test", key)
+                credential = json.dumps({"schema_id": "nmr.provider.private_signing_credential.v1",
+                    "profile": "dev-local", "principal_ref": "provider:test", "credential_ref": "credential:test",
+                    "algorithm": "ed25519", "public_key_spki_der_b64": b64encode(key.public_key().public_bytes(
+                        Encoding.DER, PublicFormat.SubjectPublicKeyInfo)).decode(),
+                    "private_key_pkcs8_pem": key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode()},
+                    sort_keys=True, separators=(",", ":")).encode() + b"\n"
+                ca_bytes = (root / "ca.pem").read_bytes()
+                api_fields = {"origin": wire.origin, "profile": "dev-local", "topology": "dev-local",
+                              "provider_ref": "provider:test", "credential_file": "/credential", "ca_file": "/ca",
+                              "exchange_seconds": 10, "retirement_seconds": 2}
+                _, _, publication = api_settings_with_material(api_fields,
+                    lambda _path, **options: credential if options["label"] == "API signing credential" else ca_bytes)
                 apis = []
                 def new_api():
                     api = ProviderAPI(identity, transport(), expected_topology="dev-local")
@@ -82,9 +98,8 @@ class ProviderEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 endpoint = DeliveryEndpoint(wire.origin, "provider:test", ipc / "delivery.sock")
                 limits = QueueLimits(1, 2097152, 1, 2097152)
                 queue = DeliveryQueue(storage, limits=limits)
-                inbox = DeliveryInbox(queue, (endpoint,), request_seconds=2,
-                                      on_accepted=lambda _endpoint: stop.set(), on_failure=lambda *_args: None,
-                                      binding_status=lambda _endpoint: {})
+                inbox = SharedDeliveryInbox(queue, SharedDeliverySocket(endpoint.socket_path, None), request_seconds=2,
+                                            on_accepted=lambda _outcome: stop.set(), on_failure=lambda *_args: None)
                 await inbox.start()
                 acknowledgements = []
                 respond = inbox._respond
@@ -101,8 +116,8 @@ class ProviderEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 execution = ExecutionConfig(wire.origin + "/chat", "scripted-choice", wire.origin,
                                             work_seconds=120, interpretation_seconds=60, worker_startup_seconds=300,
                                             poll_seconds=0.1, max_turns=6)
-                config = ProviderConfig(root / "unused-definition", "fixture",
-                                        HelloPolicy("SECS test", "Local workflow proof", 3600, 1), execution)
+                config = ProviderConfig(root / "unused-settings", {}, 2, 0.1, 1,
+                                        HelloPolicy("SECS test", "Local workflow proof", 3600, 1, mock_index=True), execution)
                 controllers = []
                 def assemble(pending):
                     sources = AttemptSources(job_ref=pending.input.job_ref, api=new_api(), store=transport(),
@@ -113,8 +128,9 @@ class ProviderEndToEndTests(unittest.IsolatedAsyncioTestCase):
                                             api_key="model-key", reasoning_effort=None)
                     chat = ChatEndpoint(spec, transport=transport(), request_bytes=2097152, response_bytes=262144)
                     science = SecsSession(worker=worker, sources=sources, chat=chat, work_seconds=120,
-                                          interpretation_seconds=60, startup_seconds=300, max_turns=6, secrets=("model-key",))
-                    client = DeliveryClient(endpoint, exchange_seconds=2, retirement_seconds=2)
+                                          interpretation_seconds=60, startup_seconds=300, max_turns=6,
+                                          secrets=("model-key",), mock_index=True)
+                    client = SharedDeliveryClient(endpoint, publication, exchange_seconds=2, retirement_seconds=2)
                     controller = AttemptController.live(
                         new_api(), claims, science, scope=scope, stopping=science_stop, admission_stopping=stop,
                         start_policy=LiveStartPolicy(0.1, lambda *_args: None, lambda *_args: None), delivery=client,
@@ -136,13 +152,18 @@ class ProviderEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(wire.downloads, 1)
                 self.assertEqual(wire.capabilities, 1)
                 self.assertEqual(wire.hellos, 1)
+                self.assertIn("MOCK INDEX", wire.hello_document["analysis_offerings"][0]["description"])
                 self.assertEqual(len(acknowledgements), 2)
                 self.assertEqual(acknowledgements[0], acknowledgements[1])
                 retained = queue.next_pending(wire.origin, "provider:test")
                 self.assertIsNotNone(retained)
                 self.assertEqual(retained.body_sha256, acknowledgements[1]["body_sha256"])
+                handoff = queue.next_pending_handoff(wire.origin, "provider:test")
+                self.assertEqual(handoff.publication.credential_bytes, credential)
+                self.assertEqual(handoff.publication.ca_bytes, ca_bytes)
                 report = json.loads(b64decode(json.loads(retained.body)["canonical_result_base64"]))
                 self.assertEqual(report["outcome"], "analysed")
+                self.assertIn("mock_index", report)
                 self.assertEqual(len(report["input_choices"]), 2)
                 self.assertIn("selected 13C spectrum", report["input_choices"][0]["reading_error"])
                 self.assertIn("proton", report["input_choices"][-1]["explanation"])
@@ -183,6 +204,9 @@ class ProviderEndToEndTests(unittest.IsolatedAsyncioTestCase):
             reopened = DeliveryQueue(storage, limits=limits)
             try:
                 self.assertEqual(reopened.next_pending(wire.origin, "provider:test").body, retained.body)
+                reopened_handoff = reopened.next_pending_handoff(wire.origin, "provider:test")
+                self.assertEqual(reopened_handoff.publication.credential_bytes, credential)
+                self.assertEqual(reopened_handoff.publication.ca_bytes, ca_bytes)
             finally:
                 reopened.close()
 
@@ -254,7 +278,8 @@ class WireScenario:
             document = {"choices": [{"finish_reason": "tool_calls", "message": {"role": "assistant", "tool_calls": [{"id": f"call-{self.turns}", "type": "function",
                          "function": {"name": name, "arguments": json.dumps(arguments)}}]}}]}
         elif route == ("POST", "/provider/v1/hello"):
-            assert json.loads(body)["schema_id"] == "nmr.provider.hello_request.v1"
+            self.hello_document = json.loads(body)
+            assert self.hello_document["schema_id"] == "nmr.provider.hello_request.v1"
             self.hellos += 1
             document = {"schema_id": "nmr.provider.hello_response.v1", "provider_ref": "provider:test", "accepted_at": "2026-09-08T12:00:00Z"}
         elif route == ("GET", "/upload/v1/uploads/" + UPLOAD + "/bytes"):

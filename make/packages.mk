@@ -125,10 +125,10 @@ packages/wheelhouse:
 	trap - EXIT
 
 packages/cpu/image:
-	$(MAKE) --no-print-directory packages/image VARIANT=cpu
+	@$(MAKE) --no-print-directory packages/image VARIANT=cpu
 
 packages/gpu/image:
-	$(MAKE) --no-print-directory packages/image VARIANT=gpu
+	@$(MAKE) --no-print-directory packages/image VARIANT=gpu
 
 packages/image:
 	@case "$(VARIANT)" in

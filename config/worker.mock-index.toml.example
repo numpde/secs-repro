@@ -1,0 +1,5 @@
+# The mock index worker uses the installed checkpoint and cache, with eight
+# starting molecules and one small Graph GA generation. It is not a full search.
+# Change index mode or device through deployment down and up.
+device = "cpu"
+mock_index = true

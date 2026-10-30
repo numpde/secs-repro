@@ -36,11 +36,12 @@ class SecsSession:
     """
 
     def __init__(self, *, worker, sources, chat, work_seconds, interpretation_seconds,
-                 startup_seconds, max_turns, secrets=()):
+                 startup_seconds, max_turns, secrets=(), mock_index=False):
         self.worker, self.sources, self.chat = worker, sources, chat
         self.work_seconds, self.interpretation_seconds = work_seconds, interpretation_seconds
         self.startup_seconds, self.max_turns = startup_seconds, max_turns
         self._secrets, self._diagnostic = secrets, None
+        self._mock_index = mock_index
         self._acknowledged = self._conversation = self._prepared = None
         self._handle = self._deadline = None
         self._choices = []
@@ -62,6 +63,12 @@ class SecsSession:
                 # The child supplies only its structural exception projection;
                 # it has no API/interpreter credentials or raw exception text.
                 self._diagnostic["scientific_worker"] = cause.diagnostic
+        if self._mock_index:
+            prefix = "MOCK INDEX: the starting index contains eight demonstration molecules, not the full candidate set. "
+            available = 1024 - len(prefix)
+            if len(message) > available:
+                message = message[:available - 3] + "..."
+            message = prefix + message
         return AnalysisFailure(code, message, self._evidence())
 
     def _worker_crash(self, failure, phase):
@@ -179,6 +186,8 @@ class SecsSession:
                   "input_choices": self._choices,
                   "interpretation_rejections": self._conversation.rejections,
                   "acquired_uploads": self.sources.evidence(), "analysis": response["analysis"]}
+        if self._mock_index:
+            report["mock_index"] = {"description": "Eight starting molecules; this is not a full scientific search."}
         return AnalysisSuccess(RESULT_SCHEMA_ID, _document(report), self._evidence())
 
     async def _request(self, request, deadline, *, require_execution=None):

@@ -8,6 +8,7 @@ override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools
 .PHONY: provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs test/deployment
 provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
 provider/deployment/init: private export SECS_WORKER_TARGET := $(if $(filter command line,$(origin TARGET)),$(value TARGET),)
+provider/deployment/init: private export SECS_USE_MOCK_INDEX := $(if $(filter command line,$(origin USE_MOCK_INDEX)),$(value USE_MOCK_INDEX),0)
 provider/deployment/init provider/deployment/config provider/deployment/up provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs:
 	@cd "$(REPOSITORY_ROOT)"
 	python3 -m deployment.provider_deployment "$(@F)" "$${DEPLOYMENT_INPUT}"

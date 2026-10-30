@@ -56,6 +56,7 @@ class HelloPolicy:
     provider_description: str
     publication_interval_seconds: float
     retry_initial_seconds: float
+    mock_index: bool = False
 
     def __post_init__(self) -> None:
         _require_positive_seconds(

@@ -2,7 +2,8 @@ ARG PYTHON_BASE
 FROM ${PYTHON_BASE}
 
 ARG PROVIDER_INPUT_ID
-LABEL io.secs-repro.provider.input-id="${PROVIDER_INPUT_ID}"
+LABEL io.secs-repro.provider.input-id="${PROVIDER_INPUT_ID}" \
+      io.secs-repro.provider.mock-index="1"
 
 COPY requirements/provider.lock /opt/provider/requirements.lock
 COPY --from=wheelhouse . /opt/provider/wheelhouse/

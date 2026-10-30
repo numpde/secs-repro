@@ -316,6 +316,20 @@ class ProviderDeploymentTests(unittest.TestCase):
         with patch("builtins.open", side_effect=OSError("no tty")), self.assertRaisesRegex(ValueError, "no interactive terminal"):
             worker_target("")
 
+    def test_mock_index_requires_a_provider_image_that_can_label_results(self):
+        project = Mock()
+        worker_image = "sha256:" + "1" * 64
+        provider_image = "sha256:" + "2" * 64
+        plan = {"services": {"worker": {"image": worker_image, "environment": {"SECS_MOCK_INDEX": "1"}},
+                             "provider": {"image": provider_image}}}
+        worker = {"Id": worker_image, "Config": {"Labels": {
+            "io.secs-repro.packages.variant": "cpu", "io.secs-repro.worker.device-contract": "explicit-v1",
+            "io.secs-repro.worker.mock-index": "1"}}}
+        old_provider = {"Id": provider_image, "Config": {"Labels": {}}}
+        project.command.side_effect = [json.dumps([worker]).encode(), json.dumps([old_provider]).encode()]
+        with self.assertRaisesRegex(ValueError, "cannot label"):
+            _admit_worker_image(project, plan)
+
     def test_shared_grants_cannot_shadow_scientific_or_configuration_mounts(self):
         for socket_path in ("/run/secs/sources/delivery.sock", "/run/secs/delivery.sock"):
             with self.subTest(socket=socket_path), TemporaryDirectory() as temporary:

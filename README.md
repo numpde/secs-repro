@@ -18,6 +18,10 @@ interactive commands can prompt. Builds stage the locked inputs and install offl
 Initialize a named deployment with `TARGET=cpu` or `TARGET=gpu`; an interactive
 terminal offers the choice when omitted. Build and select the corresponding CPU
 or GPU packages image. GPU deployments also require the host GPU UUID selection.
+For deployment checks, `make provider/deployment/init DEPLOYMENT=<name> TARGET=cpu
+USE_MOCK_INDEX=yes` selects a real model with an eight-molecule starting index.
+Its advertised offering and results identify the limited index; it does not
+represent a full scientific search. Omitting the flag selects the full index.
 The candidate index can be built with `make candidates TARGET=cpu` or
 `TARGET=gpu CANDIDATE_GPU=GPU-<uuid>`; the existing index and its evidence are
 never replaced by that command.

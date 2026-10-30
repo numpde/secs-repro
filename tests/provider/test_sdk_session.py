@@ -15,7 +15,7 @@ from unittest.mock import Mock
 
 from provider_core.analysis import AnalysisFailure, AnalysisOutcomeUnresolved, AnalysisSuccess, PreparedAnalysis
 from provider_core.attempt_record import RecoveryScope, StartPending, acknowledge_start
-from provider_core.attempt_request import start_body
+from provider_core.attempt_request import fail_body, start_body
 from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpired
 from provider_core.attempt_response import AttemptAdmission
 from provider_core.job_input import FeedInputFacts, VerifiedJobInput
@@ -468,6 +468,23 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
         await session.retire()
         self.assertNotIn("worker-stop", events)
         self.assertEqual(events[-1], ("sources-retire", True))
+
+    async def test_mock_index_success_and_failure_identify_the_limited_search(self):
+        session, _, _, _ = self.make_session([
+            {"outcome": "prepared", "prepared_handle": 7},
+            {"outcome": "analysed", "analysis": {"candidates": [{"smiles": "CCO", "score": "1"}],
+                "retrieval": {"starting_candidates": 1}, "search": {"outcome": "optimized"},
+                "preparation": {}, "inference": {}}},
+        ])
+        session._mock_index = True
+        prepared = await self.prepare(session)
+        outcome = await session.execute(prepared, report_condition=condition)
+        self.assertIn("mock_index", json.loads(outcome.content))
+        failure = session._failure("cannot_analyse", "x" * 1024)
+        self.assertIn("MOCK INDEX", failure.message)
+        self.assertLessEqual(len(failure.message), 1024)
+        fail_body("execution_attempt:sha256:" + "b" * 64, failure.code, failure.message)
+        await session.retire()
 
     async def test_unconsumed_preparation_stops_before_source_retirement(self):
         session, _, _, events = self.make_session([{"outcome": "prepared", "prepared_handle": 7}])

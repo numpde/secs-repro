@@ -6,7 +6,8 @@ ARG PACKAGES_VARIANT
 
 LABEL io.secs-repro.packages.input-id="${PACKAGES_INPUT_ID}" \
       io.secs-repro.packages.variant="${PACKAGES_VARIANT}" \
-      io.secs-repro.worker.device-contract="explicit-v1"
+      io.secs-repro.worker.device-contract="explicit-v1" \
+      io.secs-repro.worker.mock-index="1"
 
 COPY requirements/packages-${PACKAGES_VARIANT}.lock /opt/packages/requirements.lock
 COPY --from=wheelhouse . /opt/packages/wheelhouse/

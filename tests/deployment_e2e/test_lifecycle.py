@@ -248,6 +248,11 @@ class LifecycleEndToEndTests(unittest.TestCase):
             cpu_plan = render_deployment(root, "example")
             self.assertNotIn("deploy", cpu_plan["services"]["worker"])
             self.assertEqual(cpu_plan["services"]["worker"]["network_mode"], "none")
+            (config / "worker.toml").write_text('device = "cpu"\nmock_index = true\n')
+            mock_plan = render_deployment(root, "example")
+            self.assertEqual(mock_plan["services"]["provider"]["environment"]["SECS_MOCK_INDEX"], "1")
+            self.assertEqual(mock_plan["services"]["worker"]["environment"]["SECS_MOCK_INDEX"], "1")
+            self.assertIn("secs_inference.provider.mock_index_worker", " ".join(mock_plan["services"]["worker"]["command"]))
 
     def test_forwarded_api_network_is_valid_compose_input(self):
         image = os.environ["DEPLOYMENT_TEST_IMAGE"]
