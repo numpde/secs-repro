@@ -1,5 +1,6 @@
 """The mock runner returns a labeled result and retains native ownership."""
 
+import asyncio
 import json
 import unittest
 from types import SimpleNamespace
@@ -7,12 +8,26 @@ from unittest.mock import AsyncMock
 
 from provider_core.analysis import AnalysisFailure, AnalysisOutcomeUnresolved, AnalysisSuccess
 from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpired
+from secs_inference.provider.config import HelloPolicy
 from secs_inference.provider.mock_runner_session import MockRunnerSession
+from secs_inference.provider.process import publish_hello_until_stopped
 from secs_inference.provider.worker import WorkerDeadlineBeforeDispatch
 from test_sdk_session import admission, condition
 
 
 class MockRunnerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hello_offering_discloses_mock_runner(self):
+        stop = asyncio.Event()
+        async def published(**_presentation):
+            stop.set()
+        api = type('API', (), {})()
+        api.publish_hello = AsyncMock(side_effect=published)
+        policy = HelloPolicy('SECS mock', 'Mock runner', 60, 1, mock_runner=True)
+        await publish_hello_until_stopped(api=api, provider_ref='provider:test', policy=policy, stop=stop)
+        offering = api.publish_hello.await_args.kwargs['analysis_offerings'][0]
+        self.assertIn('MOCK RUNNER', offering.description)
+        self.assertIn('without running a model', offering.description.lower())
+
     def worker(self, replies):
         worker = type('Worker', (), {})()
         worker.check_ready = AsyncMock()

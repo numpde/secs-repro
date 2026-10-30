@@ -121,8 +121,6 @@ class MockRunnerEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(wire.turns, 0)
                 self.assertEqual(wire.downloads, 0)
                 self.assertEqual(wire.capabilities, 0)
-                self.assertEqual(wire.hellos, 1)
-                self.assertIn("MOCK RUNNER", wire.hello_document["analysis_offerings"][0]["description"])
                 self.assertEqual(len(acknowledgements), 2)
                 self.assertEqual(acknowledgements[0], acknowledgements[1])
                 self.assertIsNotNone(retained)
