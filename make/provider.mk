@@ -1,6 +1,4 @@
 PROVIDER_IMAGE_TAG := secs-repro/provider:local
-PROVIDER_WHEELHOUSE := $(REPOSITORY_ROOT)/wheelhouse/provider
-NATIVE_WHEELHOUSE := $(REPOSITORY_ROOT)/wheelhouse/native
 override PROVIDER_PYTHON_BASE := docker.io/library/python:3.12.16-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
 override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.3/provider_core-0.5.3-py3-none-any.whl
 
@@ -49,13 +47,24 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 		exit 2
 	fi
 	profile="$(if $(filter provider/native-wheelhouse,$@),native,provider)"
-	wheelhouse_parent="$(REPOSITORY_ROOT)/wheelhouse"
-	mkdir -p "$$wheelhouse_parent"
-	stage=$$(mktemp -d --tmpdir="$$wheelhouse_parent" .$$profile.XXXXXXXX)
+	source tools/wheelhouse_selection.sh
+	select_wheelhouse
+	stage=$$(mktemp -d --tmpdir="$$wheelhouse_directory" .secs-$$profile.XXXXXXXX)
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	if stage_selected_wheels "$$wheelhouse_directory" "$(REPOSITORY_ROOT)/requirements/$$profile.lock" "$$stage" "$(PROVIDER_PYTHON_BASE)" check; then
+		rm -rf "$$stage"
+		trap - EXIT
+		exit 0
+	else
+		selection_status=$$?
+	fi
+	if test "$$selection_status" -ne 10; then exit "$$selection_status"; fi
+	secs_engine_active=0
+	find "$$stage" -mindepth 1 -delete
+	python3 tools/link_cached_wheels.py "$$wheelhouse_directory" "$$stage"
 	mkdir "$$stage/.tmp"
 	secs_engine_active=1
 	$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
@@ -63,33 +72,43 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 		--pull never --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--env PIP_NO_CACHE_DIR=1 --env TMPDIR=/wheelhouse/.tmp \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/requirements/$$profile.lock",dst=/input/requirements.lock,readonly \
+		--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
 		--mount type=bind,src="$$stage",dst=/wheelhouse \
 		"$(PROVIDER_PYTHON_BASE)" python -m pip download --require-hashes \
 		--only-binary=:all: --no-deps --index-url https://pypi.org/simple \
-		--find-links "$(PROVIDER_CORE_WHEEL_URL)" --dest /wheelhouse -r /input/requirements.lock
+		--find-links /pool --find-links "$(PROVIDER_CORE_WHEEL_URL)" --dest /wheelhouse -r /input/requirements.lock
 	secs_engine_active=0
 	rm -rf "$$stage/.tmp"
-	( cd "$$stage" && sha256sum * | LC_ALL=C sort ) > "$$stage/.complete"
-	python3 tools/publish_wheelhouse.py "$$stage" "$$wheelhouse_parent/$$profile"
+	python3 tools/publish_shared_wheels.py "$$stage" "$$wheelhouse_directory"
 	rm -rf "$$stage"
 	trap - EXIT
 
 provider/image:
-	@test -f "$(PROVIDER_WHEELHOUSE)/.complete" || { \
-		printf '%s\n' 'Provider wheelhouse is absent; run make provider/wheelhouse.' >&2; exit 2; }
+	@source tools/wheelhouse_selection.sh
+	select_wheelhouse
+	stage=$$(mktemp -d /tmp/secs-provider-wheels.XXXXXXXX)
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=1
+	trap 'retain_uncertain_stage "$$stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	stage_selected_wheels "$$wheelhouse_directory" "$(REPOSITORY_ROOT)/requirements/provider.lock" "$$stage" "$(PROVIDER_PYTHON_BASE)"
 	id=$$( {
 		printf '%s\n' "$(PROVIDER_PYTHON_BASE)"
 		cat containers/provider/Dockerfile containers/provider/Dockerfile.dockerignore \
-			requirements/provider.lock "$(PROVIDER_WHEELHOUSE)/.complete"
+			requirements/provider.lock "$$stage/.complete"
 		sha256sum src/secs_inference/__init__.py src/secs_inference/model_failure.py
 		find src/secs_inference/provider -type f \
 			! -path '*/__pycache__/*' ! -name '*.py[co]' -print0 \
 			| LC_ALL=C sort -z | xargs -0 sha256sum
 	} | sha256sum | cut -d' ' -f1 )
+	secs_engine_active=1
 	$(DOCKER) build --quiet --network none --pull=false \
 		--build-arg PYTHON_BASE="$(PROVIDER_PYTHON_BASE)" \
 		--build-arg PROVIDER_INPUT_ID="$$id" \
-		--build-context "wheelhouse=$(PROVIDER_WHEELHOUSE)" \
+		--build-context "wheelhouse=$$stage" \
 		--file containers/provider/Dockerfile \
 		--tag "secs-repro/provider:inputs-$$id" \
 		--tag "$(PROVIDER_IMAGE_TAG)" .
+	secs_engine_active=0
+	rm -rf "$$stage"
+	trap - EXIT

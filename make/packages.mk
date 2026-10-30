@@ -86,14 +86,24 @@ packages/wheelhouse:
 		*) printf '%s\n' 'VARIANT must be cpu or gpu.' >&2; exit 2 ;;
 	esac
 	lock="$(REPOSITORY_ROOT)/requirements/packages-$(VARIANT).lock"
-	wheelhouse_parent="$(REPOSITORY_ROOT)/wheelhouse"
-	wheelhouse_path="$$wheelhouse_parent/packages-$(VARIANT)"
-	mkdir -p "$$wheelhouse_parent"
-	stage=$$(mktemp -d --tmpdir="$$wheelhouse_parent" .packages-$(VARIANT).XXXXXXXX)
+	source tools/wheelhouse_selection.sh
+	select_wheelhouse
+	stage=$$(mktemp -d --tmpdir="$$wheelhouse_directory" .secs-packages-$(VARIANT).XXXXXXXX)
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	if stage_selected_wheels "$$wheelhouse_directory" "$$lock" "$$stage" "$(PYTHON_BASE)" check; then
+		rm -rf "$$stage"
+		trap - EXIT
+		exit 0
+	else
+		selection_status=$$?
+	fi
+	if test "$$selection_status" -ne 10; then exit "$$selection_status"; fi
+	secs_engine_active=0
+	find "$$stage" -mindepth 1 -delete
+	python3 tools/link_cached_wheels.py "$$wheelhouse_directory" "$$stage"
 	mkdir "$$stage/.tmp"
 	# The lock resolves antlr4-python3-runtime 4.9.3, which PyPI publishes only as source.
 	secs_engine_active=1
@@ -102,26 +112,22 @@ packages/wheelhouse:
 		--pull never --pids-limit 64 --cpus 2 --memory 1g --memory-swap 1g \
 		--env PIP_NO_CACHE_DIR=1 --env TMPDIR=/wheelhouse/.tmp \
 		--mount type=bind,src="$$lock",dst=/input/requirements.lock,readonly \
+		--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
 		--mount type=bind,src="$$stage",dst=/wheelhouse \
 		"$(PYTHON_BASE)" python -m pip download --require-hashes \
 		--only-binary=:all: --no-binary=antlr4-python3-runtime \
-		--no-deps --index-url https://pypi.org/simple --find-links "$$torch_wheels" \
+		--no-deps --index-url https://pypi.org/simple --find-links /pool --find-links "$$torch_wheels" \
 		--dest /wheelhouse -r /input/requirements.lock
 	secs_engine_active=0
 	rm -rf "$$stage/.tmp"
-	( cd "$$stage" && sha256sum * | LC_ALL=C sort ) > "$$stage/.complete"
-	python3 tools/publish_wheelhouse.py "$$stage" "$$wheelhouse_path"
+	python3 tools/publish_shared_wheels.py "$$stage" "$$wheelhouse_directory"
 	rm -rf "$$stage"
 	trap - EXIT
 
 packages/cpu/image:
-	@test -f wheelhouse/packages-cpu/.complete || { \
-		printf '%s\n' 'CPU wheelhouse is absent; run make packages/cpu/wheelhouse.' >&2; exit 2; }
 	$(MAKE) --no-print-directory packages/image VARIANT=cpu
 
 packages/gpu/image:
-	@test -f wheelhouse/packages-gpu/.complete || { \
-		printf '%s\n' 'GPU wheelhouse is absent; run make packages/gpu/wheelhouse.' >&2; exit 2; }
 	$(MAKE) --no-print-directory packages/image VARIANT=gpu
 
 packages/image:
@@ -129,25 +135,37 @@ packages/image:
 		cpu|gpu) ;;
 		*) printf '%s\n' 'VARIANT must be cpu or gpu.' >&2; exit 2 ;;
 	esac
-	@test -f "$(NATIVE_WHEELHOUSE)/.complete" || { \
-		printf '%s\n' 'Native SDK wheelhouse is absent; run make provider/native-wheelhouse.' >&2; exit 2; }
+	source tools/wheelhouse_selection.sh
+	select_wheelhouse
+	stage=$$(mktemp -d /tmp/secs-image-wheels.XXXXXXXX)
+	mkdir "$$stage/packages" "$$stage/native"
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=1
+	trap 'retain_uncertain_stage "$$stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	stage_selected_wheels "$$wheelhouse_directory" "$(REPOSITORY_ROOT)/requirements/packages-$(VARIANT).lock" "$$stage/packages" "$(PYTHON_BASE)"
+	stage_selected_wheels "$$wheelhouse_directory" "$(REPOSITORY_ROOT)/requirements/native.lock" "$$stage/native" "$(PYTHON_BASE)"
 	id=$$( {
 		printf '%s\n' "$(PYTHON_BASE)" "$(VARIANT)"
 		cat containers/packages/Dockerfile.dockerignore \
 			requirements/packages-$(VARIANT).lock containers/packages/Dockerfile \
-			pyproject.toml secs/pyproject.toml secs/README.md wheelhouse/packages-$(VARIANT)/.complete \
-			requirements/native.lock "$(NATIVE_WHEELHOUSE)/.complete"
+			pyproject.toml secs/pyproject.toml secs/README.md "$$stage/packages/.complete" \
+			requirements/native.lock "$$stage/native/.complete"
 		find src -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
 		find secs/src -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
 	} | sha256sum | cut -d' ' -f1 )
+	secs_engine_active=1
 	$(DOCKER) build --quiet --network none --pull=false \
 		--build-arg PYTHON_BASE="$(PYTHON_BASE)" \
 		--build-arg PACKAGES_INPUT_ID="$$id" \
 		--build-arg PACKAGES_VARIANT="$(VARIANT)" \
-		--build-context "wheelhouse=$(REPOSITORY_ROOT)/wheelhouse/packages-$(VARIANT)" \
-		--build-context "native_wheelhouse=$(NATIVE_WHEELHOUSE)" \
+		--build-context "wheelhouse=$$stage/packages" \
+		--build-context "native_wheelhouse=$$stage/native" \
 		--file containers/packages/Dockerfile \
 		--tag "secs-repro/packages-$(VARIANT):inputs-$$id" \
 		--tag "$(call packages_image_tag,$(VARIANT))" .
+	secs_engine_active=0
+	rm -rf "$$stage"
+	trap - EXIT
 
 packages/images: packages/cpu/image packages/gpu/image

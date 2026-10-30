@@ -12,6 +12,9 @@ managed API proxy and outbox sockets. `network.toml` separately controls interpr
 and upload-store egress.
 The API and scientific images install the same SDK wheel using its issued API
 and native installation locks; the scientific image retains its own dependency pins.
+Select a shared package cache with `WHEELHOUSE=/path/to/wheelhouse` for dependency
+acquisition and image builds. Unattended commands require an explicit path;
+interactive commands can prompt. Builds stage the locked inputs and install offline.
 Initialize a named deployment with `TARGET=cpu` or `TARGET=gpu`; an interactive
 terminal offers the choice when omitted. Build and select the corresponding CPU
 or GPU packages image. GPU deployments also require the host GPU UUID selection.

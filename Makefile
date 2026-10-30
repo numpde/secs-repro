@@ -20,10 +20,13 @@ ifeq ($(MAKELEVEL),0)
 export SECS_NETWORK_INTERFACE_INPUT := $(value NETWORK_INTERFACE)
 export SECS_NETWORK_INTERFACE_ORIGIN := $(origin NETWORK_INTERFACE)
 export SECS_OLD_WLAN_ORIGIN := $(origin WLAN_INTERFACE)
+export SECS_WHEELHOUSE_INPUT := $(value WHEELHOUSE)
+export SECS_WHEELHOUSE_ORIGIN := $(origin WHEELHOUSE)
 else ifneq ($(origin NETWORK_INTERFACE),undefined)
 export SECS_NETWORK_INTERFACE_INPUT := $(value NETWORK_INTERFACE)
 export SECS_NETWORK_INTERFACE_ORIGIN := $(origin NETWORK_INTERFACE)
 endif
+unexport WHEELHOUSE
 unexport NETWORK_INTERFACE
 unexport WLAN_INTERFACE
 override export SECS_BOOTSTRAP_IMAGE = $(PYTHON_BASE)
@@ -40,6 +43,8 @@ help:
 	'      Route cooperative HTTP(S) downloads through that interface, or choose system routing.' \
 	'      Omit it to choose interactively; noninteractive downloads require a choice.' \
 	'      Docker daemon image pulls continue to use the daemon default route.' \
+	'  Select the shared dependency cache with WHEELHOUSE=<directory>.' \
+	'      Omit it to choose interactively; unattended dependency and image commands require it.' \
 	'' \
 	'1. Prepare CPU dependencies' \
 		'  make packages/base-images/pull packages/cpu/wheelhouse' \
