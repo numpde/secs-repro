@@ -166,14 +166,16 @@ host's GPU once for every named deployment:
 
 Set worker_gpu_uuid in config/host.toml to one GPU UUID. A deployment cannot
 override this host selection. Initialization also creates network.toml with
-mode = "standard". A provider that reaches a forwarded local API instead uses:
+mode = "standard". A provider that reaches a forwarded interpreter or upload
+store instead uses (API transport continues through the shared proxy):
 
-  mode = "forwarded-api"
+  mode = "forwarded-services"
   host_address = "172.22.0.1"
 
 That mode maps nmr.localhost to the address and requires an existing external
-bridge named secs-<name>-egress. The bridge gateway must equal host_address and
-the bridge must carry io.secs-repro.checkout and io.secs-repro.deployment labels
+bridge named secs-<name>-egress. The host_address must equal that bridge's
+gateway or the inspected Docker default bridge gateway. The external bridge
+must carry io.secs-repro.checkout and io.secs-repro.deployment labels
 for the exact checkout and deployment. The controller inspects this network
 before starting services; it does not create the bridge or tunnel routing.
 For the example above, replace <name> with the deployment name and run these
@@ -188,8 +190,8 @@ commands from the repository root before starting the deployment:
 
 This command creates only the Docker bridge. Establish the tunnel route
 separately. Before creating it, confirm the subnet does not overlap an existing
-Docker or host route. Use a subnet containing host_address and make that address
-its gateway. make provider/deployment/down DEPLOYMENT=<name> retains the
+Docker or host route. If host_address is this bridge's gateway, use a subnet
+containing that address. make provider/deployment/down DEPLOYMENT=<name> retains the
 provider container and this external bridge; removing either belongs to a
 deliberate deployment-retirement procedure.
 For a deployment created before these files existed, create and review

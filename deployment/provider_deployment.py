@@ -142,15 +142,20 @@ def _admit_provider_network(project: ComposeProject, repository: Path, name: str
     except (ipaddress.AddressValueError, ipaddress.NetmaskValueError, TypeError) as error:
         raise ValueError("External provider network has invalid IPv4 routing metadata.") from error
     if gateway != host:
-        raise ValueError(
-            f"Cannot use external network {expected_name!r}; gateway {str(gateway)!r} does not "
-            f"match network.toml host_address {str(host)!r}."
-        )
-    if host not in subnet:
-        raise ValueError(
-            f"Cannot use external network {expected_name!r}; host address {str(host)!r} is outside "
-            f"subnet {str(subnet)!r}."
-        )
+        try:
+            bridge = json.loads(project.command("network", "inspect", "bridge"))
+            default = bridge[0]
+            bridge_config = default["IPAM"]["Config"]
+            valid_default = (type(bridge) is list and len(bridge) == 1 and default.get("Name") == "bridge"
+                             and default.get("Driver") == "bridge" and type(bridge_config) is list
+                             and len(bridge_config) == 1
+                             and ipaddress.IPv4Address(bridge_config[0]["Gateway"]) == host)
+        except (KeyError, TypeError, IndexError, ValueError, json.JSONDecodeError):
+            valid_default = False
+        if not valid_default:
+            raise ValueError("Cannot use the forwarded-services host address: it must be this network's gateway or the inspected default bridge gateway.")
+    elif host not in subnet:
+        raise ValueError("Cannot use the forwarded-services host address outside its network subnet.")
     members = record.get("Containers")
     if type(members) is not dict:
         raise ValueError(f"Cannot use external network {expected_name!r}; its container membership is malformed.")

@@ -516,7 +516,7 @@ class ProviderDeploymentTests(unittest.TestCase):
             ({"Driver": "overlay"}, "non-internal bridge"),
             ({"Internal": True}, "non-internal bridge"),
             ({"Labels": {}}, "io.secs-repro.checkout"),
-            ({"IPAM": {"Config": [{"Subnet": "172.23.0.0/16", "Gateway": "172.23.0.1"}]}}, "does not match"),
+            ({"IPAM": {"Config": [{"Subnet": "172.23.0.0/16", "Gateway": "172.23.0.1"}]}}, "inspected default bridge gateway"),
             ({"Containers": {"c" * 64: {}}}, "not owned"),
         )
         for change, message in changes:
@@ -532,6 +532,19 @@ class ProviderDeploymentTests(unittest.TestCase):
                         "example",
                         {"mode": "forwarded-services", "host_address": "172.22.0.1"},
                     )
+
+    def test_forwarded_services_can_use_inspected_default_bridge_gateway(self):
+        project = unittest.mock.Mock()
+        external = {"Name": "secs-example-egress", "Driver": "bridge", "Internal": False,
+                    "Labels": {"io.secs-repro.checkout": "/repository", "io.secs-repro.deployment": "example"},
+                    "IPAM": {"Config": [{"Subnet": "172.22.0.0/16", "Gateway": "172.22.0.1"}]},
+                    "Containers": {}}
+        bridge = {"Name": "bridge", "Driver": "bridge",
+                  "IPAM": {"Config": [{"Subnet": "172.17.0.0/16", "Gateway": "172.17.0.1"}]}}
+        project.command.side_effect = [json.dumps([external]).encode(), json.dumps([bridge]).encode()]
+        project.inventory.return_value = {}
+        _admit_provider_network(project, Path("/repository"), "example",
+                                {"mode": "forwarded-services", "host_address": "172.17.0.1"})
 
     def test_start_rejects_foreign_network_before_runtime_state_or_containers(self):
         with TemporaryDirectory() as temporary:
