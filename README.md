@@ -26,7 +26,9 @@ Docker-using Make targets take `DOCKER_CONTEXT=<local-context>` or prompt from
 the available local Unix-socket contexts in a terminal. There is no implicit
 default, and remote contexts are rejected. Make resolves the selected socket
 once and pins that endpoint across nested commands and cleanup; it does not
-change Docker's global current context.
+change Docker's global current context. On this host and ProArt, pass
+`DOCKER_CONTEXT=science` to each Docker-using Make command. Direct Docker CLI
+commands should use `--context science`.
 Initialize a named deployment with `TARGET=cpu` or `TARGET=gpu`; an interactive
 terminal offers the choice when omitted. Build and select the corresponding CPU
 or GPU packages image. GPU deployments also require the host GPU UUID selection.
@@ -49,12 +51,12 @@ Mock modes can consume Jobs already queued for the selected provider, even after
 its mock offering is advertised. A separate test provider principal or disposable
 API isolates those Jobs; a separate credential for the same principal does not.
 For example, initialize `localhost` with the CPU worker and use
-`make provider/deployment/up DEPLOYMENT=localhost USE_MOCK_INDEX=yes` when the
-limited index is wanted. Initialize `localhost-mock` with
+`make provider/deployment/up DEPLOYMENT=localhost USE_MOCK_INDEX=yes DOCKER_CONTEXT=science`
+when the limited index is wanted. Initialize `localhost-mock` with
 `TARGET=cpu USE_MOCK_RUNNER=yes` and install its own mock-provider credential.
-The candidate index can be built with `make candidates TARGET=cpu` or
-`TARGET=gpu CANDIDATE_GPU=GPU-<uuid>`; the existing index and its evidence are
-never replaced by that command.
+The candidate index can be built with `make candidates TARGET=cpu DOCKER_CONTEXT=science`
+or `make candidates TARGET=gpu CANDIDATE_GPU=GPU-<uuid> DOCKER_CONTEXT=science`;
+the existing index and its evidence are never replaced by that command.
 
 Networked acquisition requires `NETWORK_INTERFACE=<device>` or
 `NETWORK_INTERFACE=system`, supplied on the make command line or in the
@@ -65,9 +67,10 @@ not a firewall for clients that bypass the proxy. `system` uses normal routing.
 Offline operations do not ask, and Docker base-image pulls use the daemon's
 default route. GitHub and provider API traffic use their normal routes.
 
-`make provider/deployment/down DEPLOYMENT=<name>` stops admission and waits for
-work and selected reports before stopping the scientific worker. It may wait
-indefinitely while delivery is unavailable; interruption leaves shutdown unconfirmed.
+`make provider/deployment/down DEPLOYMENT=<name> DOCKER_CONTEXT=science` stops
+admission and waits for work and selected reports before stopping the scientific
+worker. It may wait indefinitely while delivery is unavailable; interruption
+leaves shutdown unconfirmed.
 
 Before switching a legacy deployment, drain its obligations under the old runtime
 and preserve its evidence. Before starting this volume-backed deployment, move

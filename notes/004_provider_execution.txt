@@ -147,14 +147,17 @@ Compose, and a configured NVIDIA container runtime. Its numeric UID/GID and
 private host-directory ownership must match. Rootless or remapped engines need
 a separately verified ownership mapping; this recipe does not establish one.
 
-Build existing offline inputs with make provider/image and
-make packages/gpu/image. Neither target downloads dependencies. Use the
+On this host and ProArt, pass DOCKER_CONTEXT=science to each Docker-using Make
+command and use docker --context science for direct Docker commands. Build
+existing offline inputs with make provider/image DOCKER_CONTEXT=science and
+make packages/cpu/image DOCKER_CONTEXT=science. Neither target downloads
+dependencies. Use the
 returned immutable image IDs for PROVIDER_IMAGE_REF and WORKER_IMAGE_REF.
 
-Use the named deployment commands with `DOCKER_CONTEXT=<local-context>` or
-choose a local Unix-socket context from the interactive menu. They pin the
-resolved endpoint and project secs-<name>, without inherited Docker/Compose
-settings or .env files:
+Use the named deployment commands with `DOCKER_CONTEXT=science` on this host and
+ProArt, or choose a local Unix-socket context from the interactive menu on
+other hosts. They pin the resolved endpoint and project secs-<name>, without
+inherited Docker/Compose settings or .env files:
 
   make provider/deployment/init DEPLOYMENT=<name>
 
@@ -186,7 +189,7 @@ For the example above, replace <name> with the deployment name and run these
 commands from the repository root before starting the deployment:
 
   checkout=$(pwd -P)
-  docker --context "$DOCKER_CONTEXT" network create --driver bridge \
+  docker --context science network create --driver bridge \
     --subnet 198.51.100.0/24 --gateway 198.51.100.1 \
     --label "io.secs-repro.checkout=$checkout" \
     --label "io.secs-repro.deployment=<name>" \
@@ -207,10 +210,10 @@ Install the two owner-only secret files separately, using their existing paths:
 
   make provider/credential/install DEPLOYMENT=<name> SOURCE=<credential-file>
   make provider/interpreter-key/install DEPLOYMENT=<name> SOURCE=<key-file>
-  make provider/deployment/config DEPLOYMENT=<name>
-  make provider/deployment/up DEPLOYMENT=<name>
-  make provider/deployment/status DEPLOYMENT=<name>
-  make provider/logs DEPLOYMENT=<name>
+  make provider/deployment/config DEPLOYMENT=<name> DOCKER_CONTEXT=science
+  make provider/deployment/up DEPLOYMENT=<name> DOCKER_CONTEXT=science
+  make provider/deployment/status DEPLOYMENT=<name> DOCKER_CONTEXT=science
+  make provider/logs DEPLOYMENT=<name> DOCKER_CONTEXT=science
 
 Config only renders the recipe. Up creates private workspaces and starts existing
 images; it never builds or downloads. Running containers do not establish API
@@ -218,7 +221,7 @@ acceptance or scientific readiness. Provider logs report hello publication and
 failures, but not each successful Job poll.
 Down stops the provider before its worker, retaining containers and all data:
 
-  make provider/deployment/down DEPLOYMENT=<name>
+  make provider/deployment/down DEPLOYMENT=<name> DOCKER_CONTEXT=science
 
 Use down before up to apply changed configuration. Status, logs, and down do not
 read credentials. Secrets and attempt state live in secrets/deployments/<name>.
@@ -276,15 +279,15 @@ make test/deployment covers named initialization, secret installation, attempt
 ownership, foreign-container rejection and ordered shutdown. It uses temporary
 directories and mocked engine responses, not production credentials.
 
-make test/deployment/e2e renders the actual SECS recipe and separately starts,
+make test/deployment/e2e DOCKER_CONTEXT=science renders the actual SECS recipe and separately starts,
 stops, and restarts two disposable offline services through the common lifecycle
 code. It checks engine-visible restrictions and retained state, not model or API
 behavior. Only this test removes its admitted test containers afterward.
 
-make test/provider covers API binding, acquisition, interpretation, exact
+make test/provider DOCKER_CONTEXT=science covers API binding, acquisition, interpretation, exact
 terminal replay, journal ownership, child termination and runtime wiring.
 
-make test/provider/e2e runs two networkless containers. HTTPS peers live on the
+make test/provider/e2e DOCKER_CONTEXT=science runs two networkless containers. HTTPS peers live on the
 controller's loopback interface. The production service loop publishes hello,
 downloads a real spectrum in a fixture ZIP, corrects a wrong-nucleus choice,
 runs the real checkpoint with an eight-molecule FAISS index and one GA
@@ -298,7 +301,7 @@ conformance is covered by the separate provider signing tests.
 
 Live interpreter qualification (opt-in; makes paid model requests):
 
-  make interpreter/model-behavior CONFIG_DIR=<provider-config-directory> KEY_FILE=<interpreter-key>
+  make interpreter/model-behavior CONFIG_DIR=<provider-config-directory> KEY_FILE=<interpreter-key> DOCKER_CONTEXT=science
 
 Ported from Magnet's model-behavior lane. This uses the production interpreter
 configuration, key loader, tool definitions and conversation loop against the
@@ -317,7 +320,7 @@ The GPU package image owns its locked PyTorch and CUDA user-space libraries.
 Before changing the driver, Container Toolkit, or host kernel, stop every
 affected named deployment:
 
-  make provider/deployment/down DEPLOYMENT=<name>
+  make provider/deployment/down DEPLOYMENT=<name> DOCKER_CONTEXT=science
 
 After the host upgrade and any required reboot, run the existing GPU inference
 check on that host before starting the provider again.
@@ -334,7 +337,7 @@ it does not read or change config/host.toml.
 
 For a host upgrade, use the same UUID as worker_gpu_uuid in config/host.toml:
 
-  make test/integration/challenges/bruker CANDIDATE_GPU=GPU-<uuid>
+  make test/integration/challenges/bruker CANDIDATE_GPU=GPU-<uuid> DOCKER_CONTEXT=science
 
 Replace GPU-<uuid> with the full identifier. Run from the repository root with
 the prepared checkpoint, MolFormer cache, pinned full candidate bundle and GPU
@@ -353,16 +356,16 @@ The check sends no API requests and does not start a provider deployment.
 Confirm that the tested image ID equals the immutable WORKER_IMAGE_REF saved in
 config/deployments/<name>/deployment.env. Inspect the challenge lane's image ID:
 
-  docker --context "$DOCKER_CONTEXT" image inspect --format '{{.Id}}' secs-repro/packages-gpu:local
+  docker --context science image inspect --format '{{.Id}}' secs-repro/packages-gpu:local
 
 Repeat the check for each distinct image/checkpoint/cache/GPU combination being
 returned to service. Named SECS deployments share the host's one selected GPU.
 
 Only after the check passes, start the named deployment and inspect it:
 
-  make provider/deployment/up DEPLOYMENT=<name>
-  make provider/deployment/status DEPLOYMENT=<name>
-  make provider/logs DEPLOYMENT=<name>
+  make provider/deployment/up DEPLOYMENT=<name> DOCKER_CONTEXT=science
+  make provider/deployment/status DEPLOYMENT=<name> DOCKER_CONTEXT=science
+  make provider/logs DEPLOYMENT=<name> DOCKER_CONTEXT=science
 
 The offline check proves the exercised local inference path, not live API
 acceptance or scientific ranking quality. Verify fresh provider registration
