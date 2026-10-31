@@ -100,6 +100,25 @@ class DockerContextTests(unittest.TestCase):
         self.assertIn(f"SECS_DOCKER_ENDPOINT := {expected_endpoint}", explicit.stdout)
         self.assertNotIn("unix:///tmp/ambient.sock", explicit.stdout)
 
+        recursive = subprocess.run(
+            ["make", "--no-print-directory", "-n", "test/input", "DOCKER_CONTEXT=default"], cwd=ROOT,
+            env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(recursive.returncode, 0, recursive.stderr)
+        self.assertIn(f"make SECS_DOCKER_ENDPOINT='{expected_endpoint}'", recursive.stdout)
+
+        with TemporaryDirectory() as temporary:
+            parent_makefile = Path(temporary) / "Makefile"
+            parent_makefile.write_text(
+                f"invoke-repository-make:\n\t@$(MAKE) --no-print-directory -pn -f {ROOT / 'Makefile'} packages/cpu/image\n"
+            )
+            nested_missing = subprocess.run(
+                ["make", "--no-print-directory", "-f", str(parent_makefile), "invoke-repository-make"],
+                cwd=ROOT, env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
+            )
+        self.assertNotEqual(nested_missing.returncode, 0)
+        self.assertIn("interactive context selection needs a terminal", nested_missing.stderr)
+
         non_docker = subprocess.run(
             ["make", "--no-print-directory", "help", "DOCKER_CONTEXT=not-a-context"], cwd=ROOT,
             env=environment, capture_output=True, text=True, timeout=10,

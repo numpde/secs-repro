@@ -33,6 +33,7 @@ shell_quote = '$(subst ','"'"',$(1))'
 unexport DOCKER_HOST DOCKER_CONTEXT SECS_DOCKER_ENDPOINT
 override export SECS_BOOTSTRAP_IMAGE = $(PYTHON_BASE)
 DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT $(CURDIR)/tools/docker.sh
+DOCKER_MAKE = $(MAKE) SECS_DOCKER_ENDPOINT=$(call shell_quote,$(SECS_DOCKER_ENDPOINT))
 
 .PHONY: help checkpoint checkpoint/image checkpoint/manifest
 DOCKER_MAKE_TARGETS += checkpoint checkpoint/image checkpoint/manifest
@@ -210,8 +211,8 @@ checkpoint:
 	trap 'retain_uncertain_stage "$$checkpoint_stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	checkpoint_stage_dir=$$(realpath -e -- "$$checkpoint_stage")
-	converter_image=$$($(MAKE) --no-print-directory packages/cpu/image)
-	extractor_image=$$($(MAKE) --no-print-directory checkpoint/image)
+	converter_image=$$($(DOCKER_MAKE) --no-print-directory packages/cpu/image)
+	extractor_image=$$($(DOCKER_MAKE) --no-print-directory checkpoint/image)
 	extractor_args=(--rm --init --pull never --read-only
 		"--cap-drop" ALL --security-opt no-new-privileges:true
 		"--pids-limit" 32 --cpus 1 --memory 2304m --memory-swap 2304m
@@ -300,7 +301,7 @@ checkpoint/manifest:
 	trap 'retain_uncertain_stage "$$manifest_stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	manifest_stage_dir=$$(realpath -e -- "$$manifest_stage")
-	extractor_image=$$($(MAKE) --no-print-directory checkpoint/image)
+	extractor_image=$$($(DOCKER_MAKE) --no-print-directory checkpoint/image)
 	secs_engine_active=1
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
@@ -340,8 +341,12 @@ override export SECS_DOCKER_ENDPOINT := $(shell env -u DOCKER_HOST -u DOCKER_CON
 else
 override export SECS_DOCKER_ENDPOINT := $(shell env -u DOCKER_HOST -u DOCKER_CONTEXT -u SECS_DOCKER_ENDPOINT python3 tools/docker_context.py --interactive)
 endif
-else
+else ifeq ($(origin SECS_DOCKER_ENDPOINT),command line)
 override export SECS_DOCKER_ENDPOINT := $(shell env -u DOCKER_HOST -u DOCKER_CONTEXT -u SECS_DOCKER_ENDPOINT SECS_DOCKER_ENDPOINT=$(call shell_quote,$(value SECS_DOCKER_ENDPOINT)) python3 tools/docker_context.py --inherited-endpoint)
+else ifeq ($(origin DOCKER_CONTEXT),command line)
+override export SECS_DOCKER_ENDPOINT := $(shell env -u DOCKER_HOST -u DOCKER_CONTEXT -u SECS_DOCKER_ENDPOINT DOCKER_CONTEXT=$(call shell_quote,$(value DOCKER_CONTEXT)) python3 tools/docker_context.py --command-line-context)
+else
+override export SECS_DOCKER_ENDPOINT := $(shell env -u DOCKER_HOST -u DOCKER_CONTEXT -u SECS_DOCKER_ENDPOINT python3 tools/docker_context.py --interactive)
 endif
 ifeq ($(strip $(SECS_DOCKER_ENDPOINT)),)
 $(error A local Docker context must be selected before running Docker targets)

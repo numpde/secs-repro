@@ -25,7 +25,7 @@ fixtures/input/write:
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
-	image=$$($(MAKE) --no-print-directory fixtures/frontend-reference/image)
+	image=$$($(DOCKER_MAKE) --no-print-directory fixtures/frontend-reference/image)
 	secs_engine_active=1
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
@@ -91,7 +91,7 @@ fixtures/frontend-reference/write:
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	stage=$$(realpath -e -- "$$stage")
-	image=$$($(MAKE) --no-print-directory fixtures/frontend-reference/image)
+	image=$$($(DOCKER_MAKE) --no-print-directory fixtures/frontend-reference/image)
 	reference_container=(--rm --init --pull never --network none --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" \
 		--cap-drop ALL --security-opt no-new-privileges:true \

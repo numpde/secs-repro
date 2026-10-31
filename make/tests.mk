@@ -15,7 +15,7 @@ test/input/normative: private INPUT_TEST_START := /tests/input/normative
 test/input/adversarial: private INPUT_TEST_START := /tests/input/adversarial
 test/input/scenarios: private INPUT_TEST_START := /tests/input/scenarios
 test/input test/input/normative test/input/adversarial test/input/scenarios:
-	cpu_packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
+	cpu_packages_image=$$($(DOCKER_MAKE) --no-print-directory packages/cpu/image)
 	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")
 	input_reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id input "$(REPOSITORY_ROOT)")
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
@@ -43,7 +43,7 @@ test/input test/input/normative test/input/adversarial test/input/scenarios:
 		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && $(if $(filter test/input,$@),python -P /tools/support_coverage.py --tests /tests --start /tests/input,python -m unittest discover -v -t /tests -s "$(INPUT_TEST_START)" -p "test_*.py")'
 
 test/reference-decoder-spike:
-	image=$$($(MAKE) --no-print-directory fixtures/frontend-reference/image)
+	image=$$($(DOCKER_MAKE) --no-print-directory fixtures/frontend-reference/image)
 	reference_lock_id=$$(python3 tools/frontend_reference_lock.py id "$(FRONTEND_REFERENCE_LOCK)")
 	input_reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id input "$(REPOSITORY_ROOT)")
 	timeout --signal=TERM --kill-after=5s 30s $(DOCKER) run --rm --init --pull never --network none --read-only \
@@ -67,7 +67,7 @@ test/integration:
 	fixtures_dir=$$(realpath -e tests/fixtures)
 	reference_lock=$$(realpath -e "$(FRONTEND_REFERENCE_LOCK)")
 	reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id frontend "$(REPOSITORY_ROOT)")
-	cpu_packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
+	cpu_packages_image=$$($(DOCKER_MAKE) --no-print-directory packages/cpu/image)
 	# Hash verification gates cached Python imports.
 	# Docker owns network denial; Transformers offline mode only makes cache misses fail promptly.
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
@@ -101,7 +101,7 @@ test/integration/bruker-reference test/integration/jcamp-reference:
 	fixtures_dir=$$(realpath -e tests/fixtures)
 	reference_lock=$$(realpath -e "$(FRONTEND_REFERENCE_LOCK)")
 	reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id frontend "$(REPOSITORY_ROOT)")
-	cpu_packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
+	cpu_packages_image=$$($(DOCKER_MAKE) --no-print-directory packages/cpu/image)
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
@@ -152,7 +152,7 @@ test/integration/challenges test/integration/challenges/bruker: packages/gpu/ima
 
 test/provider test/provider/diagnostics:
 	@tests_dir=$$(realpath -e tests/provider)
-	provider_image=$$($(MAKE) --no-print-directory provider/image)
+	provider_image=$$($(DOCKER_MAKE) --no-print-directory provider/image)
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
@@ -171,7 +171,7 @@ test/qualification-tools:
 	fi
 	tests_dir=$$(realpath -e tests/qualification)
 	tools_dir=$$(realpath -e tools)
-	cpu_packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
+	cpu_packages_image=$$($(DOCKER_MAKE) --no-print-directory packages/cpu/image)
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 64 --cpus 2 --memory 2g --memory-swap 2g \
@@ -200,7 +200,7 @@ interpreter/model-behavior:
 	if test -f "$$config_dir/interpreter-ca.crt"; then
 		ca_mount=(--mount "type=bind,src=$$config_dir/interpreter-ca.crt,dst=/run/config/provider/interpreter-ca.crt,readonly")
 	fi
-	provider_image=$$($(MAKE) --no-print-directory provider/image)
+	provider_image=$$($(DOCKER_MAKE) --no-print-directory provider/image)
 	SECS_NETWORK_INTERFACE_ORIGIN='command line' SECS_NETWORK_INTERFACE_INPUT=system $(DOCKER) run --rm --init --pull never --network bridge --read-only \
 		--user "$(HOST_UID):$(HOST_GID)" --cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 256m --memory-swap 256m \
@@ -213,7 +213,7 @@ interpreter/model-behavior:
 
 .PHONY: test/provider/e2e test/provider/mock-runner/e2e
 test/provider/mock-runner/e2e:
-	provider_image=$$($(MAKE) --no-print-directory provider/image)
+	provider_image=$$($(DOCKER_MAKE) --no-print-directory provider/image)
 	stage=$$(mktemp -d /tmp/secs-mock-runner-e2e.XXXXXXXX)
 	started=0
 	cleanup() {
@@ -253,8 +253,8 @@ test/provider/e2e:
 		printf '%s\n' 'Cannot run the provider scenario as host UID 0.' >&2
 		exit 2
 	fi
-	provider_image=$$($(MAKE) --no-print-directory provider/image)
-	cpu_image=$$($(MAKE) --no-print-directory packages/cpu/image)
+	provider_image=$$($(DOCKER_MAKE) --no-print-directory provider/image)
+	cpu_image=$$($(DOCKER_MAKE) --no-print-directory packages/cpu/image)
 	stage=$$(mktemp -d /tmp/secs-provider-e2e.XXXXXXXX)
 	worker_started=0
 	controller_started=0

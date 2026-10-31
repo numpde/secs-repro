@@ -9,7 +9,7 @@ molformer/cache:
 		printf '%s\n' 'Cannot materialize the MolFormer cache as host UID 0.' >&2
 		exit 2
 	fi
-	packages_image=$$($(MAKE) --no-print-directory packages/cpu/image)
+	packages_image=$$($(DOCKER_MAKE) --no-print-directory packages/cpu/image)
 	cache_path="$(MOLFORMER_CACHE)"
 	cache_parent="$(dir $(MOLFORMER_CACHE))"
 	mkdir -p "$$cache_parent"

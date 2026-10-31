@@ -49,7 +49,7 @@ class GpuSelectionTests(unittest.TestCase):
             'SHELL := /bin/bash\n.SHELLFLAGS := -eu -o pipefail -c\n.ONESHELL:\n'
             'HOST_UID := 1000\nCHECKPOINT_DIRECTORY := checkpoint\n'
             f'REPOSITORY_ROOT := {REPOSITORY}\n'
-            'MOLFORMER_CACHE := cache\nDOCKER := docker\n'
+            'MOLFORMER_CACHE := cache\nDOCKER := docker\nDOCKER_MAKE := $(MAKE)\n'
             'packages_image_tag = fixture\n'
             f'include {REPOSITORY}/make/candidates.mk\n'
             f'include {REPOSITORY}/make/candidate-qualification.mk\n'

@@ -44,7 +44,7 @@ candidates:
 	test ! -e "$(CANDIDATE_DIRECTORY)" || { \
 		printf '%s\n' 'Candidate bundle already exists at $(CANDIDATE_DIRECTORY).' >&2; exit 2; \
 	}; \
-	$(MAKE) --no-print-directory checkpoint/image "packages/$$target/image" >/dev/null; \
+	$(DOCKER_MAKE) --no-print-directory checkpoint/image "packages/$$target/image" >/dev/null; \
 	checkpoint_directory=$$(realpath -e -- "$(CHECKPOINT_DIRECTORY)"); \
 	candidate_spec=$$(realpath -e -- "$(CANDIDATE_SPEC)"); \
 	cache_directory=$$(realpath -e -- "$(MOLFORMER_CACHE)"); \

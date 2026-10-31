@@ -29,7 +29,7 @@ packages/locks/write:
 		printf '%s\n' 'Cannot write package locks as host UID 0.' >&2
 		exit 2
 	fi
-	lock_image=$$($(MAKE) --no-print-directory packages/lock-image)
+	lock_image=$$($(DOCKER_MAKE) --no-print-directory packages/lock-image)
 	locks_directory="$(REPOSITORY_ROOT)/requirements"
 	stage=$$(mktemp -d --tmpdir="$$locks_directory" .packages-locks.XXXXXXXX)
 	source tools/retain_uncertain_stage.sh
@@ -73,10 +73,10 @@ packages/locks/write:
 	mv -f "$$stage/packages-gpu.lock" "$$locks_directory/packages-gpu.lock"
 
 packages/cpu/wheelhouse: requirements/packages-cpu.lock
-	@$(MAKE) --no-print-directory packages/wheelhouse VARIANT=cpu
+	@$(DOCKER_MAKE) --no-print-directory packages/wheelhouse VARIANT=cpu
 
 packages/gpu/wheelhouse: requirements/packages-gpu.lock
-	@$(MAKE) --no-print-directory packages/wheelhouse VARIANT=gpu
+	@$(DOCKER_MAKE) --no-print-directory packages/wheelhouse VARIANT=gpu
 
 packages/wheelhouse:
 	@if test "$(HOST_UID)" -eq 0; then
@@ -128,10 +128,10 @@ packages/wheelhouse:
 	trap - EXIT
 
 packages/cpu/image:
-	@$(MAKE) --no-print-directory packages/image VARIANT=cpu
+	@$(DOCKER_MAKE) --no-print-directory packages/image VARIANT=cpu
 
 packages/gpu/image:
-	@$(MAKE) --no-print-directory packages/image VARIANT=gpu
+	@$(DOCKER_MAKE) --no-print-directory packages/image VARIANT=gpu
 
 packages/image:
 	@case "$(VARIANT)" in

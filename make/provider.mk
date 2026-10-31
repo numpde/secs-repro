@@ -35,7 +35,7 @@ test/deployment:
 .PHONY: test/deployment/e2e
 test/deployment/e2e:
 	@cd "$(REPOSITORY_ROOT)"
-	image=$$($(MAKE) --no-print-directory provider/image)
+	image=$$($(DOCKER_MAKE) --no-print-directory provider/image)
 	DEPLOYMENT_TEST_IMAGE="$$image" python3 -m unittest discover -v -s tests/deployment_e2e -p 'test_*.py'
 
 .PHONY: provider/wheelhouse provider/native-wheelhouse provider/image
