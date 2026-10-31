@@ -52,47 +52,47 @@ help:
 	'' \
 	'Docker context' \
 	'  make <Docker target> DOCKER_CONTEXT=<local-context>' \
-	'      On this host and ProArt, use DOCKER_CONTEXT=science. Direct Docker commands use --context science.' \
+	'      Select a local Unix-socket context with DOCKER_CONTEXT=<local-context>; direct commands use --context <local-context>.' \
 	'      Elsewhere, select a local Unix-socket context or omit it in a terminal to choose from a menu.' \
 	'      There is no default; noninteractive Docker commands require DOCKER_CONTEXT.' \
 	'      The socket endpoint is resolved once and pinned through the whole make operation, including cleanup.' \
 	'      Remote TCP and SSH contexts are not supported; the global current context is never changed.' \
 	'' \
 	'1. Prepare CPU dependencies' \
-		'  make packages/base-images/pull packages/cpu/wheelhouse DOCKER_CONTEXT=science' \
+		'  make packages/base-images/pull packages/cpu/wheelhouse DOCKER_CONTEXT=<local-context>' \
 		'      Pull the pinned base images and download the hash-locked CPU package archives.' \
 		'' \
 		'2. Prepare the checkpoint' \
-		'  make checkpoint DOCKER_CONTEXT=science' \
+		'  make checkpoint DOCKER_CONTEXT=<local-context>' \
 		'      Stream and verify the archive configured by checkpoint.toml, then write' \
 		'      secs-v3.safetensors and manifest.json beside checkpoint.toml.' \
-		'  make checkpoint ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz DOCKER_CONTEXT=science' \
+		'  make checkpoint ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz DOCKER_CONTEXT=<local-context>' \
 		'      Read a local archive without network access; the source file is left unchanged.' \
-		'  make checkpoint ARCHIVE_URL=https://example.org/zenodo_secs_v3.tar.gz DOCKER_CONTEXT=science' \
+		'  make checkpoint ARCHIVE_URL=https://example.org/zenodo_secs_v3.tar.gz DOCKER_CONTEXT=<local-context>' \
 		'      Download from this HTTPS URL instead of the URL in checkpoint.toml.' \
-		'  make checkpoint CHECKPOINT_PRECISION=float16 DOCKER_CONTEXT=science' \
+		'  make checkpoint CHECKPOINT_PRECISION=float16 DOCKER_CONTEXT=<local-context>' \
 		'      Store floating-point tensors as float16; float32 and bfloat16 are also supported.' \
 		'      ARCHIVE and ARCHIVE_URL are alternatives; either may be combined with CHECKPOINT_PRECISION.' \
 		'      The archive stream and extracted Lightning checkpoint are not retained after conversion.' \
 		'' \
 		'3. Prepare the MolFormer cache' \
-		'  make molformer/cache DOCKER_CONTEXT=science' \
+		'  make molformer/cache DOCKER_CONTEXT=<local-context>' \
 		'      Download the pinned MolFormer tokenizer, configuration, and model code into cache/.' \
 		'      Steps 2 and 3 may be completed in either order.' \
 		'' \
 		'4. Run the CPU integration proof' \
-		'  make test/integration DOCKER_CONTEXT=science' \
+		'  make test/integration DOCKER_CONTEXT=<local-context>' \
 		'      Rank SMILES and run one GA generation without network access.' \
-	'  make test/integration/bruker-reference DOCKER_CONTEXT=science' \
+	'  make test/integration/bruker-reference DOCKER_CONTEXT=<local-context>' \
 	'      Compare nmrglue decoding of F3697/1 with the pinned frontend vector.' \
-	'  make test/integration/jcamp-reference DOCKER_CONTEXT=science' \
+	'  make test/integration/jcamp-reference DOCKER_CONTEXT=<local-context>' \
 	'      Compare processed JCAMP-DX decoding with its pinned frontend vector.' \
-	'  make test/integration/challenges CANDIDATE_GPU=GPU-<uuid> DOCKER_CONTEXT=science' \
+	'  make test/integration/challenges CANDIDATE_GPU=GPU-<uuid> DOCKER_CONTEXT=<local-context>' \
 	'      Check all 20 published ScoreOnly ranks and one Bruker GA generation.' \
 	'      One GPU model and full index load are shared across the cases.' \
-	'  make test/integration/challenges/bruker CANDIDATE_GPU=GPU-<uuid> DOCKER_CONTEXT=science' \
+	'  make test/integration/challenges/bruker CANDIDATE_GPU=GPU-<uuid> DOCKER_CONTEXT=<local-context>' \
 	'      Run only the Bruker GA test; still loads the GPU model and full index.' \
-	'  make test/provider DOCKER_CONTEXT=science' \
+	'  make test/provider DOCKER_CONTEXT=<local-context>' \
 	'      Verify input selection and shared SDK lifecycle composition offline.' \
 	'  make provider/support/check' \
 	'      Verify that public support documentation matches the code-owned support catalog.' \
@@ -102,44 +102,44 @@ help:
 	'      Check public support projections and every declared semantic evidence requirement.' \
 	'  make test/deployment' \
 	'      Test configuration publication, saved-state ownership and container lifecycle rules.' \
-	'  make test/deployment/e2e DOCKER_CONTEXT=science' \
+	'  make test/deployment/e2e DOCKER_CONTEXT=<local-context>' \
 	'      Test offline Compose start/stop/restart and retained state using disposable services.' \
-	'  make test/provider/mock-runner/e2e DOCKER_CONTEXT=science' \
+	'  make test/provider/mock-runner/e2e DOCKER_CONTEXT=<local-context>' \
 	'      Test the mock runner and durable delivery handoff without model files.' \
 	'  make provider/deployment/init DEPLOYMENT=<name> [TARGET=cpu|gpu] [USE_MOCK_INDEX=yes|no] [USE_MOCK_RUNNER=yes|no]' \
 	'      The mock index contains eight molecules and requires CPU; omitted TARGET prompts.' \
 	'      Mock runner performs no model work; it cannot be combined with a mock index.' \
 	'      Copy committed examples into private config/deployments/<name>; no services start.' \
-	'  make provider/deployment/config DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] DOCKER_CONTEXT=science' \
+	'  make provider/deployment/config DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] DOCKER_CONTEXT=<local-context>' \
 	'      Render saved provider.toml and worker settings; Docker runs the existing provider image to project shared grants.' \
 	'      No deployment services start.' \
-	'  make provider/deployment/grant DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] DOCKER_CONTEXT=science' \
+	'  make provider/deployment/grant DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] DOCKER_CONTEXT=<local-context>' \
 	'      Grant mapped-UID read access to private inputs and prepare runtime-owned secret copies; no services start.' \
 	'      [shared].project and gid must match the shared services and select their volumes and socket group.' \
 	'  make provider/credential/install DEPLOYMENT=<name> SOURCE=<private-file>' \
 	'  make provider/interpreter-key/install DEPLOYMENT=<name> SOURCE=<private-file>' \
 	'      Install an owner-only secret once; existing files are never overwritten.' \
-	'  make provider/deployment/up DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] DOCKER_CONTEXT=science' \
+	'  make provider/deployment/up DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] DOCKER_CONTEXT=<local-context>' \
 	'      Start the named deployment from its saved config using existing images; no build or download.' \
-	'  make provider/deployment/status DEPLOYMENT=<name> DOCKER_CONTEXT=science' \
-	'  make provider/logs DEPLOYMENT=<name> DOCKER_CONTEXT=science' \
-	'  make provider/deployment/down DEPLOYMENT=<name> DOCKER_CONTEXT=science' \
+	'  make provider/deployment/status DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \
+	'  make provider/logs DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \
+	'  make provider/deployment/down DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \
 	'      Down drains provider, then stops the worker; state and containers remain.' \
-	'  make provider/deployment/retire-api DEPLOYMENT=<name> DOCKER_CONTEXT=science' \
+	'  make provider/deployment/retire-api DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \
 	'      Drain and retire the old private API route; preserve scientific and shared storage.' \
-	'  make test/provider/e2e DOCKER_CONTEXT=science' \
+	'  make test/provider/e2e DOCKER_CONTEXT=<local-context>' \
 	'      Prove hello, verified input, real model/FAISS/GA and durable handoff retry offline.' \
 	'      Uses eight fixture candidates, not the full index; see notes/004_provider_execution.txt.' \
-	'  make interpreter/model-behavior CONFIG_DIR=<provider-config-dir> KEY_FILE=<interpreter-key> DOCKER_CONTEXT=science' \
+	'  make interpreter/model-behavior CONFIG_DIR=<provider-config-dir> KEY_FILE=<interpreter-key> DOCKER_CONTEXT=<local-context>' \
 	'      Opt-in paid live interpreter tests; no Job API or GPU work.' \
 	'' \
 	'5. Build the GPU candidate bundle' \
-	'  make packages/base-images/pull packages/gpu/wheelhouse DOCKER_CONTEXT=science' \
+	'  make packages/base-images/pull packages/gpu/wheelhouse DOCKER_CONTEXT=<local-context>' \
 	'      Refresh the pinned GPU package archives before building the candidate image.' \
-	'  make candidates CANDIDATE_GPU=GPU-<uuid> DOCKER_CONTEXT=science' \
+	'  make candidates CANDIDATE_GPU=GPU-<uuid> DOCKER_CONTEXT=<local-context>' \
 	'      Stream the configured PubChem parquet, embed its SMILES on the selected GPU, and publish' \
 	'      a row-aligned table, FAISS index, and manifest under the checkpoint directory.' \
-	'  make candidates CANDIDATE_GPU=GPU-<uuid> ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz DOCKER_CONTEXT=science' \
+	'  make candidates CANDIDATE_GPU=GPU-<uuid> ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz DOCKER_CONTEXT=<local-context>' \
 	'      Read the pinned archive locally without granting the extractor network access.' \
 	'      ARCHIVE_URL overrides the configured HTTPS source instead; do not set both.' \
 	'      CANDIDATE_GPU requires one full NVIDIA GPU UUID; there is no default GPU.' \
@@ -148,26 +148,26 @@ help:
 	'      CANDIDATE_DTYPE selects float32 or bfloat16 forward compute.' \
 	'' \
 	'6. Qualify the candidate builder without publishing a production bundle' \
-	'  make candidates/qualification CANDIDATE_GPU=GPU-<uuid> ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz DOCKER_CONTEXT=science' \
+	'  make candidates/qualification CANDIDATE_GPU=GPU-<uuid> ARCHIVE=/absolute/path/zenodo_secs_v3.tar.gz DOCKER_CONTEXT=<local-context>' \
 	'      Build, reload, and search fixed nested real-data samples, then retain only' \
 	'      non-production evidence and a bounded full-build resource projection.' \
 	'' \
 	'Dependency maintenance' \
 		'' \
-		'  make provider/wheelhouse provider/native-wheelhouse provider/image DOCKER_CONTEXT=science' \
+		'  make provider/wheelhouse provider/native-wheelhouse provider/image DOCKER_CONTEXT=<local-context>' \
 		'      Install the issued API and native SDK profiles; build the API provider separately.' \
-		'  make checkpoint/manifest DOCKER_CONTEXT=science' \
+		'  make checkpoint/manifest DOCKER_CONTEXT=<local-context>' \
 		'      Recreate manifest.json only if its recorded specification and weight hashes still match.' \
-		'  make packages/base-images/pull packages/locks/write DOCKER_CONTEXT=science' \
+		'  make packages/base-images/pull packages/locks/write DOCKER_CONTEXT=<local-context>' \
 		'      Regenerate the CPU and GPU dependency locks after dependency intent changes.' \
-		'  make fixtures/frontend-reference/base-image/pull fixtures/frontend-reference/write DOCKER_CONTEXT=science' \
+		'  make fixtures/frontend-reference/base-image/pull fixtures/frontend-reference/write DOCKER_CONTEXT=<local-context>' \
 		'      Recreate the Bruker and processed JCAMP-DX SECS vectors with the pinned frontend.' \
 		'' \
 		'Optional package images' \
 		'' \
-		'  make packages/cpu/image DOCKER_CONTEXT=science' \
+		'  make packages/cpu/image DOCKER_CONTEXT=<local-context>' \
 		'      Build the CPU package image offline; steps 2-4 build or reuse it automatically.' \
-		'  make packages/base-images/pull packages/gpu/wheelhouse packages/gpu/image DOCKER_CONTEXT=science' \
+		'  make packages/base-images/pull packages/gpu/wheelhouse packages/gpu/image DOCKER_CONTEXT=<local-context>' \
 		'      Pull the base images, download the larger CUDA-enabled package set, and build' \
 		'      the GPU package image offline.' \
 		''

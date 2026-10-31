@@ -2,9 +2,9 @@ SECS provider adoption: deferred work and qualification limits
 ============================================================
 2026-10-29
 
-This note records the original qualification baseline. SECS was subsequently
-deployed on ProArt; the historical statements below that no deployment had yet
-occurred describe that baseline, not the current host.
+This note records the original qualification baseline. SECS was deployed later;
+historical statements below that no deployment had yet occurred describe that
+baseline, not current deployment status.
 
 Common design and active decisions in the nmr-provider-tools repository:
   notes/013_common_provider_lifecycle_design_20261028.txt
@@ -52,13 +52,12 @@ The existing candidate manifest names the index and table and their expected
 digests, but the runtime candidate loader reads paths and checks row counts; it
 does not bind its loaded bytes to those digests. A small offline HNSWPQ probe
 showed that FAISS can hash bytes as its loader consumes them and can detect
-trailing data; a small Parquet byte-buffer probe also passed. The evidence is in
-this session's offline tool receipts. Those probes do
+trailing data; a small Parquet byte-buffer probe also passed. Those probes do
 not qualify the full index, resource usage, timing or concurrent host changes.
-The local checkout has the manifest but not the approximately 23.7 GB index
-or 1.0 GB table. On 2026-10-29 a low-priority, read-only scan on ProArt found
-both files and their SHA-256 digests matched that manifest; its candidate and
-checkpoint manifest digests also matched the local copies. The candidate
+The checkout initially had the manifest but not the approximately 23.7 GB
+index or 1.0 GB table. A low-priority, read-only scan on 2026-10-29 found both
+files and verified their SHA-256 digests against the manifest. The candidate
+and checkpoint manifest digests also matched the checkout copies. The candidate
 manifest digest is pinned by the published-challenge fixture, but the provider
 does not use that fixture as runtime admission. This is a snapshot of bytes read
 by the scan, not proof of what a worker subsequently loads or full-bundle
@@ -138,8 +137,8 @@ Rehearse those deployment-specific procedures before cutover.
 Legacy obligations at cutover
 ----------------------------
 
-Owner: SECS deployment operator. Deferred because this session does not perform
-a deployment. Revisit before any legacy-to-shared-runtime cutover.
+Owner: SECS deployment operator. Revisit before any legacy-to-shared-runtime
+cutover, after deployment-specific obligations have been inspected and settled.
 
 A future deployment cutover must inspect and settle the real legacy START,
 active, terminal, and held obligations using their qualified owner before
@@ -228,12 +227,11 @@ Acquisition network and retirement
 
 Owner: SECS deployment and shared SDK maintainers. The acquisition proxy uses
 the release-record-verified SDK source snapshot in a pinned Python container;
-its DNS and TCP sockets bind to the selected device. A real ProArt probe reached
-PyPI through WLAN with the SDK while wired was the preferred host route. This
-does not establish that every acquisition client uses the proxy, nor prove the
-full cold-start and cancellation contract. NETWORK_INTERFACE makes device or
-system routing explicit; base-image bootstrap and GitHub updates may use the
-default connection.
+its DNS and TCP sockets bind to the selected device. An acquisition probe reached
+PyPI through the SDK proxy. This does not establish that every acquisition client
+uses the proxy or prove the full cold-start and cancellation contract.
+NETWORK_INTERFACE makes device or system routing explicit; base-image bootstrap
+and GitHub updates may use the default connection.
 
 A disposable BuildKit build selected loopback through the wrapper and used its
 configured proxy to request a loopback HTTP endpoint successfully. Its output
