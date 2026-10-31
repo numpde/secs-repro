@@ -21,9 +21,10 @@ class AcquisitionRetirementTests(unittest.TestCase):
             root = Path(temporary)
             docker = root / 'docker'
             docker.write_text('''#!/bin/bash
+arguments=("$@")
 while [[ $1 != run && $1 != create && $1 != start && $1 != ps && $1 != rm && $1 != inspect ]]; do shift; done
 op=$1; shift
-printf '%s %s\\n' "$op" "$*" >> "$CALLS"
+printf '%s %s %s\\n' "${arguments[1]}" "$op" "$*" >> "$CALLS"
 case "$op" in
 run|create)
   cidfile=; receipt=
@@ -55,6 +56,7 @@ esac
             calls, errors = root / 'calls', root / 'errors'
             worker_live, proxy_live = root / 'worker', root / 'proxy'
             env = os.environ | {'PATH': f'{root}:/usr/bin:/bin', 'SECS_NETWORK_INTERFACE_INPUT': 'lo',
+                'SECS_DOCKER_ENDPOINT': 'unix:///tmp/test-docker.sock',
                 'SECS_NETWORK_INTERFACE_ORIGIN': 'command line',
                 'SECS_BOOTSTRAP_IMAGE': 'pinned-test-image', 'CALLS': str(calls), 'PROXY': PROXY,
                 'WORKER': WORKER, 'PROXY_LIVE': str(proxy_live), 'WORKER_LIVE': str(worker_live),
@@ -93,7 +95,7 @@ trap 'if [[ $BASH_COMMAND == "proxy_starting=1" ]]; then count=$((count+1)); if 
                 env['BASH_ENV'] = str(debug)
             scratch = None
             with errors.open('w') as error_stream:
-                process = subprocess.Popen(['bash', str(ROOT / 'tools/docker.sh'), '--context', 'default',
+                process = subprocess.Popen(['bash', str(ROOT / 'tools/docker.sh'),
                     'run', '--network', 'bridge', 'image'], cwd=ROOT, env=env,
                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=error_stream)
                 try:
@@ -107,6 +109,8 @@ trap 'if [[ $BASH_COMMAND == "proxy_starting=1" ]]; then count=$((count+1)); if 
                     self.assertEqual(process.stdout.read(), b'')
                     output = errors.read_text()
                     commands = calls.read_text() if calls.exists() else ''
+                    for invocation in commands.splitlines():
+                        self.assertTrue(invocation.startswith('unix:///tmp/test-docker.sock '), invocation)
                     if handoff:
                         if 'Docker retirement is unconfirmed; retain ' in output:
                             scratch = Path(output.split('Docker retirement is unconfirmed; retain ', 1)[1].split(' and inspect', 1)[0])

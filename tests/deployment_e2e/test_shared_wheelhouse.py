@@ -40,7 +40,7 @@ class SharedWheelhouseProcessTests(unittest.TestCase):
             lock.write_text(f'fixture-a==1.0 --hash=sha256:{digest(pool / first)}\n'
                             f'fixture-b==1.0 --hash=sha256:{digest(feed / second)}\n')
             link(pool, stage)
-            command = [str(ROOT / 'tools/docker.sh'), '--context', 'default', 'run', '--rm',
+            command = [str(ROOT / 'tools/docker.sh'), 'run', '--rm',
                        '--network', 'none', '--read-only', '--cap-drop', 'ALL',
                        '--security-opt', 'no-new-privileges:true', '--user', f'{os.getuid()}:{os.getgid()}',
                        '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,size=32m',

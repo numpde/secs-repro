@@ -11,6 +11,8 @@ override FRONTEND_REFERENCE_IMAGE_TAG := secs-repro/frontend-reference
 .PHONY: fixtures/frontend-reference/base-image/pull
 .PHONY: fixtures/frontend-reference/image fixtures/frontend-reference/write
 .PHONY: fixtures/input/write
+DOCKER_MAKE_TARGETS += fixtures/frontend-reference/base-image/pull \
+	fixtures/frontend-reference/image fixtures/frontend-reference/write
 
 fixtures/input/write:
 	@if test "$(HOST_UID)" -eq 0; then

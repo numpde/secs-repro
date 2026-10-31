@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+secs_docker_endpoint=$(python3 "$(dirname -- "${BASH_SOURCE[0]}")/docker_context.py" --inherited-endpoint)
+docker_cli=(env -u DOCKER_HOST -u DOCKER_CONTEXT -u DOCKER_TLS -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH
+	docker --host "$secs_docker_endpoint")
+
 arguments=("$@")
 subcommand_index=-1
 network_index=-1
@@ -28,14 +32,14 @@ if [[ ${SECS_OLD_WLAN_ORIGIN:-undefined} != undefined ]]; then
     exit 2
 fi
 if (( subcommand_index < 0 )); then
-    exec docker "${arguments[@]}"
+    exec "${docker_cli[@]}" "${arguments[@]}"
 fi
 readonly operation="${arguments[$subcommand_index]}"
 offline=0
 if [[ "$network" == none ]]; then
-    [[ "${arguments[$subcommand_index]}" == run ]] || exec docker "${arguments[@]}"
+    [[ "${arguments[$subcommand_index]}" == run ]] || exec "${docker_cli[@]}" "${arguments[@]}"
     for argument in "${arguments[@]}"; do
-        [[ $argument != --cidfile && $argument != --cidfile=* ]] || exec docker "${arguments[@]}"
+        [[ $argument != --cidfile && $argument != --cidfile=* ]] || exec "${docker_cli[@]}" "${arguments[@]}"
     done
     offline=1
 else
@@ -88,7 +92,7 @@ read_cid() {
 retire_container() {
     local cid observed
     cid=$(read_cid "$1") || return 1
-    local -a engine=(docker "${arguments[@]:0:$subcommand_index}")
+    local -a engine=("${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}")
     observed=$(timeout --signal=TERM --kill-after=2 10 "${engine[@]}" ps --all --no-trunc --quiet --filter "id=$cid") || return 1
     [[ -z "$observed" || "$observed" == "$cid" ]] || return 1
     if [[ -n "$observed" ]]; then
@@ -157,7 +161,7 @@ if [[ -f /run/systemd/resolve/resolv.conf ]]; then
 fi
 proxy_starting=1
 proxy_pending=1
-timeout --signal=TERM --kill-after=2 30 docker "${arguments[@]:0:$subcommand_index}" create --pull never \
+timeout --signal=TERM --kill-after=2 30 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" create --pull never \
     --cidfile "$scratch/proxy.cid" --network host --read-only \
     --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges:true \
     --pids-limit 64 --cpus 1 --memory 128m --memory-swap 128m \
@@ -183,7 +187,7 @@ cmp -s "$scratch/proxy.output" <(printf '%s\n' "$proxy_cid") || {
     printf '%s\n' 'Docker create output does not match its proxy CID receipt.' >&2; exit 2;
 }
 proxy_identity_verified=1
-proxy_settings=$(timeout --signal=TERM --kill-after=2 10 docker "${arguments[@]:0:$subcommand_index}" inspect \
+proxy_settings=$(timeout --signal=TERM --kill-after=2 10 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" inspect \
     --format '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' "$proxy_cid") || {
     printf '%s\n' 'Cannot inspect the created proxy container.' >&2; exit 2;
 }
@@ -191,7 +195,7 @@ proxy_settings=$(timeout --signal=TERM --kill-after=2 10 docker "${arguments[@]:
     printf '%s\n' 'Created proxy must be stopped with restart disabled.' >&2; exit 2;
 }
 proxy_starting=1
-timeout --signal=TERM --kill-after=2 30 docker "${arguments[@]:0:$subcommand_index}" start "$proxy_cid" >/dev/null &
+timeout --signal=TERM --kill-after=2 30 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" start "$proxy_cid" >/dev/null &
 proxy_pid=$!
 proxy_starting=0
 [[ "$pending_signal" == 0 ]] || exit "$pending_signal"
@@ -208,10 +212,10 @@ for _ in {1..100}; do
 done
 if [[ ! -s "$ready_file" ]]; then
     printf 'WLAN proxy did not become ready before Docker started.\n' >&2
-    timeout --signal=TERM --kill-after=2 10 docker "${arguments[@]:0:$subcommand_index}" logs --tail 30 "$proxy_cid" 2>&1 | head -c 8192 >&2 || true
+    timeout --signal=TERM --kill-after=2 10 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" logs --tail 30 "$proxy_cid" 2>&1 | head -c 8192 >&2 || true
     exit 2
 fi
-proxy_running=$(timeout --signal=TERM --kill-after=2 10 docker "${arguments[@]:0:$subcommand_index}" inspect --format '{{.State.Running}}' "$proxy_cid") || {
+proxy_running=$(timeout --signal=TERM --kill-after=2 10 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" inspect --format '{{.State.Running}}' "$proxy_cid") || {
     printf '%s\n' 'Cannot inspect the proxy container.' >&2; exit 2;
 }
 [[ "$proxy_running" == true ]] || { printf '%s\n' 'Proxy container stopped before acquisition.' >&2; exit 2; }
@@ -270,7 +274,7 @@ if [[ "$operation" == run ]]; then
     create_arguments[$subcommand_index]=create
     docker_starting=1
     worker_pending=1
-    docker "${create_arguments[@]}" </dev/null >"$scratch/worker.output" &
+    "${docker_cli[@]}" "${create_arguments[@]}" </dev/null >"$scratch/worker.output" &
     docker_pid=$!
     docker_starting=0
     [[ "$pending_signal" == 0 ]] || exit "$pending_signal"
@@ -286,7 +290,7 @@ if [[ "$operation" == run ]]; then
         printf '%s\n' 'Docker create output does not match its CID receipt.' >&2; exit 2;
     }
     worker_identity_verified=1
-    worker_settings=$(timeout --signal=TERM --kill-after=2 10 docker "${arguments[@]:0:$subcommand_index}" inspect \
+    worker_settings=$(timeout --signal=TERM --kill-after=2 10 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" inspect \
         --format '{{.State.Status}} {{.Config.OpenStdin}} {{.Config.AttachStdin}} {{.Config.AttachStdout}} {{.Config.AttachStderr}} {{.HostConfig.RestartPolicy.Name}}' "$worker_cid") || {
         printf '%s\n' 'Cannot inspect the created worker container.' >&2; exit 2;
     }
@@ -297,11 +301,11 @@ if [[ "$operation" == run ]]; then
         *) printf '%s\n' 'Created worker must be stopped, use default output streams, and have restart disabled.' >&2; exit 2 ;;
     esac
     docker_starting=1
-    docker "${arguments[@]:0:$subcommand_index}" start "${start_arguments[@]}" "$worker_cid" <&0 &
+    "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" start "${start_arguments[@]}" "$worker_cid" <&0 &
 else
     docker_starting=1
     worker_pending=1
-    docker "${arguments[@]}" <&0 &
+    "${docker_cli[@]}" "${arguments[@]}" <&0 &
 fi
 docker_pid=$!
 docker_starting=0

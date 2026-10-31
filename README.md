@@ -22,6 +22,11 @@ and native installation locks; the scientific image retains its own dependency p
 Select a shared package cache with `WHEELHOUSE=/path/to/wheelhouse` for dependency
 acquisition and image builds. Unattended commands require an explicit path;
 interactive commands can prompt. Builds stage the locked inputs and install offline.
+Docker-using Make targets take `DOCKER_CONTEXT=<local-context>` or prompt from
+the available local Unix-socket contexts in a terminal. There is no implicit
+default, and remote contexts are rejected. Make resolves the selected socket
+once and pins that endpoint across nested commands and cleanup; it does not
+change Docker's global current context.
 Initialize a named deployment with `TARGET=cpu` or `TARGET=gpu`; an interactive
 terminal offers the choice when omitted. Build and select the corresponding CPU
 or GPU packages image. GPU deployments also require the host GPU UUID selection.

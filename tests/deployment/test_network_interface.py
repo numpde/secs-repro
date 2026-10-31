@@ -54,9 +54,10 @@ esac
             docker.chmod(0o700)
             receipt = root / 'receipt'
             env = os.environ | {'PATH': f'{root}:/usr/bin:/bin', 'RECEIPT': str(receipt),
+                'SECS_DOCKER_ENDPOINT': 'unix:///tmp/test-docker.sock',
                 'SECS_NETWORK_INTERFACE_INPUT': selection, 'SECS_NETWORK_INTERFACE_ORIGIN': origin,
                 'SECS_OLD_WLAN_ORIGIN': old}
-            result = subprocess.run(['bash', str(ROOT / 'tools/docker.sh'), '--context', 'default', *arguments],
+            result = subprocess.run(['bash', str(ROOT / 'tools/docker.sh'), *arguments],
                                     env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
             return result, receipt.read_text() if receipt.exists() else None
 
@@ -92,7 +93,7 @@ esac
             with self.subTest(option=option):
                 result, receipt = self.invoke(['run', '--network', 'none', *option, 'image'])
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(receipt.splitlines(), ['--context', 'default', 'run', '--network', 'none', *option, 'image'])
+                self.assertEqual(receipt.splitlines(), ['--host', 'unix:///tmp/test-docker.sock', 'run', '--network', 'none', *option, 'image'])
 
     def test_container_command_pull_argument_remains_data(self):
         result, receipt = self.invoke(['run', '--network', 'bridge', 'image', 'command', '--pull=always'],

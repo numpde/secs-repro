@@ -151,8 +151,10 @@ Build existing offline inputs with make provider/image and
 make packages/gpu/image. Neither target downloads dependencies. Use the
 returned immutable image IDs for PROVIDER_IMAGE_REF and WORKER_IMAGE_REF.
 
-Use the named deployment commands; they select the default local Docker context
-and project secs-<name>, without inherited Docker/Compose settings or .env files:
+Use the named deployment commands with `DOCKER_CONTEXT=<local-context>` or
+choose a local Unix-socket context from the interactive menu. They pin the
+resolved endpoint and project secs-<name>, without inherited Docker/Compose
+settings or .env files:
 
   make provider/deployment/init DEPLOYMENT=<name>
 
@@ -184,7 +186,7 @@ For the example above, replace <name> with the deployment name and run these
 commands from the repository root before starting the deployment:
 
   checkout=$(pwd -P)
-  docker --context default network create --driver bridge \
+  docker --context "$DOCKER_CONTEXT" network create --driver bridge \
     --subnet 198.51.100.0/24 --gateway 198.51.100.1 \
     --label "io.secs-repro.checkout=$checkout" \
     --label "io.secs-repro.deployment=<name>" \
@@ -351,7 +353,7 @@ The check sends no API requests and does not start a provider deployment.
 Confirm that the tested image ID equals the immutable WORKER_IMAGE_REF saved in
 config/deployments/<name>/deployment.env. Inspect the challenge lane's image ID:
 
-  docker --context default image inspect --format '{{.Id}}' secs-repro/packages-gpu:local
+  docker --context "$DOCKER_CONTEXT" image inspect --format '{{.Id}}' secs-repro/packages-gpu:local
 
 Repeat the check for each distinct image/checkpoint/cache/GPU combination being
 returned to service. Named SECS deployments share the host's one selected GPU.

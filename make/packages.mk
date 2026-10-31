@@ -9,6 +9,9 @@ packages_image_tag = secs-repro/packages-$(1):local
 .PHONY: packages/base-images/pull packages/lock-image packages/locks/write
 .PHONY: packages/cpu/wheelhouse packages/gpu/wheelhouse packages/wheelhouse
 .PHONY: packages/cpu/image packages/gpu/image packages/image packages/images
+DOCKER_MAKE_TARGETS += packages/base-images/pull packages/lock-image packages/locks/write \
+	packages/cpu/wheelhouse packages/gpu/wheelhouse packages/wheelhouse \
+	packages/cpu/image packages/gpu/image packages/image packages/images
 
 packages/base-images/pull:
 	$(DOCKER) pull "$(PYTHON_BASE)"

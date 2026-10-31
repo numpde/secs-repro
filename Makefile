@@ -29,10 +29,13 @@ endif
 unexport WHEELHOUSE
 unexport NETWORK_INTERFACE
 unexport WLAN_INTERFACE
+shell_quote = '$(subst ','"'"',$(1))'
+unexport DOCKER_HOST DOCKER_CONTEXT SECS_DOCKER_ENDPOINT
 override export SECS_BOOTSTRAP_IMAGE = $(PYTHON_BASE)
-DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT $(CURDIR)/tools/docker.sh --context default
+DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT $(CURDIR)/tools/docker.sh
 
 .PHONY: help checkpoint checkpoint/image checkpoint/manifest
+DOCKER_MAKE_TARGETS += checkpoint checkpoint/image checkpoint/manifest
 
 help:
 	@printf '%s\n' \
@@ -45,6 +48,13 @@ help:
 	'      Docker daemon image pulls continue to use the daemon default route.' \
 	'  Select the shared dependency cache with WHEELHOUSE=<directory>.' \
 	'      Omit it to choose interactively; unattended dependency and image commands require it.' \
+	'' \
+	'Docker context' \
+	'  make <Docker target> DOCKER_CONTEXT=<local-context>' \
+	'      Select a context backed by a local Unix socket. Omit it in a terminal to choose from a menu.' \
+	'      There is no default; noninteractive Docker commands require DOCKER_CONTEXT.' \
+	'      The socket endpoint is resolved once and pinned through the whole make operation, including cleanup.' \
+	'      Remote TCP and SSH contexts are not supported; the global current context is never changed.' \
 	'' \
 	'1. Prepare CPU dependencies' \
 		'  make packages/base-images/pull packages/cpu/wheelhouse' \
@@ -319,3 +329,21 @@ include make/tests.mk
 include make/candidates.mk
 include make/candidate-qualification.mk
 include make/fixtures.mk
+
+# Resolve one context before a Docker-using make operation starts. The selected
+# endpoint, rather than the mutable context name, is inherited by recursive make
+# and retained for every later cleanup command in this operation.
+ifneq ($(filter $(DOCKER_MAKE_TARGETS),$(MAKECMDGOALS)),)
+ifeq ($(MAKELEVEL),0)
+ifeq ($(origin DOCKER_CONTEXT),command line)
+override export SECS_DOCKER_ENDPOINT := $(shell env -u DOCKER_HOST -u DOCKER_CONTEXT -u SECS_DOCKER_ENDPOINT DOCKER_CONTEXT=$(call shell_quote,$(value DOCKER_CONTEXT)) python3 tools/docker_context.py --command-line-context)
+else
+override export SECS_DOCKER_ENDPOINT := $(shell env -u DOCKER_HOST -u DOCKER_CONTEXT -u SECS_DOCKER_ENDPOINT python3 tools/docker_context.py --interactive)
+endif
+else
+override export SECS_DOCKER_ENDPOINT := $(shell env -u DOCKER_HOST -u DOCKER_CONTEXT -u SECS_DOCKER_ENDPOINT SECS_DOCKER_ENDPOINT=$(call shell_quote,$(value SECS_DOCKER_ENDPOINT)) python3 tools/docker_context.py --inherited-endpoint)
+endif
+ifeq ($(strip $(SECS_DOCKER_ENDPOINT)),)
+$(error A local Docker context must be selected before running Docker targets)
+endif
+endif

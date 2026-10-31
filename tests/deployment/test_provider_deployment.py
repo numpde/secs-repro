@@ -33,6 +33,18 @@ from deployment.worker_target import worker_target
 
 
 class ProviderDeploymentTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.previous_endpoint = os.environ.get("SECS_DOCKER_ENDPOINT")
+        os.environ["SECS_DOCKER_ENDPOINT"] = "unix:///tmp/test-docker.sock"
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.previous_endpoint is None:
+            os.environ.pop("SECS_DOCKER_ENDPOINT", None)
+        else:
+            os.environ["SECS_DOCKER_ENDPOINT"] = cls.previous_endpoint
+
     def test_optional_mock_index_uses_private_config_without_changing_full_worker(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)

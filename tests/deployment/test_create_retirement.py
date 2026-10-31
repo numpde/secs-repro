@@ -26,6 +26,7 @@ fi
 ''')
             docker.chmod(0o700)
             env = os.environ | {'PATH': f'{root}:/usr/bin:/bin', 'CALLS': str(calls),
+                'SECS_DOCKER_ENDPOINT': 'unix:///tmp/test-docker.sock',
                 'SECS_NETWORK_INTERFACE_ORIGIN': 'command line', 'SECS_NETWORK_INTERFACE_INPUT': 'lo',
                 'SECS_OLD_WLAN_ORIGIN': 'undefined', 'SECS_BOOTSTRAP_IMAGE': 'test-image'}
             result = subprocess.run(['bash', str(ROOT / 'tools/docker.sh'), 'run', '--rm', '--network', 'bridge', 'image'],
@@ -55,6 +56,7 @@ esac
 ''')
             docker.chmod(0o700)
             env = os.environ | {'PATH': f'{root}:/usr/bin:/bin', 'MARKER': str(marker),
+                'SECS_DOCKER_ENDPOINT': 'unix:///tmp/test-docker.sock',
                 'SECS_NETWORK_INTERFACE_ORIGIN': 'command line', 'SECS_NETWORK_INTERFACE_INPUT': 'lo',
                 'SECS_OLD_WLAN_ORIGIN': 'undefined', 'SECS_BOOTSTRAP_IMAGE': 'test-image'}
             result = subprocess.run(['bash', str(ROOT / 'tools/docker.sh'), 'run', '--rm',
@@ -85,6 +87,7 @@ fi
 ''')
             docker.chmod(0o700)
             env = os.environ | {'PATH': f'{root}:/usr/bin:/bin', 'CALLS': str(calls),
+                'SECS_DOCKER_ENDPOINT': 'unix:///tmp/test-docker.sock',
                 'SECS_NETWORK_INTERFACE_ORIGIN': 'command line', 'SECS_NETWORK_INTERFACE_INPUT': 'system',
                 'SECS_OLD_WLAN_ORIGIN': 'undefined'}
             result = subprocess.run(['bash', str(ROOT / 'tools/docker.sh'), 'run', '--rm', '--network', 'bridge', 'image'],
@@ -114,9 +117,10 @@ esac
 ''')
             docker.chmod(0o700)
             env = os.environ | {'PATH': f'{root}:/usr/bin:/bin', 'MARKER': str(marker),
+                'SECS_DOCKER_ENDPOINT': 'unix:///tmp/test-docker.sock',
                 'SECS_NETWORK_INTERFACE_ORIGIN': 'command line', 'SECS_NETWORK_INTERFACE_INPUT': 'system',
                 'SECS_OLD_WLAN_ORIGIN': 'undefined'}
-            result = subprocess.run(['bash', str(ROOT / 'tools/docker.sh'), '--context', 'default',
+            result = subprocess.run(['bash', str(ROOT / 'tools/docker.sh'),
                                      'run', '--rm', '--network', 'bridge', '--pull', 'never', 'image'],
                                     env=env, cwd=ROOT, capture_output=True, timeout=10)
             try:

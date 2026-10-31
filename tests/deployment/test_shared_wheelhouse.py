@@ -31,14 +31,14 @@ class SharedWheelhouseTests(unittest.TestCase):
             self.assertEqual((pool / 'unrelated.whl').read_bytes(), b'unrelated')
 
     def test_unattended_build_requires_an_explicit_pool(self):
-        result = subprocess.run(['make', '--no-print-directory', 'provider/image'], cwd=ROOT,
+        result = subprocess.run(['make', '--no-print-directory', 'provider/image', 'DOCKER_CONTEXT=default'], cwd=ROOT,
                                 capture_output=True, text=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('WHEELHOUSE=', result.stderr)
 
     def test_pool_cannot_overlap_the_checkout(self):
         with TemporaryDirectory(dir=ROOT) as nested:
-            result = subprocess.run(['make', '--no-print-directory', 'provider/image', f'WHEELHOUSE={nested}'],
+            result = subprocess.run(['make', '--no-print-directory', 'provider/image', 'DOCKER_CONTEXT=default', f'WHEELHOUSE={nested}'],
                                     cwd=ROOT, capture_output=True, text=True, timeout=10)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('outside the repository', result.stderr)

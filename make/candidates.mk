@@ -8,6 +8,7 @@ CANDIDATE_MEMORY ?= 40g
 CANDIDATE_DTYPE ?= bfloat16
 
 .PHONY: candidates
+DOCKER_MAKE_TARGETS += candidates
 candidates: export ARCHIVE_INPUT := $(if $(filter command line,$(origin ARCHIVE)),$(value ARCHIVE))
 candidates: export ARCHIVE_URL_INPUT := $(if $(filter command line,$(origin ARCHIVE_URL)),$(value ARCHIVE_URL))
 candidates: private export CANDIDATE_GPU_INPUT := $(value CANDIDATE_GPU)

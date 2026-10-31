@@ -2,6 +2,7 @@ override MOLFORMER_CACHE := $(REPOSITORY_ROOT)/cache/molformer
 override MOLFORMER_LOCK := $(REPOSITORY_ROOT)/molformer.lock.toml
 
 .PHONY: molformer/cache
+DOCKER_MAKE_TARGETS += molformer/cache
 
 molformer/cache:
 	@if test "$(HOST_UID)" -eq 0; then

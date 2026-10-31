@@ -10,6 +10,7 @@ override QUALIFICATION_RECEIPT_TIMEOUT_SECONDS := 120
 override QUALIFICATION_KILL_GRACE_SECONDS := 30
 
 .PHONY: candidates/qualification
+DOCKER_MAKE_TARGETS += candidates/qualification
 candidates/qualification: private export ARCHIVE_INPUT := $(if $(filter command line,$(origin ARCHIVE)),$(value ARCHIVE))
 candidates/qualification: private export QUALIFICATION_GPU_INPUT := $(value CANDIDATE_GPU)
 candidates/qualification: private export QUALIFICATION_CPUS_INPUT := $(value CANDIDATE_CPUS)

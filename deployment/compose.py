@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -27,15 +28,26 @@ _ENV = {"PATH": "/usr/bin:/bin"}
 class ComposeProject:
     """One checkout's project and the order in which its services must stop.
 
-    Use the default local Docker engine. Rootless/remote engines are not part
-    of this deployment contract. The caller serializes lifecycle operations;
-    other processes with engine access remain trusted administrators.
+    Pin the local Unix-socket endpoint inherited from the make operation. The
+    endpoint stays fixed for this project even if its context metadata changes.
+    The caller serializes lifecycle operations; other processes with engine
+    access remain trusted administrators.
     """
 
     repository: Path
     name: str
     stop_order: tuple[str, ...]
     completed_roles: tuple[str, ...] = ()
+    docker_endpoint: str | None = None
+
+    def __post_init__(self) -> None:
+        """Bind one selected local socket before this project can inspect or mutate state."""
+        endpoint = self.docker_endpoint
+        if endpoint is None:
+            endpoint = os.environ.get("SECS_DOCKER_ENDPOINT", "")
+        if type(endpoint) is not str or not endpoint.startswith("unix:///"):
+            raise RuntimeError("A selected local Docker Unix-socket endpoint is required.")
+        object.__setattr__(self, "docker_endpoint", endpoint)
 
     def render(self, recipe: Path, env_file: Path, environment: dict[str, str]) -> dict:
         """Normalize the maintained recipe; do not build, pull, or start services."""
@@ -161,10 +173,10 @@ class ComposeProject:
             self.command("logs", "--tail", "80", record["Id"], capture=False)
 
     def command(self, *arguments: str, environment=None, timeout=60, capture=True) -> bytes:
-        """Execute fixed argv against the local engine with no inherited configuration."""
+        """Execute fixed argv against the operation's pinned local socket."""
         try:
             result = subprocess.run(
-                ("/usr/bin/docker", "--context", "default", *arguments),
+                ("/usr/bin/docker", "--host", self.docker_endpoint, *arguments),
                 cwd=self.repository, env=_ENV | (environment or {}), timeout=timeout,
                 stdout=subprocess.PIPE if capture else None,
                 stderr=subprocess.PIPE if capture else None,

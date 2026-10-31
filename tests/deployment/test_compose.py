@@ -1,6 +1,7 @@
 """Preserve NMRPeak's project ownership and ordered-stop behavior across providers."""
 
 import json
+import os
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
@@ -28,6 +29,18 @@ def record(project, role, number, *, running=True, grace=47):
 
 
 class ComposeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.previous_endpoint = os.environ.get("SECS_DOCKER_ENDPOINT")
+        os.environ["SECS_DOCKER_ENDPOINT"] = "unix:///tmp/test-docker.sock"
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.previous_endpoint is None:
+            os.environ.pop("SECS_DOCKER_ENDPOINT", None)
+        else:
+            os.environ["SECS_DOCKER_ENDPOINT"] = cls.previous_endpoint
+
     def setUp(self):
         self.project = ComposeProject(Path("/workspace"), "example-prod", ("provider", "worker"))
 
@@ -132,6 +145,27 @@ class ComposeTests(unittest.TestCase):
         with patch.object(ComposeProject, "command", side_effect=RuntimeError("engine unavailable")):
             with self.assertRaisesRegex(RuntimeError, "engine unavailable"):
                 self.project.inventory()
+
+    def test_project_pins_endpoint_for_followup_and_cleanup_commands(self):
+        observed = []
+        with patch.dict(os.environ, {"SECS_DOCKER_ENDPOINT": "unix:///tmp/selected.sock"}), patch(
+            "deployment.compose.subprocess.run",
+            side_effect=lambda argv, **kwargs: observed.append(argv) or subprocess.CompletedProcess(argv, 0, b"", b""),
+        ):
+            project = ComposeProject(Path("/workspace"), "example-prod", ("provider", "worker"))
+            project.command("ps")
+            os.environ["SECS_DOCKER_ENDPOINT"] = "unix:///tmp/replaced.sock"
+            project.command("rm", "owned-id")
+        self.assertEqual([argv[:3] for argv in observed], [
+            ("/usr/bin/docker", "--host", "unix:///tmp/selected.sock"),
+            ("/usr/bin/docker", "--host", "unix:///tmp/selected.sock"),
+        ])
+
+    def test_python_compose_boundary_rejects_ambient_context_and_host_without_endpoint(self):
+        with patch.dict(os.environ, {"DOCKER_CONTEXT": "default", "DOCKER_HOST": "tcp://remote.example:2376"}):
+            os.environ.pop("SECS_DOCKER_ENDPOINT", None)
+            with self.assertRaisesRegex(RuntimeError, "selected local Docker Unix-socket endpoint"):
+                ComposeProject(Path("/workspace"), "example-prod", ("provider", "worker"))
 
     def test_post_effect_inspection_failure_reports_uncertainty(self):
         plan = {"services": {"provider": {"image": "sha256:" + "a" * 64}}}
