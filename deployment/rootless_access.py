@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 import uuid
 
 
@@ -45,6 +46,17 @@ def map_id(rows: tuple[tuple[int, int, int], ...], container_id: int, label: str
     return matches[0]
 
 
+def container_id_for_host(rows: tuple[tuple[int, int, int], ...], host_id: int, label: str) -> int:
+    """Translate one host ID into the matching container ID in an observed map."""
+    if type(host_id) is not int or host_id < 0:
+        raise ValueError(f"Cannot select wheelhouse identity: host {label} is invalid.")
+    matches = [inside + host_id - outside for inside, outside, length in rows
+               if outside <= host_id < outside + length]
+    if len(matches) != 1:
+        raise ValueError(f"Cannot select wheelhouse identity: host {label} {host_id} is not mapped exactly once.")
+    return matches[0]
+
+
 def _host_user_namespace() -> None:
     """Require deployment tooling to run in the host's initial user namespace."""
     identity = ((0, 0, 4294967295),)
@@ -74,9 +86,8 @@ def _host_process_maps(pid: int, probe_program: str) -> tuple[tuple[tuple[int, i
     return uid_rows, gid_rows
 
 
-def mapped_ids(project, image: str, container_uid: int, container_gid: int,
-               userns_mode: str | None = None) -> tuple[int, int]:
-    """Observe the selected engine's host-visible maps with one disposable probe."""
+def _mapping_rows(project, image: str, userns_mode: str | None = None):
+    """Read both host-visible ID maps from one disposable selected-engine probe."""
     _host_user_namespace()
     token = uuid.uuid4().hex
     name = f"secs-map-{os.getpid()}-{token[:12]}"
@@ -113,7 +124,7 @@ def mapped_ids(project, image: str, container_uid: int, container_gid: int,
                 or confirmed[0].get("State", {}).get("Running") is not True
                 or confirmed[0].get("State", {}).get("Pid") != pid):
             raise ValueError("Cannot grant deployment access: selected engine's probe changed while its maps were read.")
-        return (map_id(uid_rows, container_uid, "UID"), map_id(gid_rows, container_gid, "GID"))
+        return uid_rows, gid_rows
     except BaseException as error:
         primary_error = error
         if probe_id is None:
@@ -128,6 +139,40 @@ def mapped_ids(project, image: str, container_uid: int, container_gid: int,
                     primary_error.add_note(f"Mapping probe cleanup is unconfirmed; inspect container ID {probe_id!r} before retrying.")
                 else:
                     raise ValueError(f"Cannot grant deployment access: mapping probe {probe_id!r} could not be retired.") from cleanup_error
+
+
+def mapped_ids(project, image: str, container_uid: int, container_gid: int,
+               userns_mode: str | None = None) -> tuple[int, int]:
+    """Translate one service identity through maps observed on the selected engine."""
+    uid_rows, gid_rows = _mapping_rows(project, image, userns_mode)
+    return map_id(uid_rows, container_uid, "UID"), map_id(gid_rows, container_gid, "GID")
+
+
+def container_ids_for_host(project, image: str, host_uid: int, host_gid: int) -> tuple[int, int]:
+    """Select container IDs whose bind writes are owned by the invoking host user."""
+    uid_rows, gid_rows = _mapping_rows(project, image)
+    return (container_id_for_host(uid_rows, host_uid, "UID"),
+            container_id_for_host(gid_rows, host_gid, "GID"))
+
+
+def main(arguments: list[str]) -> int:
+    if len(arguments) != 1:
+        raise ValueError("Supply the locally pinned Python image for wheel selection.")
+    from deployment.compose import ComposeProject
+
+    repository = Path(__file__).resolve().parents[1]
+    project = ComposeProject(repository, "secs-wheel-selection", ())
+    uid, gid = container_ids_for_host(project, arguments[0], os.getuid(), os.getgid())
+    print(f"{uid}:{gid}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main(sys.argv[1:]))
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"Cannot select wheelhouse identity: {error}", file=sys.stderr)
+        raise SystemExit(2)
 
 
 def _acl(path: Path) -> tuple[str, ...]:

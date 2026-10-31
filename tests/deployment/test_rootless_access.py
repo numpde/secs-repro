@@ -27,6 +27,13 @@ class RootlessAccessTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "overlapping"):
             rootless_access.parse_id_map(b"0 1000 10\n5 2000 10\n", "UID")
 
+    def test_container_id_for_host_inverts_the_observed_range(self):
+        rows = rootless_access.parse_id_map(b"0 1000 1\n1 100000 65536\n", "UID")
+        self.assertEqual(rootless_access.container_id_for_host(rows, 1000, "UID"), 0)
+        self.assertEqual(rootless_access.container_id_for_host(rows, 100999, "UID"), 1000)
+        with self.assertRaisesRegex(ValueError, "not mapped exactly once"):
+            rootless_access.container_id_for_host(rows, 50000, "UID")
+
     def test_selected_engine_host_pid_maps_are_read_and_probe_is_retired(self):
         project = Mock()
         identifier = "a" * 64
@@ -46,6 +53,18 @@ class RootlessAccessTests(unittest.TestCase):
         self.assertIn(("--userns", "host"), [
             tuple(run_args[index:index + 2]) for index in range(len(run_args) - 1)
         ])
+        self.assertEqual(project.command.call_args_list[-1].args[:2], ("rm", "--force"))
+
+    def test_host_owned_wheel_capture_uses_the_inverse_of_the_selected_engine_map(self):
+        project = Mock()
+        identifier = "c" * 64
+        inspection = json.dumps([{"State": {"Running": True, "Pid": 42}}]).encode()
+        project.command.side_effect = (identifier.encode(), inspection, inspection,
+                                       (identifier + "\n").encode(), b"")
+        maps = ((0, 1000, 1), (1, 100000, 65536))
+        with patch.object(rootless_access, "_host_user_namespace"), patch.object(
+                rootless_access, "_host_process_maps", return_value=(maps, maps)):
+            self.assertEqual(rootless_access.container_ids_for_host(project, "sha256:" + "c" * 64, 1000, 1000), (0, 0))
         self.assertEqual(project.command.call_args_list[-1].args[:2], ("rm", "--force"))
 
     def test_host_proc_pid_must_identify_the_unique_mapping_probe(self):

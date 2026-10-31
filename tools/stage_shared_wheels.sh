@@ -5,12 +5,16 @@ set -euo pipefail
 pool=$1 lock=$2 stage=$3 image=$4 mode=${5:-capture}
 [[ $mode == capture || $mode == check ]] || exit 2
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+worker_identity=$(python3 -m deployment.rootless_access "$image")
+[[ $worker_identity =~ ^[0-9]+:[0-9]+$ ]] || {
+    printf '%s\n' 'Cannot select the host-owned wheel capture identity.' >&2; exit 2;
+}
 mkdir "$stage/.tmp"
 # The container records pip's status, then exits successfully. The Docker
 # owner must confirm its retirement before a missing pool can lead to download.
 if "$root/tools/docker.sh" run --rm \
     --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
-    --user "$(id -u):$(id -g)" --pull never --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
+    --user "$worker_identity" --pull never --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
     --env PIP_NO_CACHE_DIR=1 --env TMPDIR=/stage/.tmp \
     --mount "type=bind,src=$lock,dst=/input/requirements.lock,readonly" \
     --mount "type=bind,src=$pool,dst=/pool,readonly" \
