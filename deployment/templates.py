@@ -20,6 +20,8 @@ import subprocess
 from tempfile import TemporaryDirectory
 from collections.abc import Iterator, Mapping
 
+from deployment.rootless_access import private_acl
+
 
 _NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
 
@@ -133,7 +135,7 @@ def _ensure_private_parent(parent: Path) -> None:
     if (
         not stat.S_ISDIR(metadata.st_mode)
         or metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o700
+        or not private_acl(parent, owner_permissions="rwx")
     ):
         raise ValueError(
             f"Cannot initialize under {parent}: it must be a real, "

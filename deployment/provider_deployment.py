@@ -23,6 +23,10 @@ from deployment.templates import (
     configuration_directory, initialize_configuration, _ensure_private_parent,
     _locked_parent, _publish_new_file, _sync_directory,
 )
+from deployment.rootless_access import (
+    grant_private_access, mapped_acl_permissions, mapped_ids, private_acl, private_owner_acl,
+    set_mapped_access,
+)
 
 
 TEMPLATES = {
@@ -224,7 +228,7 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict,
         "SECS_DEPLOYMENT": name,
         "SECS_CHECKOUT": str(repository.resolve()),
         "PROVIDER_CONFIG_DIRECTORY": str(config),
-        "INTERPRETER_KEY_FILE": str(state / "interpreter.key"),
+        "INTERPRETER_KEY_FILE": str(state / "runtime/interpreter.key"),
         "WORKER_CONFIG_FILE": str(worker_config_file),
         "MOLFORMER_LOCK_FILE": str(repository / "molformer.lock.toml"),
         "CACHE_VERIFIER_FILE": str(repository / "tools/materialize_molformer_cache.py"),
@@ -472,7 +476,8 @@ def _private_directory(path: Path) -> None:
     """Require an existing owner-only directory, with no symlink in its resolved path."""
     metadata = path.lstat()
     if (path.resolve() != path or not stat.S_ISDIR(metadata.st_mode)
-            or metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) != 0o700):
+            or metadata.st_uid != os.getuid()
+            or not private_acl(path, owner_permissions="rwx")):
         raise ValueError(f"Deployment directory must be operator-owned mode 0700: {path}")
 
 
@@ -480,7 +485,9 @@ def _private_input(path: Path) -> None:
     """Admit a bounded private mount without reading its secret contents."""
     metadata = path.lstat()
     if (path.resolve() != path or not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) not in {0o400, 0o600}
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o700 not in {0o400, 0o600}
+            or not private_acl(path, owner_permissions=("rw-" if stat.S_IMODE(metadata.st_mode) & 0o200 else "r--"))
             or not 0 < metadata.st_size <= 65536):
         raise ValueError(f"Deployment input must be a nonempty owner-only file of at most 64 KiB: {path}")
 
@@ -488,7 +495,25 @@ def _private_input(path: Path) -> None:
 def _private_file(path: Path) -> bytes:
     """Read a bounded owner-only document for the operation that owns it."""
     _private_input(path)
-    return path.read_bytes()
+    expected = path.lstat()
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        observed = os.fstat(descriptor)
+        if (not stat.S_ISREG(observed.st_mode) or observed.st_dev != expected.st_dev
+                or observed.st_ino != expected.st_ino or observed.st_uid != os.getuid()
+                or not 0 < observed.st_size <= 65536):
+            raise ValueError(f"Deployment input changed while it was opened: {path}")
+        content = bytearray()
+        while len(content) <= 65536:
+            part = os.read(descriptor, 65537 - len(content))
+            if not part:
+                break
+            content.extend(part)
+        if len(content) != observed.st_size or len(content) > 65536:
+            raise ValueError(f"Deployment input changed length while it was read: {path}")
+        return bytes(content)
+    finally:
+        os.close(descriptor)
 
 
 def install_secret(repository: Path, name: str, filename: str, source: Path) -> Path:
@@ -542,10 +567,22 @@ def start_deployment(repository: Path, name: str, mock_index_selection: bool | N
         required.append(state / "interpreter.key")
     for path in required:
         _private_input(path)
-    state = _state_root(repository, name)
     if any(os.path.lexists(state / part) for part in ("state", "sources", "socket")):
         raise ValueError("Old host runtime directories remain; drain the old deployment and preserve its state before selecting the new volumes.")
     _admit_runtime_volumes(project, plan, name)
+    access = _grant_runtime_inputs(project, plan, repository, name)
+    runtime_directory = state / "runtime"
+    runtime_required = [runtime_directory / "provider.signing.private.json"]
+    if plan["services"]["worker"].get("environment", {}).get("SECS_MOCK_RUNNER") != "1":
+        runtime_required.append(runtime_directory / "interpreter.key")
+    for path in runtime_required:
+        metadata = path.lstat()
+        mapped = access["mapped_uid"]
+        mapped_gid = access["mapped_gid"]
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != mapped or metadata.st_gid != mapped_gid
+                or stat.S_IMODE(metadata.st_mode) != 0o400 or not 0 < metadata.st_size <= 65536
+                or not private_acl(path, owner_permissions="r--")):
+            raise ValueError(f"Cannot start deployment: mapped-UID secret copy {path} failed owner-only admission.")
     return project.start(plan)
 
 
@@ -567,7 +604,7 @@ def _apply_shared_grants(plan, project, config, state):
     provider = plan["services"]["provider"]
     mounts = list(projection["mounts"])
     mounts.append(
-        {"type": "bind", "source": str(state / "provider.signing.private.json"),
+        {"type": "bind", "source": str(state / "runtime/provider.signing.private.json"),
          "target": "/run/secrets/provider/provider.signing.private.json",
          "read_only": True, "bind": {"create_host_path": False}},
     )
@@ -605,6 +642,218 @@ def _sdk_grants(project, image, project_name, gid):
     return json.loads(raw)
 
 
+def _ensure_mapped_directory(path: Path, mapped_id: int, permissions: str, *, owner_uid: int,
+                             allow_other_access: bool = False) -> None:
+    metadata = path.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or path.resolve() != path:
+        raise ValueError(f"Cannot grant deployment access: {path} must be a real directory.")
+    if metadata.st_uid != owner_uid:
+        raise ValueError(f"Cannot grant deployment access: {path} is not controlled by its expected owner.")
+    existing = mapped_acl_permissions(path, "rwx", mapped_id)
+    if existing == permissions:
+        return
+    if existing is not None:
+        set_mapped_access(path, mapped_id, permissions, owner_uid=owner_uid,
+                          owner_permissions="rwx", directory=True)
+        return
+    mode = stat.S_IMODE(metadata.st_mode)
+    if mapped_id == owner_uid:
+        required = sum(value for value, bit in ((4, "r"), (2, "w"), (1, "x")) if bit in permissions)
+        if ((mode >> 6) & required) == required:
+            return
+        raise ValueError(f"Cannot grant deployment access: {path} owner permissions do not cover the runtime access.")
+    if allow_other_access and mode & 0o005 == 0o005:
+        return
+    grant_private_access(path, mapped_id, permissions, owner_uid=owner_uid,
+                         owner_permissions="rwx", directory=True)
+
+
+def _ensure_mapped_file(path: Path, mapped_id: int, *, owner_uid: int) -> None:
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or path.resolve() != path:
+        raise ValueError(f"Cannot grant deployment access: {path} must be a regular file.")
+    mode = stat.S_IMODE(metadata.st_mode)
+    if metadata.st_uid == mapped_id and mode in {0o400, 0o600}:
+        return
+    if metadata.st_uid != owner_uid:
+        if mode & 0o004:
+            return
+        raise ValueError(f"Cannot grant deployment access: {path} is not controlled by its expected owner.")
+    owner_permissions = "rw-" if mode & 0o200 else "r--"
+    if mapped_acl_permissions(path, owner_permissions, mapped_id) == "r--":
+        return
+    if (mode & 0o700 not in {0o400, 0o600}
+            or not private_acl(path, owner_permissions=owner_permissions)):
+        if mode & 0o004:
+            return
+        raise ValueError(f"Cannot grant private deployment access to {path}: its current permissions are not owner-only.")
+    grant_private_access(path, mapped_id, "r--", owner_uid=owner_uid,
+                         owner_permissions=owner_permissions, directory=False)
+
+
+def _ensure_mapped_tree(root: Path, mapped_id: int, *, owner_uid: int) -> None:
+    """Grant a worker only read/traverse access to a private scientific input tree."""
+    resolved_root = root.resolve(strict=True)
+    _ensure_mapped_directory(root, mapped_id, "r-x", owner_uid=owner_uid, allow_other_access=True)
+    for current, directories, filenames in os.walk(root, followlinks=False):
+        parent = Path(current)
+        for name in directories:
+            path = parent / name
+            if path.is_symlink():
+                _validate_tree_link(path, resolved_root, directory=True)
+            else:
+                _ensure_mapped_directory(path, mapped_id, "r-x", owner_uid=owner_uid,
+                                         allow_other_access=True)
+        for name in filenames:
+            path = parent / name
+            if path.is_symlink():
+                _validate_tree_link(path, resolved_root, directory=False)
+            else:
+                _ensure_mapped_file(path, mapped_id, owner_uid=owner_uid)
+
+
+def _validate_tree_link(path: Path, root: Path, *, directory: bool) -> None:
+    """Admit cache snapshot links only when their final target stays in the input tree."""
+    try:
+        target = path.resolve(strict=True)
+    except OSError as error:
+        raise ValueError(f"Cannot grant deployment access: scientific input link {path} is unresolved.") from error
+    if not target.is_relative_to(root) or (stat.S_ISDIR(target.stat().st_mode) is not directory):
+        raise ValueError(f"Cannot grant deployment access: scientific input link {path} escapes its tree or has the wrong target type.")
+
+
+def _grant_runtime_inputs(project: ComposeProject, plan: dict, repository: Path, name: str) -> dict:
+    """Grant bind access and publish secret copies as the selected runtime identity."""
+    provider = plan["services"]["provider"]
+    worker = plan["services"]["worker"]
+    try:
+        container_uid, container_gid = (int(value) for value in provider["user"].split(":"))
+    except (KeyError, ValueError, AttributeError) as error:
+        raise ValueError("Cannot grant deployment access: provider user identity is missing or malformed.") from error
+    if worker.get("user") != provider["user"] or worker.get("userns_mode") != provider.get("userns_mode"):
+        raise ValueError("Cannot grant deployment access: provider and worker identity namespaces must match.")
+    image = provider["image"]
+    mapped, mapped_gid = mapped_ids(project, image, container_uid, container_gid, provider.get("userns_mode"))
+    config = configuration_directory(repository, name)
+    state = repository / "secrets/deployments" / name
+    _state_root(repository, name)
+
+    for directory in (config.parent, config):
+        _ensure_mapped_directory(directory, mapped, "--x", owner_uid=os.getuid())
+    _ensure_mapped_directory(state.parent.parent, mapped, "--x", owner_uid=os.getuid())
+    _ensure_mapped_directory(state.parent, mapped, "--x", owner_uid=os.getuid())
+    _ensure_mapped_directory(state, mapped, "--x", owner_uid=os.getuid())
+
+    provider_config = config / "provider.toml"
+    _ensure_mapped_file(provider_config, mapped, owner_uid=os.getuid())
+    provider_document = _toml_document(provider_config)
+    ca_filenames = set()
+    api = provider_document.get("api")
+    if type(api) is dict and api.get("ca_file") is not None:
+        ca = Path(api["ca_file"])
+        if type(api["ca_file"]) is not str or str(ca) != api["ca_file"] or ca.parent != Path("/run/config/provider"):
+            raise ValueError("Cannot grant deployment access: API CA path must select a file in the provider config mount.")
+        ca_filenames.add(ca.name)
+    execution = provider_document.get("execution")
+    if type(execution) is dict:
+        if execution.get("interpreter_use_private_ca") is True:
+            ca_filenames.add("interpreter-ca.crt")
+        if execution.get("upload_store_use_private_ca") is True:
+            ca_filenames.add("upload-store-ca.crt")
+    for ca_filename in ca_filenames:
+        _ensure_mapped_file(config / ca_filename, mapped, owner_uid=os.getuid())
+    worker_config = next(
+        Path(mount["source"]) for mount in worker["volumes"]
+        if mount.get("target") == "/run/config/worker/worker.toml"
+    )
+    _ensure_mapped_file(worker_config, mapped, owner_uid=os.getuid())
+
+    for service in (provider, worker):
+        for mount in service.get("volumes", []):
+            if mount.get("type") != "bind":
+                continue
+            target = mount.get("target")
+            source = Path(mount["source"])
+            if target in {"/run/config/provider", "/run/config/worker/worker.toml"}:
+                continue
+            if target in {"/checkpoint", "/cache"}:
+                _ensure_mapped_tree(source, mapped, owner_uid=os.getuid())
+            elif target not in {"/run/secrets/provider/provider.signing.private.json",
+                                "/run/secrets/provider/interpreter.key"}:
+                _ensure_mapped_file(source, mapped, owner_uid=os.getuid())
+
+    secret_paths = [state / "provider.signing.private.json"]
+    if worker.get("environment", {}).get("SECS_MOCK_RUNNER") != "1":
+        secret_paths.append(state / "interpreter.key")
+    for source in secret_paths:
+        _private_input(source)
+        source_mode = stat.S_IMODE(source.lstat().st_mode)
+        owner_permissions = "rw-" if source_mode & 0o200 else "r--"
+        if not private_owner_acl(source, owner_permissions=owner_permissions):
+            raise ValueError(f"Cannot grant deployment access: installed secret {source.name} must remain owner-only.")
+    runtime_directory = state / "runtime"
+    try:
+        runtime_directory.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    _private_directory(runtime_directory)
+    script = repository / "tools/copy_deployment_secrets.py"
+    script_metadata = script.lstat()
+    if not stat.S_ISREG(script_metadata.st_mode) or script.resolve() != script:
+        raise ValueError("Cannot grant deployment access: the secret-copy helper must be a regular repository file.")
+    script_source = script.read_text(encoding="utf-8")
+    if any(character in str(runtime_directory) for character in (",", "\n", "\r")):
+        raise ValueError("Cannot grant deployment access: runtime paths must be safe Docker bind sources.")
+    copied = {}
+    primary_error = None
+    try:
+        _ensure_mapped_directory(runtime_directory, mapped, "rwx", owner_uid=os.getuid())
+        for source in secret_paths:
+            arguments = [
+                "run", "--rm", "--interactive", "--pull", "never", "--network", "none", "--read-only",
+                "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+                "--pids-limit", "16", "--cpus", "1", "--memory", "128m", "--memory-swap", "128m",
+                "--user", f"{container_uid}:{container_gid}",
+                "--mount", f"type=bind,src={runtime_directory},dst=/run/output",
+            ]
+            if provider.get("userns_mode") is not None:
+                arguments.extend(("--userns", provider["userns_mode"]))
+            try:
+                raw = project.command(
+                    *arguments, "--entrypoint", "python", image, "-I", "-B", "-c", script_source,
+                    "/run/output", source.name, input=_private_file(source),
+                )
+                result = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                raise ValueError("Cannot publish mapped-UID deployment secret copy: helper status is invalid.") from error
+            if type(result) is not dict or set(result) != {source.name} or result[source.name] not in {"created", "reused"}:
+                raise ValueError("Cannot publish mapped-UID deployment secret copy: helper status is incomplete.")
+            copied.update(result)
+        for source in secret_paths:
+            destination = runtime_directory / source.name
+            metadata = destination.lstat()
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != mapped or metadata.st_gid != mapped_gid
+                    or stat.S_IMODE(metadata.st_mode) != 0o400 or not 0 < metadata.st_size <= 65536
+                    or not private_acl(destination, owner_permissions="r--")):
+                raise ValueError(f"Cannot use mapped-UID deployment secret copy {destination}: owner-only mode 0400 is required.")
+    except BaseException as error:
+        primary_error = error
+        error.add_note("Startup remains blocked; a private runtime secret copy may have been published before this failure.")
+        raise
+    finally:
+        if mapped != os.getuid():
+            try:
+                if mapped_acl_permissions(runtime_directory, "rwx", mapped) == "rwx":
+                    set_mapped_access(runtime_directory, mapped, "r-x", owner_uid=os.getuid(),
+                                      owner_permissions="rwx", directory=True)
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    primary_error.add_note("The runtime secret directory ACL could not be narrowed; inspect it before retrying.")
+                else:
+                    raise ValueError("Cannot grant deployment access: runtime secret directory ACL could not be narrowed.") from cleanup_error
+    return {"mapped_uid": mapped, "mapped_gid": mapped_gid, "secret_copies": copied}
+
+
 def _status(records: dict) -> dict:
     """Expose lifecycle evidence, not Docker environment or credential-bearing metadata."""
     return {role: {"id": record["Id"], "status": record["State"]["Status"],
@@ -623,7 +872,7 @@ def _status(records: dict) -> dict:
 def main(arguments: list[str] | None = None) -> int:
     """Dispatch one named operation; report partial effects without implying rollback."""
     parser = argparse.ArgumentParser(description="Operate a named SECS deployment.")
-    parser.add_argument("operation", choices=("init", "config", "up", "status", "down", "retire-api",
+    parser.add_argument("operation", choices=("init", "config", "grant", "up", "status", "down", "retire-api",
                                               "logs", "credential-install", "interpreter-key-install"))
     parser.add_argument("deployment")
     parser.add_argument("--source", type=Path)
@@ -681,6 +930,11 @@ def main(arguments: list[str] | None = None) -> int:
             if installing:
                 filename = "provider.signing.private.json" if options.operation == "credential-install" else "interpreter.key"
                 print(install_secret(repository, options.deployment, filename, options.source))
+            elif options.operation == "grant":
+                plan = render_deployment(repository, options.deployment, index_selection)
+                access = _grant_runtime_inputs(project, plan, repository, options.deployment)
+                print(json.dumps(access, indent=2))
+                print("Mapped container access is prepared; no deployment services started.")
             elif options.operation == "up":
                 print(json.dumps(_status(start_deployment(repository, options.deployment, index_selection)), indent=2))
                 print("Containers started. Check provider logs for hello publication or errors.")

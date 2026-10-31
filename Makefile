@@ -113,6 +113,8 @@ help:
 	'  make provider/deployment/config DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] DOCKER_CONTEXT=science' \
 	'      Render saved provider.toml and worker settings; Docker runs the existing provider image to project shared grants.' \
 	'      No deployment services start.' \
+	'  make provider/deployment/grant DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] DOCKER_CONTEXT=science' \
+	'      Grant mapped-UID read access to private inputs and prepare runtime-owned secret copies; no services start.' \
 	'      [shared].project and gid must match the shared services and select their volumes and socket group.' \
 	'  make provider/credential/install DEPLOYMENT=<name> SOURCE=<private-file>' \
 	'  make provider/interpreter-key/install DEPLOYMENT=<name> SOURCE=<private-file>' \

@@ -172,12 +172,14 @@ class ComposeProject:
             print(f"{role}:", flush=True)
             self.command("logs", "--tail", "80", record["Id"], capture=False)
 
-    def command(self, *arguments: str, environment=None, timeout=60, capture=True) -> bytes:
+    def command(self, *arguments: str, environment=None, input: bytes | None = None, timeout=60,
+                capture=True) -> bytes:
         """Execute fixed argv against the operation's pinned local socket."""
         try:
             result = subprocess.run(
                 ("/usr/bin/docker", "--host", self.docker_endpoint, *arguments),
                 cwd=self.repository, env=_ENV | (environment or {}), timeout=timeout,
+                input=input,
                 stdout=subprocess.PIPE if capture else None,
                 stderr=subprocess.PIPE if capture else None,
             )
