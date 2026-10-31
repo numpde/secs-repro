@@ -40,6 +40,7 @@ test/deployment/e2e:
 
 .PHONY: provider/wheelhouse provider/native-wheelhouse provider/image
 .PHONY: provider/support/check provider/support/write
+DOCKER_MAKE_TARGETS += provider/wheelhouse provider/native-wheelhouse provider/image
 
 provider/support/check:
 	@python3 -B tools/project_support_catalog.py check docs/index.html
