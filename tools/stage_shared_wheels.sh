@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Capture only lock-selected artifacts from a read-only shared wheel pool.
 set -euo pipefail
-[[ $# == 4 || $# == 5 ]] || { printf '%s\n' 'Usage: stage_shared_wheels.sh POOL LOCK STAGE IMAGE [check]' >&2; exit 2; }
+[[ $# == 4 || $# == 5 ]] || { printf '%s\n' 'Usage: stage_shared_wheels.sh POOL LOCK STAGE IMAGE [check|report]' >&2; exit 2; }
 pool=$1 lock=$2 stage=$3 image=$4 mode=${5:-capture}
-[[ $mode == capture || $mode == check ]] || exit 2
+[[ $mode == capture || $mode == check || $mode == report ]] || exit 2
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 worker_identity=$(python3 -m deployment.rootless_access "$image")
 [[ $worker_identity =~ ^[0-9]+:[0-9]+$ ]] || {
@@ -20,7 +20,7 @@ if "$root/tools/docker.sh" run --rm \
     --mount "type=bind,src=$pool,dst=/pool,readonly" \
     --mount "type=bind,src=$stage,dst=/stage" \
     --entrypoint /bin/sh "$image" -c '
-        if [ "$1" = check ]; then
+        if [ "$1" = check ] || [ "$1" = report ]; then
             python -m pip install --dry-run --ignore-installed --no-index --require-hashes --only-binary=:all: \
                 --no-binary=antlr4-python3-runtime --no-deps --find-links /pool --report /stage/.pip-report \
                 -r /input/requirements.lock > /stage/.pip-output 2> /stage/.pip-error
@@ -45,6 +45,8 @@ if [[ $status != 0 ]]; then
     fi
     exit 11
 fi
-rm -f "$stage/.pip-output" "$stage/.pip-error" "$stage/.pip-status" "$stage/.pip-report"
+rm -f "$stage/.pip-output" "$stage/.pip-error" "$stage/.pip-status"
+if [[ $mode == report ]]; then exit 0; fi
+rm -f "$stage/.pip-report"
 if [[ $mode == check ]]; then exit 0; fi
 ( cd "$stage" && sha256sum * | LC_ALL=C sort ) > "$stage/.complete"

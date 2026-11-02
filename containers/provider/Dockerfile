@@ -1,6 +1,6 @@
 ARG PYTHON_BASE
 FROM scratch AS provider_wheels
-COPY --from=wheelhouse . /
+COPY provider_wheels/ /
 
 FROM ${PYTHON_BASE}
 

@@ -140,31 +140,37 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 provider/image:
 	@source tools/wheelhouse_selection.sh
 	select_wheelhouse
+	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory"
 	lock_wheelhouse -s
-	stage=$$(mktemp -d /tmp/secs-provider-wheels.XXXXXXXX)
+	stage=$$(mktemp -d /tmp/secs-provider-inputs.XXXXXXXX)
 	source tools/retain_uncertain_stage.sh
-	secs_engine_active=1
+	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
-	stage_selected_wheels "$$wheelhouse_directory" "$(REPOSITORY_ROOT)/requirements/provider.lock" "$$stage" "$(PROVIDER_PYTHON_BASE)"
+	cp requirements/provider.lock "$$stage/provider.lock"
+	stage_selected_wheels "$$wheelhouse_directory" "$$stage/provider.lock" "$$stage" "$(PROVIDER_PYTHON_BASE)" report
+	tool="$$wheelhouse_directory/$(WHEELHOUSE_TOOL_NAME)"
+	python3 -I -S "$$tool" report --report "$$stage/.pip-report" --pool /pool --directory provider_wheels > "$$stage/manifest.json"
 	unlock_wheelhouse
-	id=$$( {
-		printf '%s\n' "$(PROVIDER_PYTHON_BASE)"
-		cat containers/provider/Dockerfile containers/provider/Dockerfile.dockerignore \
-			requirements/provider.lock "$$stage/.complete"
-		sha256sum src/secs_inference/__init__.py src/secs_inference/model_failure.py
-		find src/secs_inference/provider -type f \
-			! -path '*/__pycache__/*' ! -name '*.py[co]' -print0 \
-			| LC_ALL=C sort -z | xargs -0 sha256sum
-	} | sha256sum | cut -d' ' -f1 )
+	source_id=$$(python3 tools/provider_stream_inputs.py "$$stage" "$(REPOSITORY_ROOT)")
+	wheel_id=$$(python3 -I -S "$$tool" identity --manifest "$$stage/manifest.json")
+	id=$$(printf '%s\n' "$(PROVIDER_PYTHON_BASE)" "$$source_id" "$$wheel_id" | sha256sum | cut -d' ' -f1)
 	secs_engine_active=1
+	if python3 -I -S "$$tool" stream --pool "$$wheelhouse_directory" --source-allowlist "$$stage/sources.json" --manifest "$$stage/manifest.json" | \
 	$(DOCKER) build --quiet --network none --pull=false \
 		--build-arg PYTHON_BASE="$(PROVIDER_PYTHON_BASE)" \
 		--build-arg PROVIDER_INPUT_ID="$$id" \
-		--build-context "wheelhouse=$$stage" \
-		--file containers/provider/Dockerfile \
-		--tag "secs-repro/provider:inputs-$$id" \
-		--tag "$(PROVIDER_IMAGE_TAG)" .
+		--iidfile "$$stage/image-id" --file containers/provider/Dockerfile - > /dev/null; then
+		:
+	else
+		printf '%s\n' 'Provider stream or image build failed; no image tag was published.' >&2
+		exit 1
+	fi
 	secs_engine_active=0
+	image=$$(cat "$$stage/image-id")
+	[[ $$image =~ ^sha256:[0-9a-f]{64}$$ ]] || { printf '%s\n' 'Docker returned an invalid provider image ID.' >&2; exit 1; }
+	$(DOCKER) tag "$$image" "secs-repro/provider:inputs-$$id"
+	$(DOCKER) tag "$$image" "$(PROVIDER_IMAGE_TAG)"
+	printf '%s\n' "$$image"
 	rm -rf "$$stage"
 	trap - EXIT

@@ -1,0 +1,42 @@
+"""Capture the provider build's source identities and checksum metadata."""
+
+import hashlib
+import json
+from pathlib import Path
+import stat
+import sys
+
+
+def main(stage, repository):
+    stage, repository = Path(stage), Path(repository)
+    selections = json.loads((stage / 'manifest.json').read_text())
+    checksums = ''.join(f"{item['sha256']}  {item['filename']}\n" for item in sorted(selections, key=lambda x: x['filename']))
+    (stage / 'complete').write_text(checksums)
+    files = [(stage / 'provider.lock', 'requirements/provider.lock'),
+             (stage / 'complete', 'provider_wheels/.complete'),
+             (repository / 'containers/provider/Dockerfile', 'containers/provider/Dockerfile')]
+    for name in ('__init__.py', 'model_failure.py'):
+        files.append((repository / 'src/secs_inference' / name, f'src/secs_inference/{name}'))
+    directory = repository / 'src/secs_inference/provider'
+    for path in sorted(directory.rglob('*')):
+        if '__pycache__' in path.parts or path.suffix in ('.pyc', '.pyo'):
+            continue
+        if path.is_symlink():
+            raise ValueError(f'Provider source is a symlink: {path}')
+        if path.is_file():
+            files.append((path, path.relative_to(repository).as_posix()))
+    entries = []
+    for path, destination in files:
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f'Provider input is not a regular file: {path}')
+        entries.append({'path': str(path), 'destination': destination,
+                        'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                        'executable': bool(metadata.st_mode & 0o111)})
+    (stage / 'sources.json').write_text(json.dumps(entries, sort_keys=True))
+    identity = [{key: value for key, value in entry.items() if key != 'path'} for entry in entries]
+    print(hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest())
+
+
+if __name__ == '__main__':
+    main(*sys.argv[1:])
