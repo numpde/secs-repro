@@ -141,36 +141,43 @@ packages/image:
 	esac
 	source tools/wheelhouse_selection.sh
 	select_wheelhouse
+	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory"
 	lock_wheelhouse -s
-	stage=$$(mktemp -d /tmp/secs-image-wheels.XXXXXXXX)
+	stage=$$(mktemp -d /tmp/secs-package-inputs.XXXXXXXX)
 	mkdir "$$stage/packages" "$$stage/native"
 	source tools/retain_uncertain_stage.sh
-	secs_engine_active=1
+	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
-	stage_selected_wheels "$$wheelhouse_directory" "$(REPOSITORY_ROOT)/requirements/packages-$(VARIANT).lock" "$$stage/packages" "$(PYTHON_BASE)"
-	stage_selected_wheels "$$wheelhouse_directory" "$(REPOSITORY_ROOT)/requirements/native.lock" "$$stage/native" "$(PYTHON_BASE)"
+	cp "requirements/packages-$(VARIANT).lock" "$$stage/packages.lock"
+	cp requirements/native.lock "$$stage/native.lock"
+	stage_selected_wheels "$$wheelhouse_directory" "$$stage/packages.lock" "$$stage/packages" "$(PYTHON_BASE)" report
+	stage_selected_wheels "$$wheelhouse_directory" "$$stage/native.lock" "$$stage/native" "$(PYTHON_BASE)" report
+	tool="$$wheelhouse_directory/$(WHEELHOUSE_TOOL_NAME)"
+	python3 -I -S "$$tool" report --report "$$stage/packages/.pip-report" --pool /pool --directory packages_wheels --allow-source antlr4-python3-runtime-4.9.3.tar.gz > "$$stage/packages.json"
+	python3 -I -S "$$tool" report --report "$$stage/native/.pip-report" --pool /pool --directory native_wheels > "$$stage/native.json"
 	unlock_wheelhouse
-	id=$$( {
-		printf '%s\n' "$(PYTHON_BASE)" "$(VARIANT)"
-		cat containers/packages/Dockerfile.dockerignore \
-			requirements/packages-$(VARIANT).lock containers/packages/Dockerfile \
-			pyproject.toml secs/pyproject.toml secs/README.md "$$stage/packages/.complete" \
-			requirements/native.lock "$$stage/native/.complete"
-		find src -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
-		find secs/src -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
-	} | sha256sum | cut -d' ' -f1 )
+	source_id=$$(python3 tools/packages_stream_inputs.py "$$stage" "$(REPOSITORY_ROOT)" "$(VARIANT)")
+	wheel_id=$$(python3 -I -S "$$tool" identity --manifest "$$stage/manifest.json")
+	id=$$(printf '%s\n' "$(PYTHON_BASE)" "$(VARIANT)" "$(WHEELHOUSE_TOOL_SHA256)" "$$source_id" "$$wheel_id" | sha256sum | cut -d' ' -f1)
 	secs_engine_active=1
+	if python3 -I -S "$$tool" stream --pool "$$wheelhouse_directory" --source-allowlist "$$stage/sources.json" --manifest "$$stage/manifest.json" | \
 	$(DOCKER) build --quiet --network none --pull=false \
 		--build-arg PYTHON_BASE="$(PYTHON_BASE)" \
 		--build-arg PACKAGES_INPUT_ID="$$id" \
 		--build-arg PACKAGES_VARIANT="$(VARIANT)" \
-		--build-context "wheelhouse=$$stage/packages" \
-		--build-context "native_wheelhouse=$$stage/native" \
-		--file containers/packages/Dockerfile \
-		--tag "secs-repro/packages-$(VARIANT):inputs-$$id" \
-		--tag "$(call packages_image_tag,$(VARIANT))" .
+		--iidfile "$$stage/image-id" --file containers/packages/Dockerfile - > /dev/null; then
+		:
+	else
+		printf '%s\n' 'Package stream or image build failed; no image tag was published.' >&2
+		exit 1
+	fi
 	secs_engine_active=0
+	image=$$(cat "$$stage/image-id")
+	[[ $$image =~ ^sha256:[0-9a-f]{64}$$ ]] || { printf '%s\n' 'Docker returned an invalid package image ID.' >&2; exit 1; }
+	$(DOCKER) tag "$$image" "secs-repro/packages-$(VARIANT):inputs-$$id"
+	$(DOCKER) tag "$$image" "$(call packages_image_tag,$(VARIANT))"
+	printf '%s\n' "$$image"
 	rm -rf "$$stage"
 	trap - EXIT
 
