@@ -9,9 +9,69 @@ packages_image_tag = secs-repro/packages-$(1):local
 .PHONY: packages/base-images/pull packages/lock-image packages/locks/write
 .PHONY: packages/cpu/wheelhouse packages/gpu/wheelhouse packages/wheelhouse
 .PHONY: packages/cpu/image packages/gpu/image packages/image packages/images
+.PHONY: packages/pylock/locate packages/pylock/acquire
 DOCKER_MAKE_TARGETS += packages/base-images/pull packages/lock-image packages/locks/write \
 	packages/cpu/wheelhouse packages/gpu/wheelhouse packages/wheelhouse \
-	packages/cpu/image packages/gpu/image packages/image packages/images
+	packages/cpu/image packages/gpu/image packages/image packages/images packages/pylock/locate packages/pylock/acquire
+
+packages/pylock/locate packages/pylock/acquire: private export SECS_PYLOCK_VARIANT := $(value VARIANT)
+packages/pylock/locate: private export SECS_PYLOCK_OUTPUT := $(value OUTPUT)
+packages/pylock/locate:
+	@case "$$SECS_PYLOCK_VARIANT" in cpu|gpu) ;; *) printf '%s\n' 'VARIANT must be cpu or gpu.' >&2; exit 2 ;; esac
+	test "$(origin OUTPUT)" = 'command line' && test -n "$$SECS_PYLOCK_OUTPUT" || { printf '%s\n' 'Set OUTPUT to a new projected lock path.' >&2; exit 2; }
+	output_name=$$(basename -- "$$SECS_PYLOCK_OUTPUT")
+	[[ $$output_name != . && $$output_name != .. && $$output_name != / ]] || { printf '%s\n' 'OUTPUT must name a new file.' >&2; exit 2; }
+	output_parent=$$(realpath -e -- "$$(dirname -- "$$SECS_PYLOCK_OUTPUT")")
+	[[ -d $$output_parent && $$output_parent != *','* && $$output_parent != *$$'\n'* && $$output_parent != *$$'\r'* ]] || { printf '%s\n' 'OUTPUT parent must be a directory without commas or line breaks.' >&2; exit 2; }
+	output="$$output_parent/$$output_name"
+	test ! -e "$$output" && test ! -L "$$output" || { printf '%s\n' 'Projected lock already exists; preserve it and choose a new OUTPUT.' >&2; exit 2; }
+	source tools/wheelhouse_selection.sh
+	select_wheelhouse
+	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory"
+	stage=$$(mktemp -d --tmpdir="$$(dirname -- "$$output")" .secs-pylock.XXXXXXXX)
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=0
+	trap 'retain_uncertain_stage "$$stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	cp "requirements/packages-$$SECS_PYLOCK_VARIANT.lock" "$$stage/requirements.lock"
+	source_url=$$(python3 -c 'import sys,tomllib; p=tomllib.load(open("secs/pyproject.toml","rb")); print(p["dependency-groups"]["packages-"+sys.argv[1]][0].split(" @ ",1)[1])' "$$SECS_PYLOCK_VARIANT")
+	identity=$$(python3 -m deployment.rootless_access "$(PYTHON_BASE)")
+	secs_engine_active=1
+	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
+		--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
+		--mount type=bind,src="$$stage/requirements.lock",dst=/input/requirements.lock,readonly \
+		--entrypoint python "$(PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
+		--lock /input/requirements.lock --index-url https://pypi.org/simple \
+		--source "$$source_url" --require-source antlr4-python3-runtime > "$$stage/pylock.toml"
+	secs_engine_active=0
+	ln -T -- "$$stage/pylock.toml" "$$output"
+	printf 'Projected lock written to %s\n' "$$output" >&2
+
+packages/pylock/acquire: private export SECS_PYLOCK_INPUT := $(value PYLOCK)
+packages/pylock/acquire:
+	@case "$$SECS_PYLOCK_VARIANT" in cpu|gpu) ;; *) printf '%s\n' 'VARIANT must be cpu or gpu.' >&2; exit 2 ;; esac
+	test "$(origin PYLOCK)" = 'command line' && test -n "$$SECS_PYLOCK_INPUT" || { printf '%s\n' 'Set PYLOCK to the projected lock.' >&2; exit 2; }
+	source tools/wheelhouse_selection.sh
+	select_wheelhouse
+	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory"
+	stage=$$(mktemp -d /tmp/secs-pylock-acquire.XXXXXXXX)
+	source tools/retain_uncertain_stage.sh
+	secs_engine_active=0
+	trap 'retain_uncertain_stage "$$stage"' EXIT
+	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	cp -- "$$SECS_PYLOCK_INPUT" "$$stage/pylock.toml"
+	cp "requirements/packages-$$SECS_PYLOCK_VARIANT.lock" "$$stage/requirements.lock"
+	identity=$$(python3 -m deployment.rootless_access "$(PYTHON_BASE)")
+	secs_engine_active=1
+	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
+		--mount type=bind,src="$$wheelhouse_directory",dst=/pool \
+		--mount type=bind,src="$$stage",dst=/input,readonly \
+		--entrypoint python "$(PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" acquire \
+		--lock /input/pylock.toml --source-lock /input/requirements.lock --pool /pool \
+		--require-sdist antlr4-python3-runtime
+	secs_engine_active=0
 
 packages/base-images/pull:
 	$(DOCKER) pull "$(PYTHON_BASE)"

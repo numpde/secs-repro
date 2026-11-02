@@ -169,6 +169,10 @@ help:
 		'      Recreate manifest.json only if its recorded specification and weight hashes still match.' \
 		'  make packages/base-images/pull packages/locks/write DOCKER_CONTEXT=<local-context>' \
 		'      Regenerate the CPU and GPU dependency locks after dependency intent changes.' \
+		'  make packages/pylock/locate VARIANT=cpu OUTPUT=<new-file> WHEELHOUSE=<directory> DOCKER_CONTEXT=<local-context>' \
+		'      Project the issued package lock to target-specific download metadata.' \
+		'  make packages/pylock/acquire VARIANT=cpu PYLOCK=<file> WHEELHOUSE=<directory> DOCKER_CONTEXT=<local-context>' \
+		'      Acquire its selected artifacts, requiring the current package lock to match.' \
 		'  make fixtures/frontend-reference/base-image/pull fixtures/frontend-reference/write DOCKER_CONTEXT=<local-context>' \
 		'      Recreate the Bruker and processed JCAMP-DX SECS vectors with the pinned frontend.' \
 		'' \

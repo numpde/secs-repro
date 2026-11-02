@@ -23,6 +23,19 @@ def standalone_make_environment():
 
 
 class SharedWheelhouseTests(unittest.TestCase):
+    def test_pylock_output_does_not_follow_a_dangling_symlink(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output, target = root / 'pylock.toml', root / 'missing.toml'
+            output.symlink_to(target)
+            result = subprocess.run(['make', '--no-print-directory', 'packages/pylock/locate', 'VARIANT=cpu',
+                                     f'OUTPUT={output}', f'WHEELHOUSE={root}', 'DOCKER_CONTEXT=generic'],
+                                    cwd=ROOT, env=standalone_make_environment(), capture_output=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b'Projected lock already exists', result.stderr)
+            self.assertTrue(output.is_symlink())
+            self.assertFalse(target.exists())
+
     def test_package_stream_excludes_generated_bytecode(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
