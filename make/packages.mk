@@ -138,55 +138,71 @@ packages/cpu/wheelhouse: requirements/packages-cpu.lock
 packages/gpu/wheelhouse: requirements/packages-gpu.lock
 	@$(DOCKER_MAKE) --no-print-directory packages/wheelhouse VARIANT=gpu
 
+packages/wheelhouse: private export SECS_PACKAGES_VARIANT := $(value VARIANT)
 packages/wheelhouse:
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot materialize a wheelhouse as host UID 0.' >&2
 		exit 2
 	fi
-	case "$(VARIANT)" in
-		cpu) torch_wheels="$(PACKAGES_CPU_TORCH_WHEELS)" ;;
-		gpu) torch_wheels="$(PACKAGES_GPU_TORCH_WHEELS)" ;;
+	case "$$SECS_PACKAGES_VARIANT" in
+		cpu|gpu) ;;
 		*) printf '%s\n' 'VARIANT must be cpu or gpu.' >&2; exit 2 ;;
 	esac
-	lock="$(REPOSITORY_ROOT)/requirements/packages-$(VARIANT).lock"
 	source tools/wheelhouse_selection.sh
 	select_wheelhouse
-	lock_wheelhouse -x
-	stage=$$(mktemp -d --tmpdir="$$wheelhouse_directory" .secs-packages-$(VARIANT).XXXXXXXX)
+	stage=$$(mktemp -d --tmpdir="$$wheelhouse_directory" .secs-packages-inputs.XXXXXXXX)
+	mkdir "$$stage/check"
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
-	if stage_selected_wheels "$$wheelhouse_directory" "$$lock" "$$stage" "$(PYTHON_BASE)" check; then
-		rm -rf "$$stage"
-		trap - EXIT
+	cp "requirements/packages-$$SECS_PACKAGES_VARIANT.lock" "$$stage/requirements.lock"
+	lock_wheelhouse -s
+	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/check" "$(PYTHON_BASE)" check; then
+		unlock_wheelhouse
 		exit 0
 	else
 		selection_status=$$?
 	fi
+	unlock_wheelhouse
 	if test "$$selection_status" -ne 10; then exit "$$selection_status"; fi
-	secs_engine_active=0
-	find "$$stage" -mindepth 1 -delete
-	python3 tools/link_cached_wheels.py "$$wheelhouse_directory" "$$stage"
-	mkdir "$$stage/.tmp"
-	# The lock resolves antlr4-python3-runtime 4.9.3, which PyPI publishes only as source.
+	printf '%s\n' 'Shared wheelhouse is missing a package artifact; locating locked sources.' >&2
+	source_url=$$(python3 -c 'import sys,tomllib; p=tomllib.load(open("secs/pyproject.toml","rb")); print(p["dependency-groups"]["packages-"+sys.argv[1]][0].split(" @ ",1)[1])' "$$SECS_PACKAGES_VARIANT")
+	source tools/network_interface.sh
+	select_network_interface
+	export SECS_NETWORK_INTERFACE_INPUT="$$SECS_SELECTED_INTERFACE" SECS_NETWORK_INTERFACE_ORIGIN='command line'
+	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory" NETWORK_INTERFACE="$$SECS_SELECTED_INTERFACE"
+	identity=$$(python3 -m deployment.rootless_access "$(PYTHON_BASE)")
+	key=$$( { sha256sum "$$stage/requirements.lock" | cut -d' ' -f1; printf '%s\n' "$$SECS_PACKAGES_VARIANT" "$(PYTHON_BASE)" "$(WHEELHOUSE_TOOL_SHA256)" 'https://pypi.org/simple' "$$source_url" 'antlr4-python3-runtime'; } | sha256sum | cut -d' ' -f1 )
+	mkdir -p "$$wheelhouse_directory/.secs-pylocks"
+	exec {metadata_fd}<"$$wheelhouse_directory/.secs-pylocks"
+	flock -x "$$metadata_fd"
+	metadata="$$wheelhouse_directory/.secs-pylocks/pylock.packages-$$key.toml"
+	if [[ ! -e $$metadata && ! -L $$metadata ]]; then
+		secs_engine_active=1
+		$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+			--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
+			--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
+			--mount type=bind,src="$$stage/requirements.lock",dst=/input/requirements.lock,readonly \
+			--entrypoint python "$(PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
+			--lock /input/requirements.lock --index-url https://pypi.org/simple \
+			--source "$$source_url" --require-source antlr4-python3-runtime > "$$stage/generated.toml"
+		secs_engine_active=0
+		ln -T -- "$$stage/generated.toml" "$$metadata"
+	fi
+	cp --no-dereference -- "$$metadata" "$$stage/pylock.toml"
+	test -f "$$stage/pylock.toml" && test ! -L "$$stage/pylock.toml" || { printf '%s\n' 'Cached package projection must be a regular file.' >&2; exit 2; }
+	exec {metadata_fd}<&-
 	secs_engine_active=1
-	$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
-		--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
-		--pull never --pids-limit 64 --cpus 2 --memory 1g --memory-swap 1g \
-		--env PIP_NO_CACHE_DIR=1 --env TMPDIR=/wheelhouse/.tmp \
-		--mount type=bind,src="$$lock",dst=/input/requirements.lock,readonly \
-		--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
-		--mount type=bind,src="$$stage",dst=/wheelhouse \
-		"$(PYTHON_BASE)" python -m pip download --require-hashes \
-		--only-binary=:all: --no-binary=antlr4-python3-runtime \
-		--no-deps --index-url https://pypi.org/simple --find-links /pool --find-links "$$torch_wheels" \
-		--dest /wheelhouse -r /input/requirements.lock
+	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
+		--mount type=bind,src="$$wheelhouse_directory",dst=/pool \
+		--mount type=bind,src="$$stage",dst=/input,readonly \
+		--entrypoint python "$(PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" acquire \
+		--lock /input/pylock.toml --source-lock /input/requirements.lock --pool /pool \
+		--require-sdist antlr4-python3-runtime > "$$stage/acquired.json"
 	secs_engine_active=0
-	rm -rf "$$stage/.tmp"
-	python3 tools/publish_shared_wheels.py "$$stage" "$$wheelhouse_directory"
-	rm -rf "$$stage"
-	trap - EXIT
+	printf '%s\n' 'Selected package artifacts are available in the shared wheelhouse.'
 
 packages/cpu/image:
 	@$(DOCKER_MAKE) --no-print-directory packages/image VARIANT=cpu

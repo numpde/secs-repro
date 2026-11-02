@@ -39,10 +39,10 @@ fi
 status=$(cat "$stage/.pip-status")
 rm -rf "$stage/.tmp"
 if [[ $status != 0 ]]; then
-    cat "$stage/.pip-error" >&2
     if grep -Fq 'No matching distribution found for ' "$stage/.pip-error"; then
         exit 10
     fi
+    cat "$stage/.pip-error" >&2
     exit 11
 fi
 rm -f "$stage/.pip-output" "$stage/.pip-error" "$stage/.pip-status"
