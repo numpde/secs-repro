@@ -192,7 +192,7 @@ def render_deployment(repository: Path, name: str, mock_index_selection: bool | 
 def _inspect_provider_image(project: ComposeProject, image_id: str) -> str:
     """Admit one exact image ID emitted by the provider build."""
     if type(image_id) is not str or _IMAGE_ID.fullmatch(image_id) is None:
-        raise ValueError("Provider refresh requires the immutable image ID returned by provider/image.")
+        raise ValueError("Provider update requires the immutable image ID returned by provider/image.")
     try:
         documents = json.loads(project.command("image", "inspect", image_id))
     except json.JSONDecodeError as error:
@@ -245,8 +245,8 @@ def _write_provider_image_ref(path: Path, image_id: str) -> None:
         _replace_private_file(path, updated)
 
 
-def _refresh_deployment_locked(repository: Path, name: str, project: ComposeProject,
-                               mock_index_selection: bool | None, image_id: str) -> dict:
+def _update_deployment_locked(repository: Path, name: str, project: ComposeProject,
+                              mock_index_selection: bool | None, image_id: str) -> dict:
     """Verify and preflight the built image before draining and applying its immutable pin."""
     config = configuration_directory(repository, name)
     previous_image = _provider_image_ref(config / "deployment.env")
@@ -257,7 +257,7 @@ def _refresh_deployment_locked(repository: Path, name: str, project: ComposeProj
     _admit_provider_network(project, repository, name, network)
     _admit_worker_image(project, plan)
     if os.path.lexists(config / "old-api-retirement.json"):
-        raise ValueError("Cannot refresh deployment: old API retirement is incomplete; finish its retained cleanup first.")
+        raise ValueError("Cannot update deployment: old API retirement is incomplete; finish its retained cleanup first.")
     state = repository / "secrets/deployments" / name
     required = [config / "provider.toml", config / "worker.toml", state / "provider.signing.private.json"]
     if plan["services"]["worker"].get("environment", {}).get("SECS_MOCK_RUNNER") != "1":
@@ -265,11 +265,11 @@ def _refresh_deployment_locked(repository: Path, name: str, project: ComposeProj
     for path in required:
         _private_input(path)
     if any(os.path.lexists(state / part) for part in ("state", "sources", "socket")):
-        raise ValueError("Old host runtime directories remain; preserve their state before refreshing this deployment.")
+        raise ValueError("Old host runtime directories remain; preserve their state before updating this deployment.")
     _admit_runtime_volumes(project, plan, name)
     stopped = project.stop()
     if any(record["State"]["Running"] for record in stopped.values()):
-        raise RuntimeError("Provider refresh stopped without confirming every deployment service is stopped.")
+        raise RuntimeError("Provider update stopped without confirming every deployment service is stopped.")
     try:
         _write_provider_image_ref(config / "deployment.env", image_id)
     except BaseException as error:
@@ -279,7 +279,7 @@ def _refresh_deployment_locked(repository: Path, name: str, project: ComposeProj
             observed_image = "unreadable"
         error.add_note(
             f"The deployment was drained before provider pin publication failed; the pin currently reads "
-            f"{observed_image!r}. Inspect status and logs, then use provider/deployment/up or retry refresh."
+            f"{observed_image!r}. Inspect status and logs, then use provider/deployment/up or retry update."
         )
         raise
     try:
@@ -995,7 +995,7 @@ def _status(records: dict) -> dict:
 def main(arguments: list[str] | None = None) -> int:
     """Dispatch one named operation; report partial effects without implying rollback."""
     parser = argparse.ArgumentParser(description="Operate a named SECS deployment.")
-    parser.add_argument("operation", choices=("init", "config", "grant", "up", "refresh", "status", "down", "retire-api",
+    parser.add_argument("operation", choices=("init", "config", "grant", "up", "update", "status", "down", "retire-api",
                                               "logs", "credential-install", "interpreter-key-install"))
     parser.add_argument("deployment")
     parser.add_argument("--source", type=Path)
@@ -1063,12 +1063,12 @@ def main(arguments: list[str] | None = None) -> int:
                 print(json.dumps(_status(start_deployment(repository, options.deployment, index_selection)), indent=2))
                 print("Containers started. Check provider logs for hello publication or errors.")
                 print("A successful hello confirms API acceptance, not model readiness.")
-            elif options.operation == "refresh":
-                records = _refresh_deployment_locked(
+            elif options.operation == "update":
+                records = _update_deployment_locked(
                     repository, options.deployment, project, index_selection, options.provider_image_id,
                 )
                 print(json.dumps(_status(records), indent=2))
-                print("Provider image refreshed; worker configuration and durable state were retained.")
+                print("Provider image updated; worker configuration and durable state were retained.")
                 print("The worker may have been recreated; check status before relying on it.")
                 print("Check provider logs for hello publication or errors.")
             elif options.operation == "down":

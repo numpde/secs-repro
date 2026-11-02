@@ -72,8 +72,8 @@ admission and waits for work and selected reports before stopping the scientific
 worker. It may wait indefinitely while delivery is unavailable; interruption
 leaves shutdown unconfirmed.
 
-Refresh a named deployment with
-`make provider/deployment/refresh DEPLOYMENT=<name> WHEELHOUSE=<directory> DOCKER_CONTEXT=<local-context>`.
+Update a named deployment with
+`make provider/deployment/update DEPLOYMENT=<name> WHEELHOUSE=<directory> DOCKER_CONTEXT=<local-context>`.
 It builds the CPU provider, validates the exact image, checks the saved plan,
 then drains the deployment, updates its private immutable provider image pin,
 and starts it from the saved configuration. Worker settings and durable state
