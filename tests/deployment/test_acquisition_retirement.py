@@ -19,6 +19,9 @@ class AcquisitionRetirementTests(unittest.TestCase):
                  handoff=None, hang_proxy=False, stop_signal=signal.SIGTERM):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
+            python = root / 'python3'
+            python.write_text('#!/bin/bash\nif [[ $1 == -m && $2 == deployment.rootless_access ]]; then printf "0:0\\n"; else exec /usr/bin/python3 "$@"; fi\n')
+            python.chmod(0o700)
             docker = root / 'docker'
             docker.write_text('''#!/bin/bash
 arguments=("$@")

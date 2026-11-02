@@ -155,6 +155,8 @@ readonly ready_file="$scratch/proxy.port"
 if [[ -n "$wlan_interface" ]]; then
 bootstrap_dir="$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/bootstrap")"
 python3 "$(dirname -- "${BASH_SOURCE[0]}")/bootstrap_snapshot.py"
+repository_dir="$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/..")"
+proxy_user=$(cd "$repository_dir" && python3 -m deployment.rootless_access "${SECS_BOOTSTRAP_IMAGE:?Pinned bootstrap image is required}")
 resolver_mount=()
 if [[ -f /run/systemd/resolve/resolv.conf ]]; then
     resolver_mount=(--mount type=bind,src=/run/systemd/resolve/resolv.conf,dst=/run/systemd/resolve/resolv.conf,readonly)
@@ -163,7 +165,7 @@ proxy_starting=1
 proxy_pending=1
 timeout --signal=TERM --kill-after=2 30 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" create --pull never \
     --cidfile "$scratch/proxy.cid" --network host --read-only \
-    --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges:true \
+    --user "$proxy_user" --cap-drop ALL --security-opt no-new-privileges:true \
     --pids-limit 64 --cpus 1 --memory 128m --memory-swap 128m \
     --log-driver local --log-opt max-size=1m --log-opt max-file=2 \
     --env PROVIDER_CORE_IN_CONTAINER=1 \

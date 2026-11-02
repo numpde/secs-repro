@@ -172,6 +172,8 @@ if __name__ == "__main__":
         raise SystemExit(main(sys.argv[1:]))
     except (OSError, RuntimeError, ValueError) as error:
         print(f"Cannot select wheelhouse identity: {error}", file=sys.stderr)
+        for note in getattr(error, "__notes__", ()):
+            print(note, file=sys.stderr)
         raise SystemExit(2)
 
 
