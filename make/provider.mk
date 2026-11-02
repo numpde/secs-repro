@@ -1,9 +1,9 @@
 override PROVIDER_IMAGE_TAG := secs-repro/provider:local
 override PROVIDER_PYTHON_BASE := docker.io/library/python:3.12.16-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
 override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.4/provider_core-0.5.4-py3-none-any.whl
-override WHEELHOUSE_TOOL_NAME := wheelhouse-tool-0.5.8.pyz
-override WHEELHOUSE_TOOL_SHA256 := bb37f04420772b553abb694ef167414a2ec03fdfaf8e6ab802aaf37894d0bb37
-override WHEELHOUSE_TOOL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.8/$(WHEELHOUSE_TOOL_NAME)
+override WHEELHOUSE_TOOL_NAME := wheelhouse-tool-0.5.9.pyz
+override WHEELHOUSE_TOOL_SHA256 := b504df2889d99ae122173a06e192b7e4310ea66e42a150059310a00a573abbe7
+override WHEELHOUSE_TOOL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.9/$(WHEELHOUSE_TOOL_NAME)
 
 # Initialization is a host filesystem operation, not a build or API operation.
 # Pass the literal name through the environment to keep shell syntax out of it.
@@ -139,7 +139,7 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 			--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
 			--mount type=bind,src="$$stage/requirements.lock",dst=/input/requirements.lock,readonly \
 			--entrypoint python "$(PROVIDER_PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
-			--lock /input/requirements.lock --index-url https://pypi.org/simple --source "$$source_url" > "$$stage/generated.toml"
+			--lock /input/requirements.lock --pool /pool --index-url https://pypi.org/simple --source "$$source_url" > "$$stage/generated.toml"
 		secs_engine_active=0
 		ln -T -- "$$stage/generated.toml" "$$metadata"
 	fi

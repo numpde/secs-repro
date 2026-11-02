@@ -40,7 +40,7 @@ packages/pylock/locate:
 		--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
 		--mount type=bind,src="$$stage/requirements.lock",dst=/input/requirements.lock,readonly \
 		--entrypoint python "$(PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
-		--lock /input/requirements.lock --index-url https://pypi.org/simple \
+		--lock /input/requirements.lock --pool /pool --index-url https://pypi.org/simple \
 		--source "$$source_url" --require-source antlr4-python3-runtime > "$$stage/pylock.toml"
 	secs_engine_active=0
 	ln -T -- "$$stage/pylock.toml" "$$output"
@@ -183,7 +183,7 @@ packages/wheelhouse:
 			--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
 			--mount type=bind,src="$$stage/requirements.lock",dst=/input/requirements.lock,readonly \
 			--entrypoint python "$(PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
-			--lock /input/requirements.lock --index-url https://pypi.org/simple \
+			--lock /input/requirements.lock --pool /pool --index-url https://pypi.org/simple \
 			--source "$$source_url" --require-source antlr4-python3-runtime > "$$stage/generated.toml"
 		secs_engine_active=0
 		ln -T -- "$$stage/generated.toml" "$$metadata"
