@@ -103,7 +103,7 @@ help:
 	'  make test/deployment' \
 	'      Test configuration publication, saved-state ownership and container lifecycle rules.' \
 	'  make test/deployment/wheelhouse' \
-	'      Check shared wheelhouse locking and publication.' \
+	'      Check shared wheelhouse selection, locking, and source capture.' \
 	'  make test/deployment/release-asset' \
 	'      Check pinned release asset reuse and conflict-preserving publication.' \
 	'  make provider/wheelhouse/tool DOCKER_CONTEXT=<local-context>' \
