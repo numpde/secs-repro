@@ -1,12 +1,15 @@
 override PROVIDER_IMAGE_TAG := secs-repro/provider:local
 override PROVIDER_PYTHON_BASE := docker.io/library/python:3.12.16-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
 override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.4/provider_core-0.5.4-py3-none-any.whl
+override WHEELHOUSE_TOOL_NAME := wheelhouse-tool-0.5.7.pyz
+override WHEELHOUSE_TOOL_SHA256 := 6d178096f9196e7f1724503b8fb509658061d5ac203de69719227f2fbd508a96
+override WHEELHOUSE_TOOL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.7/$(WHEELHOUSE_TOOL_NAME)
 
 # Initialization is a host filesystem operation, not a build or API operation.
 # Pass the literal name through the environment to keep shell syntax out of it.
 .PHONY: provider/deployment/init provider/deployment/config provider/deployment/grant provider/deployment/up
 .PHONY: provider/deployment/status provider/deployment/down provider/deployment/update provider/deployment/retire-api provider/logs test/deployment
-.PHONY: test/deployment/e2e test/deployment/wheelhouse
+.PHONY: test/deployment/e2e test/deployment/wheelhouse test/deployment/release-asset
 DOCKER_MAKE_TARGETS += provider/deployment/config provider/deployment/grant provider/deployment/up provider/deployment/status \
 	provider/deployment/down provider/deployment/retire-api provider/logs test/deployment/e2e
 DOCKER_MAKE_TARGETS += provider/deployment/update
@@ -45,15 +48,19 @@ test/deployment/wheelhouse:
 	@cd "$(REPOSITORY_ROOT)"
 	python3 -m unittest discover -v -s tests/deployment -p 'test_shared_wheelhouse.py'
 
+test/deployment/release-asset:
+	@cd "$(REPOSITORY_ROOT)"
+	python3 -m unittest discover -v -s tests/deployment -p 'test_release_asset.py'
+
 .PHONY: test/deployment/e2e
 test/deployment/e2e:
 	@cd "$(REPOSITORY_ROOT)"
 	image=$$($(DOCKER_MAKE) --no-print-directory provider/image)
 	DEPLOYMENT_TEST_IMAGE="$$image" python3 -m unittest discover -v -s tests/deployment_e2e -p 'test_*.py'
 
-.PHONY: provider/wheelhouse provider/native-wheelhouse provider/image
+.PHONY: provider/wheelhouse provider/native-wheelhouse provider/wheelhouse/tool provider/image
 .PHONY: provider/support/check provider/support/write
-DOCKER_MAKE_TARGETS += provider/wheelhouse provider/native-wheelhouse provider/image
+DOCKER_MAKE_TARGETS += provider/wheelhouse provider/native-wheelhouse provider/wheelhouse/tool provider/image
 
 provider/support/check:
 	@python3 -B tools/project_support_catalog.py check docs/index.html
@@ -62,6 +69,29 @@ provider/support/check:
 
 provider/support/write:
 	@python3 -B tools/project_support_catalog.py write docs/index.html
+
+provider/wheelhouse/tool:
+	@if test "$(HOST_UID)" -eq 0; then
+		printf '%s\n' 'Cannot acquire the wheelhouse tool as host UID 0.' >&2
+		exit 2
+	fi
+	source tools/wheelhouse_selection.sh
+	select_wheelhouse
+	if python3 -m tools.acquire_release_asset check "$$wheelhouse_directory" "$(WHEELHOUSE_TOOL_NAME)" "$(WHEELHOUSE_TOOL_SHA256)" "$(WHEELHOUSE_TOOL_URL)"; then
+		exit 0
+	else
+		status=$$?
+	fi
+	if test "$$status" -ne 10; then exit "$$status"; fi
+	identity=$$(python3 -m deployment.rootless_access "$(PROVIDER_PYTHON_BASE)")
+	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" \
+		--cap-drop ALL --security-opt no-new-privileges:true --pull never \
+		--pids-limit 32 --cpus 1 --memory 128m --memory-swap 128m \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tools",dst=/workspace/tools,readonly \
+		--mount type=bind,src="$$wheelhouse_directory",dst=/wheelhouse \
+		--workdir /workspace --entrypoint python "$(PROVIDER_PYTHON_BASE)" \
+		-I -B -c 'import sys; sys.path.insert(0, "/workspace"); from tools.acquire_release_asset import main; raise SystemExit(main())' \
+		acquire /wheelhouse "$(WHEELHOUSE_TOOL_NAME)" "$(WHEELHOUSE_TOOL_SHA256)" "$(WHEELHOUSE_TOOL_URL)"
 
 # Both install profiles are exact issuer locks from the selected SDK release.
 provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requirements/native.lock

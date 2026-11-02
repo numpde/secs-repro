@@ -104,6 +104,10 @@ help:
 	'      Test configuration publication, saved-state ownership and container lifecycle rules.' \
 	'  make test/deployment/wheelhouse' \
 	'      Check shared wheelhouse locking and publication.' \
+	'  make test/deployment/release-asset' \
+	'      Check pinned release asset reuse and conflict-preserving publication.' \
+	'  make provider/wheelhouse/tool DOCKER_CONTEXT=<local-context>' \
+	'      Acquire the pinned shared wheelhouse tool into the selected pool.' \
 	'  make test/deployment/e2e DOCKER_CONTEXT=<local-context>' \
 	'      Test offline Compose start/stop/restart and retained state using disposable services.' \
 	'  make test/provider/mock-runner/e2e DOCKER_CONTEXT=<local-context>' \
