@@ -1,4 +1,7 @@
 ARG PYTHON_BASE
+FROM scratch AS provider_wheels
+COPY --from=wheelhouse . /
+
 FROM ${PYTHON_BASE}
 
 ARG PROVIDER_INPUT_ID
@@ -7,14 +10,14 @@ LABEL io.secs-repro.provider.input-id="${PROVIDER_INPUT_ID}" \
       io.secs-repro.provider.mock-runner="1"
 
 COPY requirements/provider.lock /opt/provider/requirements.lock
-COPY --from=wheelhouse . /opt/provider/wheelhouse/
-RUN cd /opt/provider/wheelhouse \
+RUN --mount=type=bind,from=provider_wheels,target=/opt/provider/wheelhouse \
+    cd /opt/provider/wheelhouse \
     && sha256sum --check .complete \
     && python -m pip install --no-index --require-hashes \
         --find-links /opt/provider/wheelhouse \
         --no-cache-dir -r /opt/provider/requirements.lock \
     && python -m pip check \
-    && rm -rf /opt/provider/wheelhouse /opt/provider/requirements.lock
+    && rm /opt/provider/requirements.lock
 
 COPY src/secs_inference/__init__.py /opt/secs_inference/__init__.py
 COPY src/secs_inference/model_failure.py /opt/secs_inference/model_failure.py
