@@ -154,7 +154,7 @@ provider/image:
 	unlock_wheelhouse
 	source_id=$$(python3 tools/provider_stream_inputs.py "$$stage" "$(REPOSITORY_ROOT)")
 	wheel_id=$$(python3 -I -S "$$tool" identity --manifest "$$stage/manifest.json")
-	id=$$(printf '%s\n' "$(PROVIDER_PYTHON_BASE)" "$$source_id" "$$wheel_id" | sha256sum | cut -d' ' -f1)
+	id=$$(printf '%s\n' "$(PROVIDER_PYTHON_BASE)" "$(WHEELHOUSE_TOOL_SHA256)" "$$source_id" "$$wheel_id" | sha256sum | cut -d' ' -f1)
 	secs_engine_active=1
 	if python3 -I -S "$$tool" stream --pool "$$wheelhouse_directory" --source-allowlist "$$stage/sources.json" --manifest "$$stage/manifest.json" | \
 	$(DOCKER) build --quiet --network none --pull=false \
