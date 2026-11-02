@@ -121,6 +121,9 @@ help:
 	'      Install an owner-only secret once; existing files are never overwritten.' \
 	'  make provider/deployment/up DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] DOCKER_CONTEXT=<local-context>' \
 	'      Start the named deployment from its saved config using existing images; no build or download.' \
+	'  make provider/deployment/refresh DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] WHEELHOUSE=<directory> DOCKER_CONTEXT=<local-context>' \
+	'      Build the CPU provider, drain, pin that exact image, then restart the named deployment.' \
+	'      Saved worker settings and durable state remain; services may be recreated. Startup failure retains evidence.' \
 	'  make provider/deployment/status DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \
 	'  make provider/logs DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \
 	'  make provider/deployment/down DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \

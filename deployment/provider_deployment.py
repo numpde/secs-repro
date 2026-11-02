@@ -21,7 +21,7 @@ from deployment.compose import ComposeProject
 from deployment.worker_target import worker_target
 from deployment.templates import (
     configuration_directory, initialize_configuration, _ensure_private_parent,
-    _locked_parent, _publish_new_file, _sync_directory,
+    _locked_parent, _publish_new_file, _sync_directory, _temporary_directory, _write_new_file,
 )
 from deployment.rootless_access import (
     grant_private_access, mapped_acl_permissions, mapped_ids, private_acl, private_owner_acl,
@@ -36,6 +36,7 @@ TEMPLATES = {
     "deployment.env": Path("config/deployment.env.example"),
     "network.toml": Path("config/network.toml.example"),
 }
+_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 _GPU_UUID = re.compile(
     r"GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -188,7 +189,127 @@ def render_deployment(repository: Path, name: str, mock_index_selection: bool | 
     return _render_deployment(repository, name, config, network, mock_index_selection)
 
 
-def _render_deployment(repository: Path, name: str, config: Path, network: dict, mock_index_selection: bool | None = None) -> dict:
+def _inspect_provider_image(project: ComposeProject, image_id: str) -> str:
+    """Admit one exact image ID emitted by the provider build."""
+    if type(image_id) is not str or _IMAGE_ID.fullmatch(image_id) is None:
+        raise ValueError("Provider refresh requires the immutable image ID returned by provider/image.")
+    try:
+        documents = json.loads(project.command("image", "inspect", image_id))
+    except json.JSONDecodeError as error:
+        raise ValueError("Docker returned malformed provider image metadata.") from error
+    if type(documents) is not list or len(documents) != 1 or type(documents[0]) is not dict:
+        raise ValueError("Docker did not inspect exactly one provider image.")
+    document = documents[0]
+    inspected_id = document.get("Id")
+    image_config = document.get("Config")
+    labels = image_config.get("Labels") if type(image_config) is dict else None
+    if (
+        inspected_id != image_id or type(inspected_id) is not str or _IMAGE_ID.fullmatch(inspected_id) is None
+        or document.get("Os") != "linux" or document.get("Architecture") != "amd64"
+        or type(image_config) is not dict or image_config.get("User") != "65532:65532"
+        or image_config.get("Entrypoint") != ["python", "-m", "secs_inference.provider.main"]
+        or type(labels) is not dict
+        or type(labels.get("io.secs-repro.provider.input-id")) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", labels["io.secs-repro.provider.input-id"]) is None
+    ):
+        raise ValueError("Local provider image identity does not match the SECS provider contract.")
+    return inspected_id
+
+
+def _provider_image_ref(path: Path) -> str:
+    """Read the one current immutable provider image pin, allowing first setup."""
+    lines = _private_file(path).splitlines()
+    matches = [line[len(b"PROVIDER_IMAGE_REF="):] for line in lines if line.startswith(b"PROVIDER_IMAGE_REF=")]
+    if len(matches) != 1:
+        raise ValueError("Deployment env must contain exactly one PROVIDER_IMAGE_REF.")
+    try:
+        value = matches[0].decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError("Deployment provider image pin must be ASCII.") from error
+    if value and _IMAGE_ID.fullmatch(value) is None:
+        raise ValueError("Deployment provider image pin must be empty or an immutable sha256 image ID.")
+    return value
+
+
+def _write_provider_image_ref(path: Path, image_id: str) -> None:
+    content = _private_file(path)
+    lines = content.splitlines(keepends=True)
+    matches = [index for index, line in enumerate(lines) if line.startswith(b"PROVIDER_IMAGE_REF=")]
+    if len(matches) != 1:
+        raise ValueError("Deployment env must contain exactly one PROVIDER_IMAGE_REF.")
+    current_line = lines[matches[0]]
+    newline = b"\r\n" if current_line.endswith(b"\r\n") else (b"\n" if current_line.endswith(b"\n") else b"")
+    lines[matches[0]] = b"PROVIDER_IMAGE_REF=" + image_id.encode("ascii") + newline
+    updated = b"".join(lines)
+    if updated != content:
+        _replace_private_file(path, updated)
+
+
+def _refresh_deployment_locked(repository: Path, name: str, project: ComposeProject,
+                               mock_index_selection: bool | None, image_id: str) -> dict:
+    """Verify and preflight the built image before draining and applying its immutable pin."""
+    config = configuration_directory(repository, name)
+    previous_image = _provider_image_ref(config / "deployment.env")
+    image_id = _inspect_provider_image(project, image_id)
+    network = _provider_network(repository, name)
+    plan = _render_deployment(repository, name, config, network, mock_index_selection,
+                              provider_image_id=image_id)
+    _admit_provider_network(project, repository, name, network)
+    _admit_worker_image(project, plan)
+    if os.path.lexists(config / "old-api-retirement.json"):
+        raise ValueError("Cannot refresh deployment: old API retirement is incomplete; finish its retained cleanup first.")
+    state = repository / "secrets/deployments" / name
+    required = [config / "provider.toml", config / "worker.toml", state / "provider.signing.private.json"]
+    if plan["services"]["worker"].get("environment", {}).get("SECS_MOCK_RUNNER") != "1":
+        required.append(state / "interpreter.key")
+    for path in required:
+        _private_input(path)
+    if any(os.path.lexists(state / part) for part in ("state", "sources", "socket")):
+        raise ValueError("Old host runtime directories remain; preserve their state before refreshing this deployment.")
+    _admit_runtime_volumes(project, plan, name)
+    stopped = project.stop()
+    if any(record["State"]["Running"] for record in stopped.values()):
+        raise RuntimeError("Provider refresh stopped without confirming every deployment service is stopped.")
+    try:
+        _write_provider_image_ref(config / "deployment.env", image_id)
+    except BaseException as error:
+        try:
+            observed_image = _provider_image_ref(config / "deployment.env")
+        except BaseException:
+            observed_image = "unreadable"
+        error.add_note(
+            f"The deployment was drained before provider pin publication failed; the pin currently reads "
+            f"{observed_image!r}. Inspect status and logs, then use provider/deployment/up or retry refresh."
+        )
+        raise
+    try:
+        return start_deployment(repository, name, mock_index_selection)
+    except BaseException as error:
+        previous = previous_image or "<empty>"
+        error.add_note(f"Provider pin is {image_id}; previous pin was {previous}. "
+                       "Startup is unconfirmed and containers may remain; inspect status and logs before retrying.")
+        raise
+
+
+def _replace_private_file(path: Path, content: bytes) -> None:
+    """Replace one validated owner-only file atomically inside its private directory."""
+    published = False
+    try:
+        with _temporary_directory(prefix=".provider-image-", dir=path.parent) as temporary:
+            staged = temporary / path.name
+            _write_new_file(staged, content)
+            os.replace(staged, path)
+            published = True
+            _sync_directory(path.parent)
+    except OSError as error:
+        if published:
+            error.add_note(f"Updated configuration is visible at {path}; crash durability is unconfirmed.")
+        raise
+
+
+def _render_deployment(repository: Path, name: str, config: Path, network: dict,
+                       mock_index_selection: bool | None = None,
+                       provider_image_id: str | None = None) -> dict:
     """Render one deployment from an already validated network policy."""
     worker_config = _toml_document(config / "worker.toml")
     worker_device = worker_config.get("device", "cuda:0")
@@ -237,6 +358,8 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict,
         # Compose interpolation occurs before the unused scientific grants are removed.
         environment.update({"WORKER_IMAGE_REF": "sha256:" + "0" * 64,
                             "CHECKPOINT_DIRECTORY": "/", "MOLFORMER_CACHE_DIRECTORY": "/"})
+    if provider_image_id is not None:
+        environment["PROVIDER_IMAGE_REF"] = provider_image_id
     project = _project(repository, name)
     base_recipe = ComposeProject(repository, project.name, ("provider", "worker", "sources-init", "session-init"))
     plan = base_recipe.render(
@@ -872,10 +995,11 @@ def _status(records: dict) -> dict:
 def main(arguments: list[str] | None = None) -> int:
     """Dispatch one named operation; report partial effects without implying rollback."""
     parser = argparse.ArgumentParser(description="Operate a named SECS deployment.")
-    parser.add_argument("operation", choices=("init", "config", "grant", "up", "status", "down", "retire-api",
+    parser.add_argument("operation", choices=("init", "config", "grant", "up", "refresh", "status", "down", "retire-api",
                                               "logs", "credential-install", "interpreter-key-install"))
     parser.add_argument("deployment")
     parser.add_argument("--source", type=Path)
+    parser.add_argument("--provider-image-id")
     options = parser.parse_args(arguments)
     installing = options.operation in {"credential-install", "interpreter-key-install"}
     if installing != (options.source is not None):
@@ -939,6 +1063,14 @@ def main(arguments: list[str] | None = None) -> int:
                 print(json.dumps(_status(start_deployment(repository, options.deployment, index_selection)), indent=2))
                 print("Containers started. Check provider logs for hello publication or errors.")
                 print("A successful hello confirms API acceptance, not model readiness.")
+            elif options.operation == "refresh":
+                records = _refresh_deployment_locked(
+                    repository, options.deployment, project, index_selection, options.provider_image_id,
+                )
+                print(json.dumps(_status(records), indent=2))
+                print("Provider image refreshed; worker configuration and durable state were retained.")
+                print("The worker may have been recreated; check status before relying on it.")
+                print("Check provider logs for hello publication or errors.")
             elif options.operation == "down":
                 print(json.dumps(_status(project.stop()), indent=2))
             elif options.operation == "retire-api":

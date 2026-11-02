@@ -1,20 +1,21 @@
-PROVIDER_IMAGE_TAG := secs-repro/provider:local
+override PROVIDER_IMAGE_TAG := secs-repro/provider:local
 override PROVIDER_PYTHON_BASE := docker.io/library/python:3.12.16-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
 override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.4/provider_core-0.5.4-py3-none-any.whl
 
 # Initialization is a host filesystem operation, not a build or API operation.
 # Pass the literal name through the environment to keep shell syntax out of it.
 .PHONY: provider/deployment/init provider/deployment/config provider/deployment/grant provider/deployment/up
-.PHONY: provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs test/deployment
+.PHONY: provider/deployment/status provider/deployment/down provider/deployment/refresh provider/deployment/retire-api provider/logs test/deployment
 .PHONY: test/deployment/e2e
 DOCKER_MAKE_TARGETS += provider/deployment/config provider/deployment/grant provider/deployment/up provider/deployment/status \
 	provider/deployment/down provider/deployment/retire-api provider/logs test/deployment/e2e
-provider/deployment/init provider/deployment/config provider/deployment/grant provider/deployment/up provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
+DOCKER_MAKE_TARGETS += provider/deployment/refresh
+provider/deployment/init provider/deployment/config provider/deployment/grant provider/deployment/up provider/deployment/refresh provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
 provider/deployment/init: private export SECS_WORKER_TARGET := $(if $(filter command line,$(origin TARGET)),$(value TARGET),)
 provider/deployment/init: private export SECS_USE_MOCK_INDEX := $(if $(filter command line,$(origin USE_MOCK_INDEX)),$(value USE_MOCK_INDEX),0)
 provider/deployment/init: private export SECS_USE_MOCK_RUNNER := $(if $(filter command line,$(origin USE_MOCK_RUNNER)),$(value USE_MOCK_RUNNER),0)
-provider/deployment/config provider/deployment/grant provider/deployment/up: private export SECS_USE_MOCK_INDEX := $(if $(filter command line,$(origin USE_MOCK_INDEX)),$(value USE_MOCK_INDEX),)
-provider/deployment/config provider/deployment/grant provider/deployment/up: private export SECS_MOCK_FLAG_SUPPLIED := $(if $(filter command line,$(origin USE_MOCK_RUNNER)),1,0)
+provider/deployment/config provider/deployment/grant provider/deployment/up provider/deployment/refresh: private export SECS_USE_MOCK_INDEX := $(if $(filter command line,$(origin USE_MOCK_INDEX)),$(value USE_MOCK_INDEX),)
+provider/deployment/config provider/deployment/grant provider/deployment/up provider/deployment/refresh: private export SECS_MOCK_FLAG_SUPPLIED := $(if $(filter command line,$(origin USE_MOCK_RUNNER)),1,0)
 provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs: private export SECS_MOCK_FLAG_SUPPLIED := $(if $(filter command line,$(origin USE_MOCK_INDEX) $(origin USE_MOCK_RUNNER)),1,0)
 provider/deployment/init provider/deployment/config provider/deployment/grant provider/deployment/up provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs:
 	@cd "$(REPOSITORY_ROOT)"
@@ -27,6 +28,14 @@ provider/credential/install provider/interpreter-key/install: private export SEC
 provider/credential/install provider/interpreter-key/install:
 	@cd "$(REPOSITORY_ROOT)"
 	python3 -m deployment.provider_deployment "$(word 2,$(subst /, ,$@))-install" "$${DEPLOYMENT_INPUT}" --source "$${SECRET_SOURCE_INPUT}"
+
+.PHONY: provider/deployment/refresh
+provider/deployment/refresh:
+	@test "$(origin DEPLOYMENT)" = command\ line || { printf '%s\n' 'DEPLOYMENT must be set on the command line.' >&2; exit 2; }
+	@if [[ "$${SECS_MOCK_FLAG_SUPPLIED:-0}" == 1 ]]; then printf '%s\n' 'USE_MOCK_RUNNER is selected during init; USE_MOCK_INDEX is accepted during init, config, grant, up or refresh.' >&2; exit 2; fi
+	@cd "$(REPOSITORY_ROOT)"
+	image_id=$$($(DOCKER_MAKE) --no-print-directory provider/image)
+	python3 -m deployment.provider_deployment refresh "$${DEPLOYMENT_INPUT}" --provider-image-id "$$image_id"
 
 test/deployment:
 	@cd "$(REPOSITORY_ROOT)"

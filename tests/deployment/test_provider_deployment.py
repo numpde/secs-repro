@@ -22,6 +22,7 @@ from deployment.provider_deployment import (
     _provider_network,
     _render_deployment,
     _status,
+    _refresh_deployment_locked,
     install_secret,
     main,
     render_deployment,
@@ -44,6 +45,142 @@ class ProviderDeploymentTests(unittest.TestCase):
             os.environ.pop("SECS_DOCKER_ENDPOINT", None)
         else:
             os.environ["SECS_DOCKER_ENDPOINT"] = cls.previous_endpoint
+
+    def _refresh_fixture(self, root):
+        config = root / "config/deployments/example"
+        config.mkdir(parents=True, mode=0o700)
+        config.chmod(0o700)
+        previous = "sha256:" + "a" * 64
+        deployment_env = config / "deployment.env"
+        deployment_env.write_text(
+            f"PROVIDER_IMAGE_REF={previous}\nWORKER_IMAGE_REF=sha256:{'b' * 64}\n"
+            "CHECKPOINT_DIRECTORY=/checkpoint\nMOLFORMER_CACHE_DIRECTORY=/cache\n"
+        )
+        deployment_env.chmod(0o600)
+        for filename in ("provider.toml", "worker.toml"):
+            (config / filename).write_text("fixture\n")
+            (config / filename).chmod(0o600)
+        state = root / "secrets/deployments/example"
+        state.mkdir(parents=True, mode=0o700)
+        for filename in ("provider.signing.private.json", "interpreter.key"):
+            (state / filename).write_text("fixture\n")
+            (state / filename).chmod(0o600)
+        image_id = "sha256:" + "c" * 64
+        image = {
+            "Id": image_id, "Os": "linux", "Architecture": "amd64",
+            "Config": {
+                "User": "65532:65532",
+                "Entrypoint": ["python", "-m", "secs_inference.provider.main"],
+                "Labels": {"io.secs-repro.provider.input-id": "d" * 64},
+            },
+        }
+        project = unittest.mock.Mock()
+        project.command.return_value = json.dumps([image]).encode()
+        project.stop.return_value = {"provider": {"State": {"Running": False}}}
+        return config, deployment_env, previous, image_id, project
+
+    def _refresh_preflight(self, image_id):
+        plan = {"services": {
+            "provider": {"image": "sha256:" + "a" * 64},
+            "worker": {"image": "sha256:" + "b" * 64, "environment": {}},
+        }}
+        return (
+            patch("deployment.provider_deployment._provider_network", return_value={}),
+            patch("deployment.provider_deployment._render_deployment", return_value=plan),
+            patch("deployment.provider_deployment._admit_provider_network"),
+            patch("deployment.provider_deployment._admit_worker_image"),
+            patch("deployment.provider_deployment._admit_runtime_volumes"),
+        )
+
+    def test_refresh_verifies_before_drain_then_pins_and_starts(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, deployment_env, previous, image_id, project = self._refresh_fixture(root)
+            events = []
+            project.command.side_effect = lambda *_args: events.append("inspect") or project.command.return_value
+            project.stop.side_effect = lambda: events.append("stop") or project.stop.return_value
+
+            def start(repository, name, mock_index_selection):
+                self.assertEqual(deployment_env.read_text().splitlines()[0], f"PROVIDER_IMAGE_REF={image_id}")
+                events.append("start")
+                return {"provider": {"Id": "provider-id"}}
+
+            preflight = self._refresh_preflight(image_id)
+            with preflight[0], preflight[1] as render, preflight[2], preflight[3], preflight[4], \
+                    patch("deployment.provider_deployment.start_deployment", side_effect=start):
+                with _locked_parent(config.parent):
+                    records = _refresh_deployment_locked(root, "example", project, None, image_id)
+
+            self.assertEqual(events, ["inspect", "stop", "start"])
+            render.assert_called_once_with(root, "example", config, {}, None, provider_image_id=image_id)
+            self.assertEqual(records, {"provider": {"Id": "provider-id"}})
+            project.command.assert_called_once_with("image", "inspect", image_id)
+            self.assertEqual(deployment_env.read_text().splitlines()[0], f"PROVIDER_IMAGE_REF={image_id}")
+            self.assertIn(f"WORKER_IMAGE_REF=sha256:{'b' * 64}", deployment_env.read_text())
+            self.assertNotEqual(previous, image_id)
+
+    def test_refresh_does_not_change_pin_when_drain_is_unconfirmed(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, deployment_env, previous, _image_id, project = self._refresh_fixture(root)
+            project.stop.side_effect = RuntimeError("fixture drain failure")
+            start = Mock()
+            preflight = self._refresh_preflight(_image_id)
+            with preflight[0], preflight[1], preflight[2], preflight[3], preflight[4], \
+                    patch("deployment.provider_deployment.start_deployment", start):
+                with _locked_parent(config.parent), self.assertRaisesRegex(RuntimeError, "drain failure"):
+                    _refresh_deployment_locked(root, "example", project, None, _image_id)
+            self.assertEqual(deployment_env.read_text().splitlines()[0], f"PROVIDER_IMAGE_REF={previous}")
+            start.assert_not_called()
+
+    def test_refresh_rejects_invalid_image_before_drain(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, deployment_env, previous, _image_id, project = self._refresh_fixture(root)
+            with _locked_parent(config.parent), self.assertRaisesRegex(ValueError, "immutable image ID"):
+                _refresh_deployment_locked(root, "example", project, None, "secs-repro/provider:local")
+            project.stop.assert_not_called()
+            self.assertEqual(deployment_env.read_text().splitlines()[0], f"PROVIDER_IMAGE_REF={previous}")
+
+    def test_refresh_preflight_failure_keeps_running_deployment_and_old_pin(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, deployment_env, previous, image_id, project = self._refresh_fixture(root)
+            with patch("deployment.provider_deployment._provider_network", return_value={}), \
+                    patch("deployment.provider_deployment._render_deployment", side_effect=ValueError("bad saved plan")), \
+                    _locked_parent(config.parent), self.assertRaisesRegex(ValueError, "bad saved plan"):
+                _refresh_deployment_locked(root, "example", project, None, image_id)
+            project.stop.assert_not_called()
+            self.assertEqual(deployment_env.read_text().splitlines()[0], f"PROVIDER_IMAGE_REF={previous}")
+
+    def test_refresh_pin_write_failure_reports_drained_state_and_does_not_start(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, deployment_env, previous, image_id, project = self._refresh_fixture(root)
+            start = Mock()
+            preflight = self._refresh_preflight(image_id)
+            with preflight[0], preflight[1], preflight[2], preflight[3], preflight[4], \
+                    patch("deployment.provider_deployment._write_provider_image_ref",
+                          side_effect=OSError("fixture pin failure")), \
+                    patch("deployment.provider_deployment.start_deployment", start), \
+                    _locked_parent(config.parent), self.assertRaisesRegex(OSError, "pin failure") as caught:
+                _refresh_deployment_locked(root, "example", project, None, image_id)
+            self.assertEqual(deployment_env.read_text().splitlines()[0], f"PROVIDER_IMAGE_REF={previous}")
+            self.assertTrue(any("deployment was drained" in note for note in caught.exception.__notes__))
+            self.assertTrue(any(previous in note for note in caught.exception.__notes__))
+            start.assert_not_called()
+
+    def test_refresh_keeps_new_pin_and_old_id_evidence_when_start_fails(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, deployment_env, previous, image_id, project = self._refresh_fixture(root)
+            preflight = self._refresh_preflight(image_id)
+            with preflight[0], preflight[1], preflight[2], preflight[3], preflight[4], \
+                    patch("deployment.provider_deployment.start_deployment", side_effect=RuntimeError("fixture start failure")), \
+                    _locked_parent(config.parent), self.assertRaisesRegex(RuntimeError, "start failure") as caught:
+                _refresh_deployment_locked(root, "example", project, None, image_id)
+            self.assertEqual(deployment_env.read_text().splitlines()[0], f"PROVIDER_IMAGE_REF={image_id}")
+            self.assertTrue(any(previous in note for note in caught.exception.__notes__))
 
     def test_optional_mock_index_uses_private_config_without_changing_full_worker(self):
         with TemporaryDirectory() as temporary:

@@ -72,6 +72,16 @@ admission and waits for work and selected reports before stopping the scientific
 worker. It may wait indefinitely while delivery is unavailable; interruption
 leaves shutdown unconfirmed.
 
+Refresh a named deployment with
+`make provider/deployment/refresh DEPLOYMENT=<name> WHEELHOUSE=<directory> DOCKER_CONTEXT=<local-context>`.
+It builds the CPU provider, validates the exact image, checks the saved plan,
+then drains the deployment, updates its private immutable provider image pin,
+and starts it from the saved configuration. Worker settings and durable state
+are retained; services may be recreated. A failed drain leaves the old pin in
+place. A pin or startup failure reports the observed partial state for status
+and log inspection. Ordinary `up` remains a no-build operation using the saved
+image pins.
+
 Before switching a legacy deployment, drain its obligations under the old runtime
 and preserve its evidence. Before starting this volume-backed deployment, move
 the stopped deployment's old `state`, `sources`, and `socket` directories out of
