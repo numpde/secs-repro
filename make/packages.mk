@@ -1,6 +1,6 @@
 override PACKAGES_PYTHON_VERSION := 3.12.12
 override PYTHON_BASE := docker.io/library/python:$(PACKAGES_PYTHON_VERSION)-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
-override UV_IMAGE := ghcr.io/astral-sh/uv@sha256:440fd6477af86a2f1b38080c539f1672cd22acb1b1a47e321dba5158ab08864d
+override UV_IMAGE := ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b
 PACKAGES_CPU_TORCH_WHEELS := https://download.pytorch.org/whl/cpu/torch/
 PACKAGES_GPU_TORCH_WHEELS := https://download.pytorch.org/whl/cu130/torch/
 PACKAGES_LOCK_IMAGE_TAG := secs-repro/packages-lock
