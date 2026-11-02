@@ -16,6 +16,7 @@ from provider_core.controller import AttemptController, LiveStartPolicy
 from provider_core.shared_delivery_client import SharedDeliveryClient
 from provider_core.shared_grants import SharedGrants
 from provider_core.diagnostics import failure_evidence, write_stderr
+from provider_core.execution import ConditionRecovery, ObservationRecovery
 from provider_core.failure_projection import owned_details
 from provider_core.lifetime import ProviderLifetime
 from provider_core.ownership import AttemptClaims, LiveAttemptLimits
@@ -53,7 +54,32 @@ def _retry_notice(*_facts):
 
 
 def _recovered_notice(*_facts):
-    _LOG.info("Shared Attempt START recovered; no scientific rerun was requested")
+    _LOG.info("Shared Attempt API operation recovered; no scientific rerun was requested")
+
+
+def _api_recovery_policies(*, exchange_seconds, retirement_seconds, poll_seconds):
+    backoff_max_seconds = 30
+    initial_delay = min(poll_seconds, backoff_max_seconds)
+    next_delay = min(initial_delay * 2, backoff_max_seconds)
+    observation_gap = 2 * exchange_seconds + retirement_seconds + 2 * initial_delay
+    # The SDK opens this window after the first failed PUT. It bounds retry dispatch;
+    # the final exchange and its retirement can finish after the window.
+    condition_window = (initial_delay + exchange_seconds + retirement_seconds + next_delay
+                        + exchange_seconds + initial_delay)
+    return (
+        ObservationRecovery(
+            gap_seconds=observation_gap,
+            backoff_max_seconds=backoff_max_seconds,
+            on_retry=_retry_notice,
+            on_recovered=_recovered_notice,
+        ),
+        ConditionRecovery(
+            window_seconds=condition_window,
+            backoff_max_seconds=backoff_max_seconds,
+            on_retry=_retry_notice,
+            on_recovered=_recovered_notice,
+        ),
+    )
 
 
 def _read_chat_settings(execution, retirement_seconds):
@@ -126,6 +152,11 @@ async def run_provider(config_path=CONFIG_PATH):
                 maximum_attempts=1, maximum_control_bytes=131072, maximum_pending_terminal_bytes=2097152,
             ))
             scope = RecoveryScope(settings.identity.origin, provider_ref, "secs", token_hex(16))
+            observation_recovery, condition_recovery = _api_recovery_policies(
+                exchange_seconds=settings.http.exchange_seconds,
+                retirement_seconds=settings.http.retirement_seconds,
+                poll_seconds=execution.poll_seconds,
+            )
             def assemble(pending):
                 if mock_runner:
                     session = MockRunnerSession(worker=worker, work_seconds=execution.work_seconds,
@@ -150,6 +181,7 @@ async def run_provider(config_path=CONFIG_PATH):
                     new_api(), claims, session, scope=scope, stopping=science_stopping, admission_stopping=stop,
                     start_policy=LiveStartPolicy(cadence_seconds=execution.poll_seconds,
                                                 on_retry=_retry_notice, on_recovered=_recovered_notice),
+                    observation_recovery=observation_recovery, condition_recovery=condition_recovery,
                     delivery=delivery, on_delivery_retry=_retry_notice,
                     delivery_retry_initial_seconds=config.delivery_retry_initial_seconds,
                     delivery_retry_max_seconds=config.delivery_retry_max_seconds,

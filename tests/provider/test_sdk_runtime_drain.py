@@ -55,6 +55,23 @@ class LifecycleTransport:
     exchange_seconds, retirement_seconds = 1, 1
     retirement_confirmed, pending_owner, last_failure = True, None, None
 
+    def __init__(self, *, fail_observations=0, fail_conditions=0):
+        self.fail_observations = fail_observations
+        self.fail_conditions = fail_conditions
+        self.observation_requests = []
+        self.condition_requests = []
+
+    @staticmethod
+    def unavailable():
+        body = json.dumps({"type": "urn:nmr-api:problem:service-unavailable", "title": "Unavailable",
+                           "status": 503, "instance": "urn:nmr-api:request:fixture",
+                           "request_id": "request:fixture", "code": "service_unavailable",
+                           "detail": "Retry the request"}).encode()
+        return HttpResponse(503, ((b"content-type", b"application/problem+json"),
+                                  (b"cache-control", b"no-store"),
+                                  (b"nmr-api-topology", b"dev-local"),
+                                  (b"x-request-id", b"request:fixture")), body)
+
     async def retire(self, *, owner=None):
         pass
 
@@ -67,10 +84,19 @@ class LifecycleTransport:
                         "state": "in_progress", "started_at": "2026-10-29T00:00:00Z", "replayed": False}
         elif path.endswith("/progress"):
             command = json.loads(request.content)
+            if command["condition_code"] is not None:
+                self.condition_requests.append(request)
+                if self.fail_conditions:
+                    self.fail_conditions -= 1
+                    return self.unavailable()
             document = {"schema_id": "nmr.provider.execution_attempt_progress_response.v1",
                         "execution_attempt_ref": ATTEMPT, "phase": command["phase"],
                         "condition_code": command["condition_code"], "updated_at": "2026-10-29T00:00:00Z"}
         elif request.method == "GET" and path.endswith(ATTEMPT):
+            self.observation_requests.append(request)
+            if self.fail_observations:
+                self.fail_observations -= 1
+                return self.unavailable()
             document = {"schema_id": "nmr.provider.execution_attempt_read_response.v1",
                         "execution_attempt_ref": ATTEMPT, "job_ref": FACTS.job_ref,
                         "state": "in_progress", "job_state": "closed"}
@@ -87,9 +113,10 @@ class Science:
     """A completed scientific owner; this fixture proves task composition, not PID exit."""
     def __init__(self):
         self.handle = PreparedAnalysis(ProtectedEvidence("fixture.input.v1", b"chosen"))
-        self.executions = self.retirements = 0
+        self.preparations = self.executions = self.retirements = 0
 
     async def prepare(self, acknowledged, instructions, *, report_condition):
+        self.preparations += 1
         return self.handle
 
     async def execute(self, prepared, *, report_condition):
@@ -101,6 +128,16 @@ class Science:
 
     async def retire(self):
         self.retirements += 1
+
+
+class ReportingScience(Science):
+    async def prepare(self, acknowledged, instructions, *, report_condition):
+        await report_condition("source_waiting")
+        return await super().prepare(acknowledged, instructions, report_condition=report_condition)
+
+    async def execute(self, prepared, *, report_condition):
+        await report_condition("interpretation_waiting")
+        return await super().execute(prepared, report_condition=report_condition)
 
 
 class Backpressure:
@@ -132,6 +169,74 @@ class Discovery:
 
 
 class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
+    async def test_observation_and_condition_recover_without_restarting_science(self):
+        from secs_inference.provider.main import _api_recovery_policies
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ipc").mkdir(mode=0o700)
+            (root / "queue").mkdir(mode=0o700)
+            endpoint = DeliveryEndpoint(ORIGIN, PROVIDER, root / "ipc/delivery.sock")
+            queue = DeliveryQueue(root / "queue", limits=QueueLimits(1, 2097152, 1, 2097152))
+            inbox = DeliveryInbox(queue, (endpoint,), request_seconds=1,
+                                  on_accepted=lambda _endpoint: None, on_failure=lambda *_args: None,
+                                  binding_status=lambda _endpoint: {})
+            delivery = DeliveryClient(endpoint, exchange_seconds=1, retirement_seconds=1)
+            transport = LifecycleTransport(fail_observations=1, fail_conditions=1)
+            identity = SigningIdentity(ORIGIN, "credential:test", Ed25519PrivateKey.generate())
+            claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
+            scope = RecoveryScope(ORIGIN, PROVIDER, "secs", "recovery-proof")
+            pending = StartPending(scope, ANALYSIS_KIND_REF, FACTS, start_body(FACTS.job_ref, "recovery-proof"))
+            science = ReportingScience()
+            observation_recovery, condition_recovery = _api_recovery_policies(
+                exchange_seconds=0.1, retirement_seconds=0.1, poll_seconds=0.001,
+            )
+            controller = AttemptController.live(
+                ProviderAPI(identity, transport, expected_topology="dev-local"), claims, science,
+                scope=scope, stopping=asyncio.Event(), admission_stopping=asyncio.Event(),
+                start_policy=LiveStartPolicy(0.001, lambda *_args: None, lambda *_args: None),
+                preverified_input=VerifiedJobInput(FACTS, PAYLOAD), delivery=delivery,
+                on_delivery_retry=lambda *_args: None, delivery_retry_initial_seconds=0.01,
+                delivery_retry_max_seconds=0.01, allowed_job_states=frozenset({"open", "closed"}),
+                poll_seconds=0.001, task_settle_seconds=1,
+                observation_recovery=observation_recovery, condition_recovery=condition_recovery,
+            )
+            try:
+                await inbox.start()
+                await controller.run(pending)
+                self.assertGreaterEqual(len(transport.observation_requests), 2)
+                first_observations = transport.observation_requests[:2]
+                attempt_path = f"/provider/v1/execution-attempts/{ATTEMPT}"
+                self.assertTrue(all(request.url.path == attempt_path for request in first_observations))
+                self.assertEqual(len({request.headers["signature-input"] for request in first_observations}), 2)
+                condition_requests = [request for request in transport.condition_requests
+                                      if json.loads(request.content)["condition_code"] == "source_waiting"]
+                self.assertEqual(len(condition_requests), 2)
+                self.assertTrue(all(request.url.path == f"{attempt_path}/progress"
+                                    for request in condition_requests))
+                self.assertEqual(len({request.content for request in condition_requests}), 1)
+                self.assertEqual(len({request.headers["signature-input"] for request in condition_requests}), 2)
+                self.assertEqual(science.preparations, 1)
+                self.assertEqual(science.executions, 1)
+                self.assertEqual(science.retirements, 1)
+                self.assertEqual(claims.live_owners(), ())
+            finally:
+                await delivery.retire()
+                await inbox.close()
+                queue.close()
+
+    def test_recovery_windows_follow_transport_bounds_and_poll_pacing(self):
+        from secs_inference.provider.main import _api_recovery_policies
+
+        standard_observation, standard_condition = _api_recovery_policies(
+            exchange_seconds=30, retirement_seconds=10, poll_seconds=5,
+        )
+        self.assertEqual((standard_observation.gap_seconds, standard_condition.window_seconds), (80, 90))
+        shorter_observation, shorter_condition = _api_recovery_policies(
+            exchange_seconds=8, retirement_seconds=3, poll_seconds=2,
+        )
+        self.assertEqual((shorter_observation.gap_seconds, shorter_condition.window_seconds), (23, 27))
+
     async def test_proven_prewrite_deadline_reports_without_worker_write(self):
         await self._assert_proven_prewrite_deadline(fail_retirement=False)
 
