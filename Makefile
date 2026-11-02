@@ -102,6 +102,8 @@ help:
 	'      Check public support projections and every declared semantic evidence requirement.' \
 	'  make test/deployment' \
 	'      Test configuration publication, saved-state ownership and container lifecycle rules.' \
+	'  make test/deployment/wheelhouse' \
+	'      Check shared wheelhouse locking and publication.' \
 	'  make test/deployment/e2e DOCKER_CONTEXT=<local-context>' \
 	'      Test offline Compose start/stop/restart and retained state using disposable services.' \
 	'  make test/provider/mock-runner/e2e DOCKER_CONTEXT=<local-context>' \

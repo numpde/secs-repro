@@ -1,5 +1,7 @@
 """A shared wheel pool is selected explicitly and never replaced wholesale."""
 
+import fcntl
+import os
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,7 +14,38 @@ from tools.link_cached_wheels import link
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def standalone_make_environment():
+    environment = os.environ.copy()
+    environment.pop("MAKELEVEL", None)
+    environment.pop("MAKEFLAGS", None)
+    return environment
+
+
 class SharedWheelhouseTests(unittest.TestCase):
+    def test_writer_waits_for_readers_and_readers_can_coexist(self):
+        with TemporaryDirectory() as temporary:
+            directory = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY)
+            command = ('source tools/wheelhouse_selection.sh; wheelhouse_directory=$1; '
+                       'lock_wheelhouse "$2"; printf acquired')
+            writer = None
+            try:
+                fcntl.flock(directory, fcntl.LOCK_SH)
+                shared = subprocess.run(['bash', '-c', command, 'wheelhouse-test', temporary, '-s'],
+                                        cwd=ROOT, capture_output=True, timeout=5, check=True)
+                self.assertEqual(shared.stdout, b'acquired')
+                writer = subprocess.Popen(['bash', '-c', command, 'wheelhouse-test', temporary, '-x'],
+                                          cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    writer.communicate(timeout=0.2)
+                fcntl.flock(directory, fcntl.LOCK_UN)
+                output, error = writer.communicate(timeout=5)
+                self.assertEqual((writer.returncode, output, error), (0, b'acquired', b''))
+            finally:
+                if writer is not None and writer.poll() is None:
+                    writer.kill()
+                    writer.communicate()
+                os.close(directory)
+
     def test_publication_keeps_existing_artifacts_and_refuses_conflicts(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -32,14 +65,14 @@ class SharedWheelhouseTests(unittest.TestCase):
 
     def test_unattended_build_requires_an_explicit_pool(self):
         result = subprocess.run(['make', '--no-print-directory', 'provider/image', 'DOCKER_CONTEXT=default'], cwd=ROOT,
-                                capture_output=True, text=True, timeout=10)
+                                capture_output=True, text=True, timeout=10, env=standalone_make_environment())
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('WHEELHOUSE=', result.stderr)
 
     def test_pool_cannot_overlap_the_checkout(self):
         with TemporaryDirectory(dir=ROOT) as nested:
             result = subprocess.run(['make', '--no-print-directory', 'provider/image', 'DOCKER_CONTEXT=default', f'WHEELHOUSE={nested}'],
-                                    cwd=ROOT, capture_output=True, text=True, timeout=10)
+                                    cwd=ROOT, capture_output=True, text=True, timeout=10, env=standalone_make_environment())
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('outside the repository', result.stderr)
 

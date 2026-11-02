@@ -91,6 +91,7 @@ packages/wheelhouse:
 	lock="$(REPOSITORY_ROOT)/requirements/packages-$(VARIANT).lock"
 	source tools/wheelhouse_selection.sh
 	select_wheelhouse
+	lock_wheelhouse -x
 	stage=$$(mktemp -d --tmpdir="$$wheelhouse_directory" .secs-packages-$(VARIANT).XXXXXXXX)
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=0
@@ -140,6 +141,7 @@ packages/image:
 	esac
 	source tools/wheelhouse_selection.sh
 	select_wheelhouse
+	lock_wheelhouse -s
 	stage=$$(mktemp -d /tmp/secs-image-wheels.XXXXXXXX)
 	mkdir "$$stage/packages" "$$stage/native"
 	source tools/retain_uncertain_stage.sh
@@ -148,6 +150,7 @@ packages/image:
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	stage_selected_wheels "$$wheelhouse_directory" "$(REPOSITORY_ROOT)/requirements/packages-$(VARIANT).lock" "$$stage/packages" "$(PYTHON_BASE)"
 	stage_selected_wheels "$$wheelhouse_directory" "$(REPOSITORY_ROOT)/requirements/native.lock" "$$stage/native" "$(PYTHON_BASE)"
+	unlock_wheelhouse
 	id=$$( {
 		printf '%s\n' "$(PYTHON_BASE)" "$(VARIANT)"
 		cat containers/packages/Dockerfile.dockerignore \

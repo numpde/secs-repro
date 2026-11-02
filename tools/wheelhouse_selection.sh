@@ -35,6 +35,15 @@ select_wheelhouse() {
     fi
 }
 
+lock_wheelhouse() {
+    exec {wheelhouse_lock_fd}<"$wheelhouse_directory"
+    flock "$1" "$wheelhouse_lock_fd"
+}
+
+unlock_wheelhouse() {
+    exec {wheelhouse_lock_fd}<&-
+}
+
 stage_selected_wheels() {
     local status
     secs_engine_active=1

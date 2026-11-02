@@ -6,7 +6,7 @@ override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools
 # Pass the literal name through the environment to keep shell syntax out of it.
 .PHONY: provider/deployment/init provider/deployment/config provider/deployment/grant provider/deployment/up
 .PHONY: provider/deployment/status provider/deployment/down provider/deployment/update provider/deployment/retire-api provider/logs test/deployment
-.PHONY: test/deployment/e2e
+.PHONY: test/deployment/e2e test/deployment/wheelhouse
 DOCKER_MAKE_TARGETS += provider/deployment/config provider/deployment/grant provider/deployment/up provider/deployment/status \
 	provider/deployment/down provider/deployment/retire-api provider/logs test/deployment/e2e
 DOCKER_MAKE_TARGETS += provider/deployment/update
@@ -41,6 +41,10 @@ test/deployment:
 	@cd "$(REPOSITORY_ROOT)"
 	python3 -m unittest discover -v -s tests/deployment -p 'test_*.py'
 
+test/deployment/wheelhouse:
+	@cd "$(REPOSITORY_ROOT)"
+	python3 -m unittest discover -v -s tests/deployment -p 'test_shared_wheelhouse.py'
+
 .PHONY: test/deployment/e2e
 test/deployment/e2e:
 	@cd "$(REPOSITORY_ROOT)"
@@ -68,6 +72,7 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 	profile="$(if $(filter provider/native-wheelhouse,$@),native,provider)"
 	source tools/wheelhouse_selection.sh
 	select_wheelhouse
+	lock_wheelhouse -x
 	stage=$$(mktemp -d --tmpdir="$$wheelhouse_directory" .secs-$$profile.XXXXXXXX)
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=0
@@ -105,12 +110,14 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 provider/image:
 	@source tools/wheelhouse_selection.sh
 	select_wheelhouse
+	lock_wheelhouse -s
 	stage=$$(mktemp -d /tmp/secs-provider-wheels.XXXXXXXX)
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=1
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	stage_selected_wheels "$$wheelhouse_directory" "$(REPOSITORY_ROOT)/requirements/provider.lock" "$$stage" "$(PROVIDER_PYTHON_BASE)"
+	unlock_wheelhouse
 	id=$$( {
 		printf '%s\n' "$(PROVIDER_PYTHON_BASE)"
 		cat containers/provider/Dockerfile containers/provider/Dockerfile.dockerignore \
