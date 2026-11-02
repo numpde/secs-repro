@@ -1,6 +1,7 @@
 """A shared wheel pool is selected explicitly and never replaced wholesale."""
 
 import fcntl
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -22,6 +23,28 @@ def standalone_make_environment():
 
 
 class SharedWheelhouseTests(unittest.TestCase):
+    def test_package_stream_excludes_generated_bytecode(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stage, repo = root / 'stage', root / 'repo'
+            stage.mkdir()
+            for role in ('packages', 'native'):
+                (stage / f'{role}.json').write_text('[]')
+                (stage / f'{role}.lock').write_text('lock')
+            for name in ('containers/packages/Dockerfile', 'pyproject.toml', 'secs/pyproject.toml',
+                         'secs/README.md', 'src/module.py', 'src/__pycache__/module.pyc',
+                         'secs/src/module.py', 'secs/src/module.pyo'):
+                path = repo / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('content')
+            subprocess.run(['python3', str(ROOT / 'tools/packages_stream_inputs.py'), str(stage), str(repo), 'cpu'],
+                           capture_output=True, check=True)
+            destinations = {item['destination'] for item in json.loads((stage / 'sources.json').read_text())}
+            self.assertIn('src/module.py', destinations)
+            self.assertIn('secs/src/module.py', destinations)
+            self.assertNotIn('src/__pycache__/module.pyc', destinations)
+            self.assertNotIn('secs/src/module.pyo', destinations)
+
     def test_writer_waits_for_readers_and_readers_can_coexist(self):
         with TemporaryDirectory() as temporary:
             directory = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY)

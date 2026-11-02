@@ -25,6 +25,8 @@ def main(stage, repository, variant):
         files.append((repository / name, name))
     for name in ('src', 'secs/src'):
         for path in sorted((repository / name).rglob('*')):
+            if '__pycache__' in path.parts or path.suffix in ('.pyc', '.pyo'):
+                continue
             if path.is_symlink():
                 raise ValueError(f'Package source is a symlink: {path}')
             if path.is_file():
