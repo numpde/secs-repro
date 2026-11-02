@@ -142,11 +142,14 @@ class ComposeProject:
         """Stop admitted IDs in dependency order, preserving containers and durable data.
 
         Stop admission first and wait for admitted work and selected delivery
-        reports while workers still exist. Drain has no forced-kill deadline.
+        reports while workers still exist. Verify the same provider exits zero
+        without OOM before stopping its worker. Drain has no forced-kill deadline.
         An interrupted or failed stop leaves the worker available for recovery.
         This operation needs neither deployment config nor credential contents.
         """
         records = self.inventory()
+        if "worker" in records and "provider" not in records:
+            raise RuntimeError("Cannot stop the worker without the provider's retirement record; preserve it for recovery.")
         try:
             for role in self.stop_order:
                 record = records.get(role)
@@ -155,6 +158,16 @@ class ComposeProject:
                     # -1 waits without escalating to SIGKILL. The CLI must also
                     # remain free of a timeout while the daemon owns this drain.
                     self.command("stop", "--signal", "SIGTERM", "--timeout", "-1", record["Id"], timeout=None)
+                if role == "provider" and record is not None:
+                    records = self.inventory()
+                    provider = records.get(role)
+                    state = provider.get("State", {}) if provider is not None else {}
+                    if (provider is None or provider["Id"] != record["Id"] or state.get("Running")
+                            or state.get("ExitCode") != 0 or state.get("OOMKilled") is not False):
+                        raise RuntimeError(
+                            "Provider shutdown did not confirm the same container exited cleanly without OOM; "
+                            "its worker remains available for recovery."
+                        )
             stopped = self.inventory()
             if any(record["State"]["Running"] for record in stopped.values()):
                 raise RuntimeError("A project container is still running.")

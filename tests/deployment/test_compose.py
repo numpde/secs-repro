@@ -18,7 +18,8 @@ def record(project, role, number, *, running=True, grace=47):
     """Build the relevant engine response, not an alternate ownership checker."""
     return {
         "Id": str(number) * 64, "Image": "sha256:" + "a" * 64,
-        "State": {"Running": running, "Status": "running" if running else "exited"},
+        "State": {"Running": running, "Status": "running" if running else "exited",
+                  "ExitCode": None if running else 0, "OOMKilled": False},
         "Config": {"StopTimeout": grace, "Labels": {
             "com.docker.compose.project": project.name,
             "com.docker.compose.project.working_dir": str(project.repository),
@@ -62,14 +63,41 @@ class ComposeTests(unittest.TestCase):
 
     def test_stop_is_ordered_and_does_not_delete_containers_or_state(self):
         records = {role: record(self.project, role, n) for n, role in enumerate(("provider", "worker"), 1)}
+        provider_stopped = {
+            "provider": record(self.project, "provider", 1, running=False),
+            "worker": records["worker"],
+        }
         stopped = {role: record(self.project, role, n, running=False) for n, role in enumerate(("provider", "worker"), 1)}
-        with patch.object(ComposeProject, "inventory", side_effect=(records, stopped)):
+        with patch.object(ComposeProject, "inventory", side_effect=(records, provider_stopped, stopped)):
             with patch.object(ComposeProject, "command") as command:
                 self.project.stop()
         self.assertEqual([call.args for call in command.call_args_list], [
             ("stop", "--signal", "SIGTERM", "--timeout", "-1", "1" * 64),
             ("stop", "--signal", "SIGTERM", "--timeout", "-1", "2" * 64),
         ])
+
+    def test_unclean_provider_exit_keeps_worker_running(self):
+        for exit_code, oom_killed in ((137, False), (0, True)):
+            with self.subTest(exit_code=exit_code, oom_killed=oom_killed):
+                records = {role: record(self.project, role, n) for n, role in enumerate(("provider", "worker"), 1)}
+                failed_provider = record(self.project, "provider", 1, running=False)
+                failed_provider["State"].update({"ExitCode": exit_code, "OOMKilled": oom_killed})
+                after_provider = {"provider": failed_provider, "worker": records["worker"]}
+                with patch.object(ComposeProject, "inventory", side_effect=(records, after_provider)):
+                    with patch.object(ComposeProject, "command") as command:
+                        with self.assertRaisesRegex(RuntimeError, "did not confirm.*cleanly"):
+                            self.project.stop()
+                command.assert_called_once_with(
+                    "stop", "--signal", "SIGTERM", "--timeout", "-1", "1" * 64, timeout=None,
+                )
+
+    def test_missing_provider_record_keeps_worker_running(self):
+        records = {"worker": record(self.project, "worker", 2)}
+        with patch.object(ComposeProject, "inventory", return_value=records):
+            with patch.object(ComposeProject, "command") as command:
+                with self.assertRaisesRegex(RuntimeError, "without the provider's retirement record"):
+                    self.project.stop()
+        command.assert_not_called()
 
     def test_operator_interrupt_during_provider_drain_preserves_worker(self):
         records = {role: record(self.project, role, n) for n, role in enumerate(("provider", "worker"), 1)}
@@ -85,7 +113,7 @@ class ComposeTests(unittest.TestCase):
             with self.subTest(grace=grace):
                 before = {"provider": record(self.project, "provider", 1, grace=grace)}
                 after = {"provider": record(self.project, "provider", 1, running=False)}
-                with patch.object(ComposeProject, "inventory", side_effect=(before, after)), patch.object(
+                with patch.object(ComposeProject, "inventory", side_effect=(before, after, after)), patch.object(
                     ComposeProject, "command", return_value=b""
                 ) as command:
                     self.project.stop()

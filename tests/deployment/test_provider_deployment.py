@@ -76,7 +76,9 @@ class ProviderDeploymentTests(unittest.TestCase):
         }
         project = unittest.mock.Mock()
         project.command.return_value = json.dumps([image]).encode()
-        project.stop.return_value = {"provider": {"State": {"Running": False}}}
+        project.stop.return_value = {
+            "provider": {"State": {"Running": False, "ExitCode": 0, "OOMKilled": False}},
+        }
         return config, deployment_env, previous, image_id, project
 
     def _refresh_preflight(self, image_id):
@@ -130,6 +132,20 @@ class ProviderDeploymentTests(unittest.TestCase):
                     patch("deployment.provider_deployment.start_deployment", start):
                 with _locked_parent(config.parent), self.assertRaisesRegex(RuntimeError, "drain failure"):
                     _refresh_deployment_locked(root, "example", project, None, _image_id)
+            self.assertEqual(deployment_env.read_text().splitlines()[0], f"PROVIDER_IMAGE_REF={previous}")
+            start.assert_not_called()
+
+    def test_refresh_does_not_pin_after_unclean_provider_exit(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, deployment_env, previous, image_id, project = self._refresh_fixture(root)
+            project.stop.side_effect = RuntimeError("Provider shutdown did not confirm clean exit without OOM.")
+            preflight = self._refresh_preflight(image_id)
+            start = Mock()
+            with preflight[0], preflight[1], preflight[2], preflight[3], preflight[4], \
+                    patch("deployment.provider_deployment.start_deployment", start), \
+                    _locked_parent(config.parent), self.assertRaisesRegex(RuntimeError, "clean exit") as caught:
+                _refresh_deployment_locked(root, "example", project, None, image_id)
             self.assertEqual(deployment_env.read_text().splitlines()[0], f"PROVIDER_IMAGE_REF={previous}")
             start.assert_not_called()
 
