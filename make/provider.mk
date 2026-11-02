@@ -102,40 +102,59 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 	profile="$(if $(filter provider/native-wheelhouse,$@),native,provider)"
 	source tools/wheelhouse_selection.sh
 	select_wheelhouse
-	lock_wheelhouse -x
 	stage=$$(mktemp -d --tmpdir="$$wheelhouse_directory" .secs-$$profile.XXXXXXXX)
+	mkdir "$$stage/check"
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
-	if stage_selected_wheels "$$wheelhouse_directory" "$(REPOSITORY_ROOT)/requirements/$$profile.lock" "$$stage" "$(PROVIDER_PYTHON_BASE)" check; then
-		rm -rf "$$stage"
-		trap - EXIT
+	cp "requirements/$$profile.lock" "$$stage/requirements.lock"
+	lock_wheelhouse -s
+	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/check" "$(PROVIDER_PYTHON_BASE)" check; then
+		unlock_wheelhouse
 		exit 0
 	else
 		selection_status=$$?
 	fi
+	unlock_wheelhouse
 	if test "$$selection_status" -ne 10; then exit "$$selection_status"; fi
-	secs_engine_active=0
-	find "$$stage" -mindepth 1 -delete
-	python3 tools/link_cached_wheels.py "$$wheelhouse_directory" "$$stage"
-	mkdir "$$stage/.tmp"
+	printf '%s\n' 'Shared wheelhouse is missing an SDK artifact; locating locked sources.' >&2
+	checksum=$$(awk '/^provider-core==/ {getline; sub(/^ *--hash=sha256:/, ""); print; exit}' "$$stage/requirements.lock")
+	[[ $$checksum =~ ^[0-9a-f]{64}$$ ]] || { printf '%s\n' 'SDK lock must contain the pinned provider-core hash.' >&2; exit 2; }
+	source_url="$(PROVIDER_CORE_WHEEL_URL)#sha256=$$checksum"
+	source tools/network_interface.sh
+	select_network_interface
+	export SECS_NETWORK_INTERFACE_INPUT="$$SECS_SELECTED_INTERFACE" SECS_NETWORK_INTERFACE_ORIGIN='command line'
+	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory" NETWORK_INTERFACE="$$SECS_SELECTED_INTERFACE"
+	identity=$$(python3 -m deployment.rootless_access "$(PROVIDER_PYTHON_BASE)")
+	key=$$( { sha256sum "$$stage/requirements.lock" | cut -d' ' -f1; printf '%s\n' "$$profile" "$(PROVIDER_PYTHON_BASE)" "$(WHEELHOUSE_TOOL_SHA256)" 'https://pypi.org/simple' "$$source_url"; } | sha256sum | cut -d' ' -f1 )
+	mkdir -p "$$wheelhouse_directory/.secs-pylocks"
+	exec {metadata_fd}<"$$wheelhouse_directory/.secs-pylocks"
+	flock -x "$$metadata_fd"
+	metadata="$$wheelhouse_directory/.secs-pylocks/pylock.sdk-$$key.toml"
+	if [[ ! -e $$metadata && ! -L $$metadata ]]; then
+		secs_engine_active=1
+		$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+			--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
+			--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
+			--mount type=bind,src="$$stage/requirements.lock",dst=/input/requirements.lock,readonly \
+			--entrypoint python "$(PROVIDER_PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
+			--lock /input/requirements.lock --index-url https://pypi.org/simple --source "$$source_url" > "$$stage/generated.toml"
+		secs_engine_active=0
+		ln -T -- "$$stage/generated.toml" "$$metadata"
+	fi
+	cp --no-dereference -- "$$metadata" "$$stage/pylock.toml"
+	test -f "$$stage/pylock.toml" && test ! -L "$$stage/pylock.toml" || { printf '%s\n' 'Cached SDK projection must be a regular file.' >&2; exit 2; }
+	exec {metadata_fd}<&-
 	secs_engine_active=1
-	$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
-		--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
-		--pull never --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
-		--env PIP_NO_CACHE_DIR=1 --env TMPDIR=/wheelhouse/.tmp \
-		--mount type=bind,src="$(REPOSITORY_ROOT)/requirements/$$profile.lock",dst=/input/requirements.lock,readonly \
-		--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
-		--mount type=bind,src="$$stage",dst=/wheelhouse \
-		"$(PROVIDER_PYTHON_BASE)" python -m pip download --require-hashes \
-		--only-binary=:all: --no-deps --index-url https://pypi.org/simple \
-		--find-links /pool --find-links "$(PROVIDER_CORE_WHEEL_URL)" --dest /wheelhouse -r /input/requirements.lock
+	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
+		--mount type=bind,src="$$wheelhouse_directory",dst=/pool \
+		--mount type=bind,src="$$stage",dst=/input,readonly \
+		--entrypoint python "$(PROVIDER_PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" acquire \
+		--lock /input/pylock.toml --source-lock /input/requirements.lock --pool /pool > "$$stage/acquired.json"
 	secs_engine_active=0
-	rm -rf "$$stage/.tmp"
-	python3 tools/publish_shared_wheels.py "$$stage" "$$wheelhouse_directory"
-	rm -rf "$$stage"
-	trap - EXIT
+	printf '%s\n' 'Selected SDK artifacts are available in the shared wheelhouse.'
 
 provider/image:
 	@source tools/wheelhouse_selection.sh
