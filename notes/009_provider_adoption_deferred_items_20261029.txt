@@ -317,3 +317,16 @@ socket ConnectError retries were admitted after retirement; it did not reproduce
 the read/write case. Evidence: /tmp/secs-selector-e2e.log and
 /tmp/secs-route-witness-detailed.log on the test host, subject to temporary-file
 retention. No change to shared retry policy is selected from this evidence.
+
+Shared wheelhouse: ProArt worker qualification
+-----------------------------------------------
+
+The cache-aware shared wheelhouse migration built the ProArt GPU worker image
+offline as sha256:43ff5018c3eb8e0bf400a28130069cecc92281ca06f7b03ef06d72ced5cdbbe5.
+The build used the existing host pool and did not attach or exercise a GPU.
+It proves image construction and package installation, not GPU inference or
+scientific equivalence. The live cuda:0 worker remains pinned to its previous
+image. Qualify the migrated image with the existing GPU challenge lane and
+then update its immutable deployment pin when GPU execution is in scope.
+The localhost CPU worker was updated through the maintained combined update;
+its provider published hello, but this rollout did not run a scientific Job.
