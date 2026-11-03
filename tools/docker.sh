@@ -72,6 +72,7 @@ proxy_identity_verified=0
 docker_starting=0
 worker_pending=0
 worker_identity_verified=0
+worker_started=0
 pending_signal=0
 request_stop() {
     if [[ "$proxy_starting" == 1 || "$docker_starting" == 1 ]]; then
@@ -130,6 +131,11 @@ cleanup() {
         else
             uncertain=1
         fi
+    fi
+    # Docker record removal does not prove that a failed workload's host
+    # processes have retired. Keep the proxy and exact identities available.
+    if [[ "$status" != 0 && "$worker_started" == 1 ]]; then
+        uncertain=1
     fi
     if [[ "$uncertain" == 0 && "$proxy_pending" == 1 ]]; then
         if [[ "$proxy_identity_verified" == 1 ]]; then
@@ -303,6 +309,7 @@ if [[ "$operation" == run ]]; then
         *) printf '%s\n' 'Created worker must be stopped, use default output streams, and have restart disabled.' >&2; exit 2 ;;
     esac
     docker_starting=1
+    worker_started=1
     "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" start "${start_arguments[@]}" "$worker_cid" <&0 &
 else
     docker_starting=1
