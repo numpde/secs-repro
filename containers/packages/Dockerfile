@@ -7,11 +7,9 @@ COPY native_wheels/ /
 
 FROM ${PYTHON_BASE}
 
-ARG PACKAGES_INPUT_ID
 ARG PACKAGES_VARIANT
 
-LABEL io.secs-repro.packages.input-id="${PACKAGES_INPUT_ID}" \
-      io.secs-repro.packages.variant="${PACKAGES_VARIANT}" \
+LABEL io.secs-repro.packages.variant="${PACKAGES_VARIANT}" \
       io.secs-repro.worker.device-contract="explicit-v1" \
       io.secs-repro.worker.mock-index="1"
 
@@ -45,4 +43,6 @@ RUN --mount=type=bind,from=native_wheels,target=/opt/native-install/wheelhouse \
 ENV PROVIDER_CORE_IN_CONTAINER=1
 
 RUN useradd --no-create-home --uid 65532 secs
+ARG PACKAGES_INPUT_ID
+LABEL io.secs-repro.packages.input-id="${PACKAGES_INPUT_ID}"
 USER 65532:65532
