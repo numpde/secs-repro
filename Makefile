@@ -130,8 +130,8 @@ help:
 	'      Install an owner-only secret once; existing files are never overwritten.' \
 	'  make provider/deployment/up DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] DOCKER_CONTEXT=<local-context>' \
 	'      Start the named deployment from its saved config using existing images; no build or download.' \
-	'  make provider/deployment/update DEPLOYMENT=<name> [UPDATE_WORKER=cpu] [USE_MOCK_INDEX=yes|no] WHEELHOUSE=<directory> DOCKER_CONTEXT=<local-context>' \
-	'      Build the provider and optionally CPU worker, drain, pin their exact images, then restart.' \
+		'  make provider/deployment/update DEPLOYMENT=<name> [UPDATE_WORKER=cpu|gpu] [USE_MOCK_INDEX=yes|no] WHEELHOUSE=<directory> DOCKER_CONTEXT=<local-context>' \
+	'      Build the provider and optionally a CPU or GPU worker, drain, pin their exact images, then restart.' \
 	'      Saved worker settings and durable state remain; services may be recreated. Startup failure retains evidence.' \
 	'  make provider/deployment/status DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \
 	'  make provider/logs DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \
