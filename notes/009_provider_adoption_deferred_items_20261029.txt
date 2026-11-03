@@ -344,3 +344,8 @@ check from examining a later conflicting cached artifact before metadata network
 access begins. No SECS mixed-pool occurrence was captured. The shared publisher
 still verifies selected hashes and refuses to replace conflicting files; do not
 claim that the warm check discovers every conflict before any network access.
+Normal package and SDK acquisition now recheck the acquired pool with target
+pip and the same frozen lock before reporting success. That added cold-branch
+transition has been reviewed, but has not been executed since it was added:
+the current pools are complete, and no cached wheel was removed or redownloaded
+to manufacture a miss. The unchanged warm checks passed on both hosts.
