@@ -282,6 +282,10 @@ The uncertainty also applies to the repository's offline image builds; the
 frontend-reference image is the only Make-owned build that additionally uses
 network access. Moving its downloads out of BuildKit would narrow network
 exposure but would not, by itself, establish offline build retirement.
+The planned acquisition relay covers runtime download containers, including
+bootstrap; it does not cover the frontend-reference Dockerfile's networked
+`npm ci`. That fixture build remains a separate network owner to redesign and
+qualify before claiming the relay isolates its downloads.
 
 A separate disposable docker-container builder was tested with a pinned
 BuildKit 0.34.1 image and no builder network. After a scratch build's executor
