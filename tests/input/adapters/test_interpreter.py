@@ -19,7 +19,7 @@ _call_ids = count()
 
 
 def tool(name, arguments, identity=None):
-    identity = identity or f'call-{next(_call_ids)}'
+    identity = identity or f'auto-call-{next(_call_ids)}'
     return {'role': 'assistant', 'tool_calls': [{'id': identity, 'type': 'function',
         'function': {'name': name, 'arguments': json.dumps(arguments)}}]}
 

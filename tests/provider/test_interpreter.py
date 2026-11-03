@@ -16,7 +16,7 @@ _call_ids = count()
 
 
 def tool(name, arguments, call_id=None):
-    call_id = call_id or f'call-{next(_call_ids)}'
+    call_id = call_id or f'auto-call-{next(_call_ids)}'
     return {'role': 'assistant', 'tool_calls': [{'id': call_id, 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(arguments)}}]}
 
 def selection(*, representation_id='opaque-spectrum', formula='C2H6O', explanation='The selected representation is the proton spectrum.', processing='as_stored', evidence=None, call_id=None):

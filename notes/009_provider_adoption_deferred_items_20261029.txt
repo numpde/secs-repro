@@ -387,3 +387,11 @@ conversation. The maintained provider suite passed 121 tests on the local host
 and 121 on ProArt after the qualified wheel was acquired in each host's shared
 pool. This validates the source and test images; the existing running provider
 was not restarted or shown to use the new image by these checks.
+
+Provider-core 0.5.16 keeps generic conversations usable in a native-only
+installation without HTTP dependencies. With that release, the maintained local
+input lane passed 136 tests and all 21 semantic evidence requirements; the
+provider lane passed 121 tests. An earlier 0.5.15 input run failed to import two
+test modules because its native-only SDK pulled in httpx. ProArt's input lane
+was not run: its shared pool lacks the pinned CPU Torch wheel. No running worker
+or provider was updated by these checks.
