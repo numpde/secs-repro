@@ -121,11 +121,11 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 	source tools/wheelhouse_selection.sh
 	select_wheelhouse
 	stage=$$(mktemp -d --tmpdir="$$wheelhouse_directory" .secs-$$profile.XXXXXXXX)
-	mkdir "$$stage/check"
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	mkdir "$$stage/check"
 	cp "requirements/$$profile.lock" "$$stage/requirements.lock"
 	lock_wheelhouse -s
 	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/check" "$(PROVIDER_PYTHON_BASE)" check; then
@@ -151,7 +151,7 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 	flock -x "$$metadata_fd"
 	metadata="$$wheelhouse_directory/.secs-pylocks/pylock.sdk-$$key.toml"
 	if [[ ! -e $$metadata && ! -L $$metadata ]]; then
-		secs_engine_active=1
+		begin_retained_engine "$$stage"
 		$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
 			--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 			--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
@@ -159,12 +159,13 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 			--entrypoint python "$(PROVIDER_PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
 			--lock /input/requirements.lock --pool /pool --index-url https://pypi.org/simple --source "$$source_url" > "$$stage/generated.toml"
 		secs_engine_active=0
+		unset SECS_RETIREMENT_RECEIPT
 		ln -T -- "$$stage/generated.toml" "$$metadata"
 	fi
 	cp --no-dereference -- "$$metadata" "$$stage/pylock.toml"
 	test -f "$$stage/pylock.toml" && test ! -L "$$stage/pylock.toml" || { printf '%s\n' 'Cached SDK projection must be a regular file.' >&2; exit 2; }
 	exec {metadata_fd}<&-
-	secs_engine_active=1
+	begin_retained_engine "$$stage"
 	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--mount type=bind,src="$$wheelhouse_directory",dst=/pool \
@@ -172,6 +173,7 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 		--entrypoint python "$(PROVIDER_PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" acquire \
 		--lock /input/pylock.toml --source-lock /input/requirements.lock --pool /pool > "$$stage/acquired.json"
 	secs_engine_active=0
+	unset SECS_RETIREMENT_RECEIPT
 	mkdir "$$stage/recheck"
 	lock_wheelhouse -s
 	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/recheck" "$(PROVIDER_PYTHON_BASE)" check; then
@@ -212,6 +214,7 @@ provider/image:
 		--iidfile "$$stage/image-id" --file containers/provider/Dockerfile - > /dev/null; then
 		:
 	else
+		retain_build_receipt "$$stage"
 		printf '%s\n' 'Provider stream or image build failed; no image tag was published.' >&2
 		exit 1
 	fi
@@ -221,5 +224,3 @@ provider/image:
 	$(DOCKER) tag "$$image" "secs-repro/provider:inputs-$$id"
 	$(DOCKER) tag "$$image" "$(PROVIDER_IMAGE_TAG)"
 	printf '%s\n' "$$image"
-	rm -rf "$$stage"
-	trap - EXIT

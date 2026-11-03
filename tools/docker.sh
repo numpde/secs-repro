@@ -1,6 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+publish_retirement_receipt() {
+    if [[ -n ${SECS_RETIREMENT_RECEIPT:-} ]]; then
+        local receipt_root receipt_parent receipt_name receipt_mode
+        receipt_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P) || return 1
+        receipt_parent=${SECS_RETIREMENT_RECEIPT%/retired}
+        receipt_name=${receipt_parent#"$receipt_root"/}
+        receipt_mode=$(stat -c '%a:%u' -- "$receipt_parent" 2>/dev/null) || receipt_mode=
+        if [[ $SECS_RETIREMENT_RECEIPT != "$receipt_parent/retired" ||
+              $receipt_parent != "$receipt_root/$receipt_name" ||
+              ! $receipt_name =~ ^\.secs-retirement\.[a-zA-Z0-9_]{8}$ ||
+              ! -d $receipt_parent || -L $receipt_parent || $receipt_mode != "700:$(id -u)" ]]; then
+            printf '%s\n' 'Invalid worker retirement receipt location; retain its input stage.' >&2
+            return 1
+        fi
+        (umask 077; set -C; printf 'retired\n' > "$SECS_RETIREMENT_RECEIPT") || \
+            printf '%s\n' 'Could not publish the worker retirement receipt; retain its input stage.' >&2
+    fi
+}
+trap publish_retirement_receipt EXIT
+
 secs_docker_endpoint=$(python3 "$(dirname -- "${BASH_SOURCE[0]}")/docker_context.py" --inherited-endpoint)
 docker_cli=(env -u DOCKER_HOST -u DOCKER_CONTEXT -u DOCKER_TLS -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH
 	docker --host "$secs_docker_endpoint")
@@ -140,6 +160,7 @@ cleanup() {
     fi
     if [[ "$uncertain" == 0 ]]; then
         rm -rf -- "$scratch"
+        publish_retirement_receipt || true
     else
         printf 'Docker retirement is unconfirmed; retain %s and inspect the owned worker/proxy before retrying.\n' "$scratch" >&2
         [[ "$status" == 0 ]] && status=1

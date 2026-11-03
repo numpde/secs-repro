@@ -93,6 +93,11 @@ intentional additional tag. This maintenance assumes one canonical
 checkout per engine; other checkouts and direct Docker operations do not share
 its lock. It does not remove volumes, wheelhouses, or build cache.
 
+Build and acquisition stages are removed after their local readers or owned
+workers have retired. If interruption leaves retirement unconfirmed, the
+reported stage is retained for inspection; a Docker client exit alone does
+not establish that an interrupted stream has stopped reading its inputs.
+
 Before switching a legacy deployment, drain its obligations under the old runtime
 and preserve its evidence. Before starting this volume-backed deployment, move
 the stopped deployment's old `state`, `sources`, and `socket` directories out of

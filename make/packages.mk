@@ -39,7 +39,7 @@ packages/pylock/locate:
 	cp "requirements/packages-$$SECS_PYLOCK_VARIANT.lock" "$$stage/requirements.lock"
 	source_url=$$(python3 -c 'import sys,tomllib; p=tomllib.load(open("secs/pyproject.toml","rb")); print(p["dependency-groups"]["packages-"+sys.argv[1]][0].split(" @ ",1)[1])' "$$SECS_PYLOCK_VARIANT")
 	identity=$$(python3 -m deployment.rootless_access "$(PYTHON_BASE)")
-	secs_engine_active=1
+	begin_retained_engine "$$stage"
 	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
@@ -66,7 +66,7 @@ packages/pylock/acquire:
 	cp -- "$$SECS_PYLOCK_INPUT" "$$stage/pylock.toml"
 	cp "requirements/packages-$$SECS_PYLOCK_VARIANT.lock" "$$stage/requirements.lock"
 	identity=$$(python3 -m deployment.rootless_access "$(PYTHON_BASE)")
-	secs_engine_active=1
+	begin_retained_engine "$$stage"
 	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--mount type=bind,src="$$wheelhouse_directory",dst=/pool \
@@ -104,7 +104,7 @@ packages/locks/write:
 			cpu) group=packages-cpu ;;
 			gpu) group=packages-gpu ;;
 		esac
-		secs_engine_active=1
+		begin_retained_engine "$$stage"
 		$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
 			--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
 			--pull never --pids-limit 64 --cpus 2 --memory 1g --memory-swap 1g \
@@ -121,6 +121,7 @@ packages/locks/write:
 			--python-version "$(PACKAGES_PYTHON_VERSION)" --python-platform x86_64-manylinux_2_28 \
 			--generate-hashes --index-url https://pypi.org/simple \
 			--output-file "/output/packages-$$variant.raw"
+		begin_retained_engine "$$stage"
 		$(DOCKER) run --rm --network none --read-only --cap-drop ALL \
 			--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
 			--pull never --pids-limit 16 --cpus 1 --memory 64m --memory-swap 64m \
@@ -154,11 +155,11 @@ packages/wheelhouse:
 	source tools/wheelhouse_selection.sh
 	select_wheelhouse
 	stage=$$(mktemp -d --tmpdir="$$wheelhouse_directory" .secs-packages-inputs.XXXXXXXX)
-	mkdir "$$stage/check"
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	mkdir "$$stage/check"
 	cp "requirements/packages-$$SECS_PACKAGES_VARIANT.lock" "$$stage/requirements.lock"
 	lock_wheelhouse -s
 	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/check" "$(PYTHON_BASE)" check; then
@@ -182,7 +183,7 @@ packages/wheelhouse:
 	flock -x "$$metadata_fd"
 	metadata="$$wheelhouse_directory/.secs-pylocks/pylock.packages-$$key.toml"
 	if [[ ! -e $$metadata && ! -L $$metadata ]]; then
-		secs_engine_active=1
+		begin_retained_engine "$$stage"
 		$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
 			--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 			--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
@@ -191,12 +192,13 @@ packages/wheelhouse:
 			--lock /input/requirements.lock --pool /pool --index-url https://pypi.org/simple \
 			--source "$$source_url" --require-source antlr4-python3-runtime > "$$stage/generated.toml"
 		secs_engine_active=0
+		unset SECS_RETIREMENT_RECEIPT
 		ln -T -- "$$stage/generated.toml" "$$metadata"
 	fi
 	cp --no-dereference -- "$$metadata" "$$stage/pylock.toml"
 	test -f "$$stage/pylock.toml" && test ! -L "$$stage/pylock.toml" || { printf '%s\n' 'Cached package projection must be a regular file.' >&2; exit 2; }
 	exec {metadata_fd}<&-
-	secs_engine_active=1
+	begin_retained_engine "$$stage"
 	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--mount type=bind,src="$$wheelhouse_directory",dst=/pool \
@@ -205,6 +207,7 @@ packages/wheelhouse:
 		--lock /input/pylock.toml --source-lock /input/requirements.lock --pool /pool \
 		--require-sdist antlr4-python3-runtime > "$$stage/acquired.json"
 	secs_engine_active=0
+	unset SECS_RETIREMENT_RECEIPT
 	mkdir "$$stage/recheck"
 	lock_wheelhouse -s
 	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/recheck" "$(PYTHON_BASE)" check; then
@@ -235,11 +238,11 @@ packages/image:
 	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory"
 	lock_wheelhouse -s
 	stage=$$(mktemp -d /tmp/secs-package-inputs.XXXXXXXX)
-	mkdir "$$stage/packages" "$$stage/native"
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	mkdir "$$stage/packages" "$$stage/native"
 	cp "requirements/packages-$(VARIANT).lock" "$$stage/packages.lock"
 	cp requirements/native.lock "$$stage/native.lock"
 	stage_selected_wheels "$$wheelhouse_directory" "$$stage/packages.lock" "$$stage/packages" "$(PYTHON_BASE)" report
@@ -260,6 +263,7 @@ packages/image:
 		--iidfile "$$stage/image-id" --file containers/packages/Dockerfile - > /dev/null; then
 		:
 	else
+		retain_build_receipt "$$stage"
 		printf '%s\n' 'Package stream or image build failed; no image tag was published.' >&2
 		exit 1
 	fi
@@ -269,7 +273,5 @@ packages/image:
 	$(DOCKER) tag "$$image" "secs-repro/packages-$(VARIANT):inputs-$$id"
 	$(DOCKER) tag "$$image" "$(call packages_image_tag,$(VARIANT))"
 	printf '%s\n' "$$image"
-	rm -rf "$$stage"
-	trap - EXIT
 
 packages/images: packages/cpu/image packages/gpu/image

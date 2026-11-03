@@ -46,14 +46,15 @@ unlock_wheelhouse() {
 
 stage_selected_wheels() {
     local status
-    secs_engine_active=1
+    begin_retained_engine "$stage" || return 1
     if bash tools/stage_shared_wheels.sh "$@"; then
         secs_engine_active=0
+        unset SECS_RETIREMENT_RECEIPT
         return 0
     else
         status=$?
     fi
     # These results are emitted only after the Docker owner confirms retirement.
-    if [[ $status == 10 || $status == 11 ]]; then secs_engine_active=0; fi
+    if [[ $status == 10 || $status == 11 ]]; then secs_engine_active=0; unset SECS_RETIREMENT_RECEIPT; fi
     return "$status"
 }

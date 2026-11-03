@@ -17,7 +17,7 @@ WORKER = 'b' * 64
 class AcquisitionRetirementTests(unittest.TestCase):
     def run_case(self, *, fail_removal=False, fail_proxy=False, missing_proxy=False, missing_worker=False, invalid_stream=False, proxy_start_fails=False, bad_proxy_settings=False, hang_proxy_start=False,
                  handoff=None, hang_proxy=False, stop_signal=signal.SIGTERM):
-        with TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary, TemporaryDirectory(prefix='.secs-retirement.', dir=ROOT) as receipt_directory:
             root = Path(temporary)
             python = root / 'python3'
             python.write_text('#!/bin/bash\nif [[ $1 == -m && $2 == deployment.rootless_access ]]; then printf "0:0\\n"; else exec /usr/bin/python3 "$@"; fi\n')
@@ -59,6 +59,7 @@ esac
             calls, errors = root / 'calls', root / 'errors'
             worker_live, proxy_live = root / 'worker', root / 'proxy'
             env = os.environ | {'PATH': f'{root}:/usr/bin:/bin', 'SECS_NETWORK_INTERFACE_INPUT': 'lo',
+                'SECS_RETIREMENT_RECEIPT': str(Path(receipt_directory) / 'retired'),
                 'SECS_DOCKER_ENDPOINT': 'unix:///tmp/test-docker.sock',
                 'SECS_NETWORK_INTERFACE_ORIGIN': 'command line',
                 'SECS_BOOTSTRAP_IMAGE': 'pinned-test-image', 'CALLS': str(calls), 'PROXY': PROXY,
@@ -111,6 +112,10 @@ trap 'if [[ $BASH_COMMAND == "proxy_starting=1" ]]; then count=$((count+1)); if 
                     self.assertEqual(process.wait(timeout=10), 124 if hang_proxy or hang_proxy_start else 2 if invalid_stream or bad_proxy_settings else 1 if missing_proxy or missing_worker or proxy_start_fails else 128 + stop_signal)
                     self.assertEqual(process.stdout.read(), b'')
                     output = errors.read_text()
+                    receipt = Path(receipt_directory) / 'retired'
+                    self.assertEqual(receipt.exists(), 'Docker retirement is unconfirmed; retain ' not in output)
+                    if receipt.exists():
+                        self.assertEqual(receipt.read_text(), 'retired\n')
                     commands = calls.read_text() if calls.exists() else ''
                     for invocation in commands.splitlines():
                         self.assertTrue(invocation.startswith('unix:///tmp/test-docker.sock '), invocation)
