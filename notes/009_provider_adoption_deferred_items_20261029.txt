@@ -378,3 +378,12 @@ every nonzero worker exit also leaks resources after ordinary failures. A
 durable owner should distinguish a normally completed acquisition from an
 interrupted or unknown operation, carry that outcome to Make separately from
 the worker exit status, and preserve evidence when ownership is uncertain.
+
+Shared interpreter adoption
+---------------------------
+
+SECS source at afadac6 uses provider-core 0.5.15 for the retained tool
+conversation. The maintained provider suite passed 121 tests on the local host
+and 121 on ProArt after the qualified wheel was acquired in each host's shared
+pool. This validates the source and test images; the existing running provider
+was not restarted or shown to use the new image by these checks.
