@@ -163,6 +163,16 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 		--entrypoint python "$(PROVIDER_PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" acquire \
 		--lock /input/pylock.toml --source-lock /input/requirements.lock --pool /pool > "$$stage/acquired.json"
 	secs_engine_active=0
+	mkdir "$$stage/recheck"
+	lock_wheelhouse -s
+	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/recheck" "$(PROVIDER_PYTHON_BASE)" check; then
+		unlock_wheelhouse
+	else
+		status=$$?
+		unlock_wheelhouse
+		printf '%s\n' 'Cannot complete SDK acquisition: target pip did not select the acquired pool.' >&2
+		exit "$$status"
+	fi
 	printf '%s\n' 'Selected SDK artifacts are available in the shared wheelhouse.'
 
 provider/image:

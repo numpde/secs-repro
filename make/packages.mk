@@ -200,6 +200,16 @@ packages/wheelhouse:
 		--lock /input/pylock.toml --source-lock /input/requirements.lock --pool /pool \
 		--require-sdist antlr4-python3-runtime > "$$stage/acquired.json"
 	secs_engine_active=0
+	mkdir "$$stage/recheck"
+	lock_wheelhouse -s
+	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/recheck" "$(PYTHON_BASE)" check; then
+		unlock_wheelhouse
+	else
+		status=$$?
+		unlock_wheelhouse
+		printf '%s\n' 'Cannot complete package acquisition: target pip did not select the acquired pool.' >&2
+		exit "$$status"
+	fi
 	printf '%s\n' 'Selected package artifacts are available in the shared wheelhouse.'
 
 packages/cpu/image:
