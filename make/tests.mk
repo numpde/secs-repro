@@ -7,7 +7,7 @@
 DOCKER_MAKE_TARGETS += test/input test/input/normative test/input/adversarial test/input/scenarios \
 	test/integration test/integration/challenges test/integration/challenges/bruker \
 	test/integration/bruker-reference test/integration/jcamp-reference \
-	test/qualification-tools test/support test/reference-decoder-spike \
+	test/qualification-tools test/support test/reference-decoder-spike test/provider test/provider/diagnostics \
 	test/provider/e2e test/provider/mock-runner/e2e
 
 test/input: private INPUT_TEST_START := /tests/input
