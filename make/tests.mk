@@ -15,6 +15,8 @@ test/input/normative: private INPUT_TEST_START := /tests/input/normative
 test/input/adversarial: private INPUT_TEST_START := /tests/input/adversarial
 test/input/scenarios: private INPUT_TEST_START := /tests/input/scenarios
 test/input test/input/normative test/input/adversarial test/input/scenarios:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	cpu_packages_image=$$($(DOCKER_MAKE) --no-print-directory packages/cpu/image)
 	cache_dir=$$(realpath -e "$(MOLFORMER_CACHE)")
 	input_reference_build_id=$$(python3 tools/frontend_reference_lock.py producer-id input "$(REPOSITORY_ROOT)")
@@ -57,6 +59,8 @@ test/reference-decoder-spike:
 		--entrypoint node "$$image" --test /tests/test_reference_probe.mjs
 
 test/integration:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot run integration tests as host UID 0.' >&2
 		exit 2
@@ -93,6 +97,8 @@ test/integration:
 test/integration/bruker-reference: private REFERENCE_TEST_PATTERN := test_bruker_reference.py
 test/integration/jcamp-reference: private REFERENCE_TEST_PATTERN := test_jcamp_reference.py
 test/integration/bruker-reference test/integration/jcamp-reference:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot run a spectrum reference test as host UID 0.' >&2
 		exit 2
@@ -117,7 +123,9 @@ test/integration/bruker-reference test/integration/jcamp-reference:
 test/integration/challenges: private CHALLENGE_TEST := PublishedChallengeTest
 test/integration/challenges/bruker: private CHALLENGE_TEST := PublishedChallengeTest.test_bruker_full_index_runs_one_graph_ga_generation
 test/integration/challenges test/integration/challenges/bruker: private export CANDIDATE_GPU_INPUT = $(value CANDIDATE_GPU)
-test/integration/challenges test/integration/challenges/bruker: packages/gpu/image
+test/integration/challenges test/integration/challenges/bruker:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot run the published challenge tests as host UID 0.' >&2
 		exit 2
@@ -130,6 +138,7 @@ test/integration/challenges test/integration/challenges/bruker: packages/gpu/ima
 	checkpoint_dir=$$(realpath -e "$(CHECKPOINT_DIRECTORY)")
 	test_file=$$(realpath -e tests/challenges/test_published_challenges.py)
 	fixtures_dir=$$(realpath -e tests/fixtures/challenges)
+	$(DOCKER_MAKE) --no-print-directory packages/gpu/image >/dev/null
 	package_image=$$($(DOCKER) image inspect --format '{{.Id}}' "$(call packages_image_tag,gpu)")
 	# The pinned full bundle peaked at 42.3 GiB; 64 GiB leaves operating headroom.
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
@@ -151,6 +160,8 @@ test/integration/challenges test/integration/challenges/bruker: packages/gpu/ima
 		-P /tests/test_published_challenges.py -v "$(CHALLENGE_TEST)"
 
 test/provider test/provider/diagnostics:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@tests_dir=$$(realpath -e tests/provider)
 	provider_image=$$($(DOCKER_MAKE) --no-print-directory provider/image)
 	$(DOCKER) run --rm --init --pull never --network none --read-only \
@@ -165,6 +176,8 @@ test/provider test/provider/diagnostics:
 		-m unittest discover -v -s /workspace/tests/provider -p '$(if $(filter test/provider/diagnostics,$@),test_diagnostics.py,test_*.py)'
 
 test/qualification-tools:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot run qualification tool tests as host UID 0.' >&2
 		exit 2
@@ -188,6 +201,8 @@ test/support: provider/support/check test/qualification-tools test/input
 interpreter/model-behavior: private export LIVE_CONFIG_DIR_INPUT := $(value CONFIG_DIR)
 interpreter/model-behavior: private export LIVE_KEY_FILE_INPUT := $(value KEY_FILE)
 interpreter/model-behavior:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@test "$(HOST_UID)" -ne 0
 	test -n "$${LIVE_CONFIG_DIR_INPUT}" -a -n "$${LIVE_KEY_FILE_INPUT}" || { \
 		printf '%s\n' 'Set CONFIG_DIR to the provider configuration directory and KEY_FILE to its interpreter key. This live test makes paid model requests.' >&2; exit 2; }
@@ -213,6 +228,8 @@ interpreter/model-behavior:
 
 .PHONY: test/provider/e2e test/provider/mock-runner/e2e
 test/provider/mock-runner/e2e:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	provider_image=$$($(DOCKER_MAKE) --no-print-directory provider/image)
 	stage=$$(mktemp -d /tmp/secs-mock-runner-e2e.XXXXXXXX)
 	started=0
@@ -249,6 +266,8 @@ test/provider/mock-runner/e2e:
 # A single retained log file has no rotated files to compress. Override the
 # daemon's compression default so this bounded test logger works on either host.
 test/provider/e2e:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot run the provider scenario as host UID 0.' >&2
 		exit 2

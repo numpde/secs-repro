@@ -16,7 +16,10 @@ candidates/qualification: private export QUALIFICATION_GPU_INPUT := $(value CAND
 candidates/qualification: private export QUALIFICATION_CPUS_INPUT := $(value CANDIDATE_CPUS)
 candidates/qualification: private export QUALIFICATION_MEMORY_INPUT := $(value CANDIDATE_MEMORY)
 candidates/qualification: private export QUALIFICATION_DTYPE_INPUT := $(value CANDIDATE_DTYPE)
-candidates/qualification: checkpoint/image packages/gpu/image
+candidates/qualification:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
+	$(DOCKER_MAKE) --no-print-directory checkpoint/image packages/gpu/image >/dev/null
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Run make candidates/qualification as a non-root host user.' >&2
 		exit 2

@@ -24,6 +24,9 @@ provider/deployment/init provider/deployment/config provider/deployment/grant pr
 	@cd "$(REPOSITORY_ROOT)"
 	if [[ "$${SECS_MOCK_FLAG_SUPPLIED:-0}" == 1 ]]; then printf '%s\n' 'USE_MOCK_RUNNER is selected during init; USE_MOCK_INDEX is accepted during init, config, grant or up.' >&2; exit 2; fi
 	python3 -m deployment.provider_deployment "$(@F)" "$${DEPLOYMENT_INPUT}"
+	if [[ "$(@F)" == up ]]; then
+		$(DOCKER_MAKE) --no-print-directory packages/images/retire || printf '%s\n' 'Deployment started; image retirement was incomplete. Retry make packages/images/retire.' >&2
+	fi
 
 .PHONY: provider/credential/install provider/interpreter-key/install
 provider/credential/install provider/interpreter-key/install: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
@@ -35,7 +38,9 @@ provider/credential/install provider/interpreter-key/install:
 .PHONY: provider/deployment/update
 provider/deployment/update: private export SECS_UPDATE_WORKER := $(value UPDATE_WORKER)
 provider/deployment/update:
-	@test "$(origin DEPLOYMENT)" = command\ line || { printf '%s\n' 'DEPLOYMENT must be set on the command line.' >&2; exit 2; }
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
+	test "$(origin DEPLOYMENT)" = command\ line || { printf '%s\n' 'DEPLOYMENT must be set on the command line.' >&2; exit 2; }
 	@if [[ "$${SECS_MOCK_FLAG_SUPPLIED:-0}" == 1 ]]; then printf '%s\n' 'USE_MOCK_RUNNER is selected during init; USE_MOCK_INDEX is accepted during init, config, grant, up or update.' >&2; exit 2; fi
 	@cd "$(REPOSITORY_ROOT)"
 	case "$$SECS_UPDATE_WORKER" in ''|cpu) ;; *) printf '%s\n' 'UPDATE_WORKER must be cpu or omitted.' >&2; exit 2 ;; esac
@@ -48,6 +53,8 @@ provider/deployment/update:
 		worker_args=(--worker-image-id "$$worker_id")
 	fi
 	python3 -m deployment.provider_deployment update "$${DEPLOYMENT_INPUT}" --provider-image-id "$$image_id" "$${worker_args[@]}"
+	exec {secs_image_lock_fd}<&-
+	$(DOCKER_MAKE) --no-print-directory packages/images/retire || printf '%s\n' 'Deployment updated; image retirement was incomplete. Retry make packages/images/retire.' >&2
 
 test/deployment:
 	@cd "$(REPOSITORY_ROOT)"
@@ -63,6 +70,8 @@ test/deployment/release-asset:
 
 .PHONY: test/deployment/e2e
 test/deployment/e2e:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@cd "$(REPOSITORY_ROOT)"
 	image=$$($(DOCKER_MAKE) --no-print-directory provider/image)
 	DEPLOYMENT_TEST_IMAGE="$$image" python3 -m unittest discover -v -s tests/deployment_e2e -p 'test_*.py'
@@ -176,7 +185,9 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 	printf '%s\n' 'Selected SDK artifacts are available in the shared wheelhouse.'
 
 provider/image:
-	@source tools/wheelhouse_selection.sh
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
+	source tools/wheelhouse_selection.sh
 	select_wheelhouse
 	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory"
 	lock_wheelhouse -s

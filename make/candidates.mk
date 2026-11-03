@@ -18,6 +18,8 @@ candidates: export CANDIDATE_DTYPE_INPUT := $(if $(filter command line environme
 candidates: export CANDIDATE_DTYPE_ORIGIN := $(origin CANDIDATE_DTYPE)
 candidates: private export SECS_WORKER_TARGET := $(if $(filter command line,$(origin TARGET)),$(value TARGET),)
 candidates:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@test "$$(id -u)" -ne 0 || { \
 		printf '%s\n' 'Run make candidates as a non-root host user.' >&2; exit 2; \
 	}; \

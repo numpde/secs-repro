@@ -5,6 +5,8 @@ override MOLFORMER_LOCK := $(REPOSITORY_ROOT)/molformer.lock.toml
 DOCKER_MAKE_TARGETS += molformer/cache
 
 molformer/cache:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot materialize the MolFormer cache as host UID 0.' >&2
 		exit 2

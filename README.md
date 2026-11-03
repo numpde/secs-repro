@@ -82,6 +82,17 @@ place. A pin or startup failure reports the observed partial state for status
 and log inspection. Ordinary `up` remains a no-build operation using the saved
 image pins.
 
+After a successful `up` or `update`, the deployment attempts to retire obsolete owned
+provider and package images. Run `make packages/images/retire DOCKER_CONTEXT=<local-context>`
+to retry separately. Retirement preserves saved deployment pins, all container
+images, current input tags, other aliases and digest references; it also keeps
+images created within the last 24 hours. Image creation time is a buffer, not
+the time an existing cached image was last selected. A standalone image ID is
+not reserved across later builds: retain it with a deployment pin or an
+intentional additional tag. This maintenance assumes one canonical
+checkout per engine; other checkouts and direct Docker operations do not share
+its lock. It does not remove volumes, wheelhouses, or build cache.
+
 Before switching a legacy deployment, drain its obligations under the old runtime
 and preserve its evidence. Before starting this volume-backed deployment, move
 the stopped deployment's old `state`, `sources`, and `socket` directories out of

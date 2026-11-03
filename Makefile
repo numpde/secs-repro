@@ -134,6 +134,8 @@ help:
 	'  make provider/logs DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \
 	'  make provider/deployment/down DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \
 	'      Down drains provider, then stops the worker; state and containers remain.' \
+	'  make packages/images/retire DOCKER_CONTEXT=<local-context>' \
+	'      Retire obsolete provider images while preserving saved and container images.' \
 	'  make provider/deployment/retire-api DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>' \
 	'      Drain and retire the old private API route; preserve scientific and shared storage.' \
 	'  make test/provider/e2e DOCKER_CONTEXT=<local-context>' \
@@ -195,6 +197,8 @@ checkpoint: private export ARCHIVE_INPUT := $(if $(filter command line,$(origin 
 checkpoint: private export ARCHIVE_URL_INPUT := $(if $(filter command line,$(origin ARCHIVE_URL)),$(value ARCHIVE_URL),)
 checkpoint: private export CHECKPOINT_PRECISION_INPUT := $(if $(filter command line,$(origin CHECKPOINT_PRECISION)),$(value CHECKPOINT_PRECISION),)
 checkpoint:
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Run make checkpoint as a non-root host user.' >&2
 		exit 2

@@ -6,7 +6,12 @@ packages_image_tag = secs-repro/packages-$(1):local
 
 .PHONY: packages/base-images/pull packages/lock-image packages/locks/write
 .PHONY: packages/cpu/wheelhouse packages/gpu/wheelhouse packages/wheelhouse
-.PHONY: packages/cpu/image packages/gpu/image packages/image packages/images
+.PHONY: packages/cpu/image packages/gpu/image packages/image packages/images packages/images/retire
+DOCKER_MAKE_TARGETS += packages/images/retire
+
+packages/images/retire:
+	@cd "$(REPOSITORY_ROOT)"
+	python3 -m tools.retire_images
 .PHONY: packages/pylock/locate packages/pylock/acquire
 DOCKER_MAKE_TARGETS += packages/base-images/pull packages/lock-image packages/locks/write \
 	packages/cpu/wheelhouse packages/gpu/wheelhouse packages/wheelhouse \
@@ -219,7 +224,9 @@ packages/gpu/image:
 	@$(DOCKER_MAKE) --no-print-directory packages/image VARIANT=gpu
 
 packages/image:
-	@case "$(VARIANT)" in
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
+	case "$(VARIANT)" in
 		cpu|gpu) ;;
 		*) printf '%s\n' 'VARIANT must be cpu or gpu.' >&2; exit 2 ;;
 	esac
