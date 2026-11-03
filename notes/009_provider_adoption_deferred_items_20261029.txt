@@ -361,3 +361,10 @@ The shared owner restored the verified wheel from backup under the exclusive
 pool-directory lease with a no-overwrite hard link and verified its SHA-256.
 The backup and retained stage remain in place. Do not retry or remove the stage
 until the outstanding retirement uncertainty is resolved.
+
+The Docker wrapper removes its exact container records on ordinary cleanup,
+but that does not establish host-descendant retirement. Keeping a proxy for
+every nonzero worker exit also leaks resources after ordinary failures. A
+durable owner should distinguish a normally completed acquisition from an
+interrupted or unknown operation, carry that outcome to Make separately from
+the worker exit status, and preserve evidence when ownership is uncertain.

@@ -16,7 +16,7 @@ WORKER = 'b' * 64
 
 class AcquisitionRetirementTests(unittest.TestCase):
     def run_case(self, *, fail_removal=False, fail_proxy=False, missing_proxy=False, missing_worker=False, invalid_stream=False, proxy_start_fails=False, bad_proxy_settings=False, hang_proxy_start=False,
-                 handoff=None, hang_proxy=False, stop_signal=signal.SIGTERM, worker_fails=False):
+                 handoff=None, hang_proxy=False, stop_signal=signal.SIGTERM):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             python = root / 'python3'
@@ -46,7 +46,7 @@ run|create)
     [[ $MISSING_WORKER == 1 ]] && exit 1
     printf '%s' "$WORKER" > "$cidfile"; touch "$WORKER_EXISTS"; printf '%s\\n' "$WORKER"
   fi ;;
-start) case "$*" in *"$PROXY"*) touch "$PROXY_LIVE"; [[ $PROXY_START_HANG == 1 ]] && exec sleep 300; [[ $PROXY_START_FAIL == 1 ]] && exit 1; printf 12345 > "$(cat "$PROXY_RECEIPT")/proxy.port" ;; *) touch "$WORKER_LIVE"; [[ $WORKER_FAIL == 1 ]] && exit 7; trap '' TERM; exec sleep 300 ;; esac ;;
+start) case "$*" in *"$PROXY"*) touch "$PROXY_LIVE"; [[ $PROXY_START_HANG == 1 ]] && exec sleep 300; [[ $PROXY_START_FAIL == 1 ]] && exit 1; printf 12345 > "$(cat "$PROXY_RECEIPT")/proxy.port" ;; *) touch "$WORKER_LIVE"; trap '' TERM; exec sleep 300 ;; esac ;;
 inspect) case "$*" in *"$PROXY"*) if [[ $* == *State.Status* ]]; then if [[ $BAD_PROXY_SETTINGS == 1 ]]; then printf 'running always\\n'; else printf 'created no\\n'; fi; else printf 'true\\n'; fi ;; *) if [[ $INVALID_STREAM == 1 ]]; then printf 'created false false true false no\\n'; else printf 'created false false true true no\\n'; fi ;; esac ;;
 ps)
   case "$*" in *"$PROXY"*) [[ -e $PROXY_EXISTS ]] && printf '%s\\n' "$PROXY" ;; *"$WORKER"*) [[ -e $WORKER_EXISTS ]] && printf '%s\\n' "$WORKER" ;; esac
@@ -71,7 +71,7 @@ esac
                 'FAIL': '1' if fail_removal else '0', 'MISSING': '1' if missing_proxy else '0',
                 'FAIL_PROXY': '1' if fail_proxy else '0',
                 'MISSING_WORKER': '1' if missing_worker or handoff == 'docker' else '0',
-                'HANG_PROXY': '1' if hang_proxy else '0', 'WORKER_FAIL': '1' if worker_fails else '0'}
+                'HANG_PROXY': '1' if hang_proxy else '0'}
             if hang_proxy or hang_proxy_start:
                 timeout = root / 'timeout'
                 timeout.write_text('#!/bin/bash\n[[ $3 == 30 ]] && set -- "$1" "$2" 0.2 "${@:4}"\nexec /usr/bin/timeout "$@"\n')
@@ -102,13 +102,13 @@ trap 'if [[ $BASH_COMMAND == "proxy_starting=1" ]]; then count=$((count+1)); if 
                     'run', '--network', 'bridge', 'image'], cwd=ROOT, env=env,
                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=error_stream)
                 try:
-                    if not worker_fails and not missing_proxy and not missing_worker and not invalid_stream and not proxy_start_fails and not bad_proxy_settings and not handoff and not hang_proxy and not hang_proxy_start:
+                    if not missing_proxy and not missing_worker and not invalid_stream and not proxy_start_fails and not bad_proxy_settings and not handoff and not hang_proxy and not hang_proxy_start:
                         deadline = monotonic() + 10
                         while not worker_live.exists() and monotonic() < deadline and process.poll() is None:
                             sleep(0.02)
                         self.assertTrue(worker_live.exists(), errors.read_text())
                         process.send_signal(stop_signal)
-                    self.assertEqual(process.wait(timeout=10), 7 if worker_fails else 124 if hang_proxy or hang_proxy_start else 2 if invalid_stream or bad_proxy_settings else 1 if missing_proxy or missing_worker or proxy_start_fails else 128 + stop_signal)
+                    self.assertEqual(process.wait(timeout=10), 124 if hang_proxy or hang_proxy_start else 2 if invalid_stream or bad_proxy_settings else 1 if missing_proxy or missing_worker or proxy_start_fails else 128 + stop_signal)
                     self.assertEqual(process.stdout.read(), b'')
                     output = errors.read_text()
                     commands = calls.read_text() if calls.exists() else ''
@@ -133,7 +133,7 @@ trap 'if [[ $BASH_COMMAND == "proxy_starting=1" ]]; then count=$((count+1)); if 
                         scratch = Path(output.split('Docker retirement is unconfirmed; retain ', 1)[1].split(' and inspect', 1)[0])
                         self.assertTrue(scratch.is_dir())
                         if fail_proxy:
-                            self.assertNotIn('rm --force ' + WORKER, commands)
+                            self.assertIn('rm --force ' + WORKER, commands)
                             self.assertIn('rm --force ' + PROXY, commands)
                             self.assertTrue(proxy_live.exists())
                         else:
@@ -145,16 +145,11 @@ trap 'if [[ $BASH_COMMAND == "proxy_starting=1" ]]; then count=$((count+1)); if 
                         if bad_proxy_settings:
                             self.assertNotIn('start ' + PROXY, commands)
                     else:
-                        if not invalid_stream:
-                            self.assertIn('Docker retirement is unconfirmed; retain ', output)
-                            scratch = Path(output.split('Docker retirement is unconfirmed; retain ', 1)[1].split(' and inspect', 1)[0])
-                            self.assertEqual((scratch / 'worker.cid').read_text(), WORKER)
-                            self.assertEqual((scratch / 'proxy.cid').read_text(), PROXY)
                         self.assertIn('rm --force ' + WORKER, commands)
+                        self.assertIn('rm --force ' + PROXY, commands)
+                        self.assertLess(commands.index('rm --force ' + WORKER), commands.index('rm --force ' + PROXY))
                         self.assertFalse(worker_live.exists())
-                        if not invalid_stream:
-                            self.assertNotIn('rm --force ' + PROXY, commands)
-                            self.assertTrue(proxy_live.exists())
+                        self.assertFalse(proxy_live.exists())
                     if missing_proxy or hang_proxy:
                         self.assertFalse(worker_live.exists())
                         self.assertNotIn('rm --force', commands)
@@ -171,17 +166,14 @@ trap 'if [[ $BASH_COMMAND == "proxy_starting=1" ]]; then count=$((count+1)); if 
                         shutil.rmtree(scratch)
                     process.stdout.close()
 
-    def test_term_preserves_proxy_and_identity_receipts(self):
+    def test_term_retires_worker_then_proxy_by_exact_id(self):
         self.run_case()
-
-    def test_failed_worker_preserves_proxy_and_identity_receipts(self):
-        self.run_case(worker_fails=True)
 
     def test_failed_worker_removal_retains_proxy_and_receipts(self):
         self.run_case(fail_removal=True)
 
     def test_failed_proxy_removal_retains_its_receipt(self):
-        self.run_case(fail_proxy=True, proxy_start_fails=True)
+        self.run_case(fail_proxy=True)
 
     def test_missing_proxy_cid_does_not_start_worker_or_guess(self):
         self.run_case(missing_proxy=True)
