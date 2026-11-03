@@ -1,9 +1,9 @@
 override PROVIDER_IMAGE_TAG := secs-repro/provider:local
 override PROVIDER_PYTHON_BASE := docker.io/library/python:3.12.16-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
 override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.4/provider_core-0.5.4-py3-none-any.whl
-override WHEELHOUSE_TOOL_NAME := wheelhouse-tool-0.5.10.pyz
-override WHEELHOUSE_TOOL_SHA256 := 6f24d079d3ca58e577cbe5308b0f383c740f93d4bcb5de71b83152f2abe1920b
-override WHEELHOUSE_TOOL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.10/$(WHEELHOUSE_TOOL_NAME)
+override WHEELHOUSE_TOOL_NAME := wheelhouse-tool-0.5.11.pyz
+override WHEELHOUSE_TOOL_SHA256 := 0c2dad12c9f54f03e144b6c859ba3e25a3fdf7a13fe2d18e01bf7d5532e5127f
+override WHEELHOUSE_TOOL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.11/$(WHEELHOUSE_TOOL_NAME)
 
 # Initialization is a host filesystem operation, not a build or API operation.
 # Pass the literal name through the environment to keep shell syntax out of it.
