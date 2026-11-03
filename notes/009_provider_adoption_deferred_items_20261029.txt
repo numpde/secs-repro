@@ -354,8 +354,9 @@ provider-core 0.5.4 wheel aside with a verified backup. The normal provider
 wheelhouse target detected the missing wheel but its download request failed;
 the post-acquisition check did not run. The client exited with status 2 and
 retained /home/ra/Downloads/wheelhouse/.secs-provider.qyRethbO because worker
-retirement is unconfirmed. No worker CID or host PID receipt was captured;
-absence of a matching Docker container does not establish host retirement.
+retirement is unconfirmed. The wrapper captured a worker CID transiently but
+did not retain its receipt; no host PID receipt survives. Absence of a matching
+Docker container does not establish host retirement.
 The shared owner restored the verified wheel from backup under the exclusive
 pool-directory lease with a no-overwrite hard link and verified its SHA-256.
 The backup and retained stage remain in place. Do not retry or remove the stage
