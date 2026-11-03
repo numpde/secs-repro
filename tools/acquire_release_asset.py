@@ -53,7 +53,9 @@ def network_failure(error):
     if isinstance(error, OSError):
         if match := re.match(r"^Tunnel connection failed: ([0-9]{3})(?:\s|$)", str(error)):
             status = int(match[1])
-            return status in (408, 429, 500, 502, 503, 504), f"proxy tunnel HTTP {status}", None
+            if status in (429, 503):
+                return False, f"proxy tunnel HTTP {status}; retry delay unavailable", None
+            return status in (408, 500, 502, 504), f"proxy tunnel HTTP {status}", None
         return error.errno in (errno.ECONNRESET, errno.ECONNREFUSED, errno.ETIMEDOUT, errno.ECONNABORTED, errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EPIPE), f"network error (errno {error.errno})" if isinstance(error.errno, int) else "network error", None
     return False, "network request failed", None
 

@@ -175,6 +175,20 @@ class ReleaseAssetTests(TestCase):
             self.assertEqual(fetch.call_count, 2)
             sleep.assert_called_once_with(1)
 
+    def test_proxy_429_and_503_are_terminal_without_retry_after_headers(self):
+        for status in (429, 503):
+            with self.subTest(status=status), TemporaryDirectory() as directory:
+                args = ["asset", "acquire", directory, "tool.pyz", "0" * 64, "https://example.invalid/tool.pyz"]
+                error = urllib.error.URLError(OSError(f"Tunnel connection failed: {status} private"))
+                with mock.patch.object(sys, "argv", args), mock.patch.object(acquire_release_asset, "open_url", side_effect=error) as fetch, \
+                        mock.patch.object(acquire_release_asset.time, "sleep") as sleep, redirect_stderr(io.StringIO()) as stderr:
+                    self.assertEqual(acquire_release_asset.main(), 1)
+                self.assertEqual(fetch.call_count, 1)
+                sleep.assert_not_called()
+                self.assertIn(f"proxy tunnel HTTP {status}", stderr.getvalue())
+                self.assertIn("retry delay unavailable", stderr.getvalue())
+                self.assertNotIn("private", stderr.getvalue())
+
     def test_simultaneous_acquisition_downloads_once(self):
         with TemporaryDirectory() as directory:
             pool = Path(directory)
