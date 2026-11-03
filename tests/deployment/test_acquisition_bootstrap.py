@@ -2,6 +2,7 @@
 
 import json
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import tarfile
@@ -73,5 +74,11 @@ class AcquisitionBootstrapTests(TestCase):
                     with self.assertRaises(OSError):
                         bootstrap.install(archive_path, record, entries, archive_path.name)
                 bootstrap.verify(snapshot, old_entries)
-                bootstrap.install(archive_path, record, entries, archive_path.name)
+                previous_umask = os.umask(0o077)
+                try:
+                    bootstrap.install(archive_path, record, entries, archive_path.name)
+                finally:
+                    os.umask(previous_umask)
                 bootstrap.verify(snapshot, entries)
+                for directory in (snapshot, *(path for path in snapshot.rglob('*') if path.is_dir())):
+                    self.assertEqual(directory.stat().st_mode & 0o777, 0o755)

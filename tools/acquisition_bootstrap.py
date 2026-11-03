@@ -120,9 +120,14 @@ def install(archive_path, record, entries, name):
             check_bytes(member.name, contents[member.name], entries[member.name])
     stage = Path(tempfile.mkdtemp(prefix='.acquisition.', dir=BUNDLE.parent))
     try:
+        stage.chmod(0o755)
         for name, data in contents.items():
             path = stage / name
             path.parent.mkdir(parents=True, exist_ok=True)
+            parent = path.parent
+            while parent != stage:
+                parent.chmod(0o755)
+                parent = parent.parent
             path.write_bytes(data)
             path.chmod(0o644)
         verify(stage, entries)
