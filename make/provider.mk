@@ -42,13 +42,13 @@ provider/deployment/update:
 	test "$(origin DEPLOYMENT)" = command\ line || { printf '%s\n' 'DEPLOYMENT must be set on the command line.' >&2; exit 2; }
 	@if [[ "$${SECS_MOCK_FLAG_SUPPLIED:-0}" == 1 ]]; then printf '%s\n' 'USE_MOCK_RUNNER is selected during init; USE_MOCK_INDEX is accepted during init, config, grant, up or update.' >&2; exit 2; fi
 	@cd "$(REPOSITORY_ROOT)"
-	case "$$SECS_UPDATE_WORKER" in ''|cpu|gpu) ;; *) printf '%s\n' 'UPDATE_WORKER must be cpu, gpu, or omitted.' >&2; exit 2 ;; esac
+	case "$$SECS_UPDATE_WORKER" in ''|cpu) ;; *) printf '%s\n' 'UPDATE_WORKER must be cpu or omitted.' >&2; exit 2 ;; esac
 	source tools/wheelhouse_selection.sh
 	select_wheelhouse
 	image_id=$$($(DOCKER_MAKE) --no-print-directory provider/image WHEELHOUSE="$$wheelhouse_directory")
 	worker_args=()
-	if [[ -n $$SECS_UPDATE_WORKER ]]; then
-		worker_id=$$($(DOCKER_MAKE) --no-print-directory "packages/$$SECS_UPDATE_WORKER/image" WHEELHOUSE="$$wheelhouse_directory")
+	if [[ $$SECS_UPDATE_WORKER == cpu ]]; then
+		worker_id=$$($(DOCKER_MAKE) --no-print-directory packages/cpu/image WHEELHOUSE="$$wheelhouse_directory")
 		worker_args=(--worker-image-id "$$worker_id")
 	fi
 	python3 -m deployment.provider_deployment update "$${DEPLOYMENT_INPUT}" --provider-image-id "$$image_id" "$${worker_args[@]}"
