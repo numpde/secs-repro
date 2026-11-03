@@ -346,8 +346,8 @@ still verifies selected hashes and refuses to replace conflicting files; do not
 claim that the warm check discovers every conflict before any network access.
 Normal package and SDK acquisition now recheck the acquired pool with target
 pip and the same frozen lock before reporting success. That added cold-branch
-transition has been reviewed, but has not completed since it was added. The
-unchanged warm checks passed on both hosts.
+transition passed a deliberately created local cold witness described below.
+The unchanged warm checks passed on both hosts.
 
 On 2026-11-03, an authorized local cold witness deliberately moved the pinned
 provider-core 0.5.4 wheel aside with a verified backup. The normal provider
@@ -361,6 +361,16 @@ The shared owner restored the verified wheel from backup under the exclusive
 pool-directory lease with a no-overwrite hard link and verified its SHA-256.
 The backup and retained stage remain in place. Do not retry or remove the stage
 until the outstanding retirement uncertainty is resolved.
+
+In a later authorized local witness, the 207,324-byte provider-core 0.5.4
+wheel was removed from the active pool under the acquisition and directory
+locks. The maintained provider/wheelhouse target, using the science engine and
+selected WLAN, reacquired it and completed the post-acquisition selection with
+exit status 0. Its restored SHA-256 is
+7a3d8d6b44e39a3fac84d6abecb0a08f84a4c881d15f8d5d2e6dd9e36472beeb.
+The earlier stage and backup were left untouched. No matching container was
+visible afterward, but the successful wrapper did not retain a CID or host PID;
+this does not independently prove host-descendant retirement.
 
 The Docker wrapper removes its exact container records on ordinary cleanup,
 but that does not establish host-descendant retirement. Keeping a proxy for
