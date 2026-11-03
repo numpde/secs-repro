@@ -111,6 +111,8 @@ help:
 	'      Acquire the pinned shared wheelhouse tool into the selected pool.' \
 	'  make test/deployment/e2e DOCKER_CONTEXT=<local-context>' \
 	'      Test offline Compose start/stop/restart and retained state using disposable services.' \
+	'  make test/deployment/acquisition-network DOCKER_CONTEXT=<local-context>' \
+	'      Test the isolated acquisition route using an offline local origin.' \
 	'  make test/provider/mock-runner/e2e DOCKER_CONTEXT=<local-context>' \
 	'      Test the mock runner and durable delivery handoff without model files.' \
 	'  make provider/deployment/init DEPLOYMENT=<name> [TARGET=cpu|gpu] [USE_MOCK_INDEX=yes|no] [USE_MOCK_RUNNER=yes|no]' \

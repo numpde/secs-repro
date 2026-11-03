@@ -42,10 +42,18 @@ class BootstrapSnapshotTests(TestCase):
                     (snapshot / 'unexpected.py').write_text('unexpected')
                     with self.assertRaisesRegex(ValueError, 'exactly the release files'):
                         bootstrap.main()
+                    with mock.patch.object(sys, 'argv', ['bootstrap_snapshot', '--wheel', str(wheel)]):
+                        with self.assertRaisesRegex(ValueError, 'exactly the release files'):
+                            bootstrap.main()
                     (snapshot / 'unexpected.py').unlink()
                     (snapshot / 'bound_http_proxy.py').write_bytes(b'tampered')
                     with self.assertRaisesRegex(ValueError, 'does not match'):
                         bootstrap.main()
+                    (snapshot / 'bound_http_proxy.py').unlink()
+                    (snapshot / 'bound_http_proxy.py').symlink_to(wheel)
+                    with mock.patch.object(sys, 'argv', ['bootstrap_snapshot', '--wheel', str(wheel)]):
+                        with self.assertRaisesRegex(ValueError, 'not a symlink'):
+                            bootstrap.main()
                 wheel.write_bytes(b'tampered')
                 with mock.patch.object(sys, 'argv', ['bootstrap_snapshot', '--wheel', str(wheel)]):
                     with self.assertRaisesRegex(ValueError, 'wheel does not match'):

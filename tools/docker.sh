@@ -74,6 +74,10 @@ wlan_interface=''
 if [[ "$offline" == 0 && "$SECS_SELECTED_INTERFACE" != system ]]; then
     wlan_interface=$SECS_SELECTED_INTERFACE
 fi
+isolated_acquisition=0
+if [[ "$operation" == run && "$offline" == 0 ]]; then
+    isolated_acquisition=1
+fi
 if [[ "${arguments[$subcommand_index]}" == run ]]; then
     for argument in "${arguments[@]}"; do
         if [[ $argument == --cidfile || $argument == --cidfile=* ]]; then
@@ -85,16 +89,23 @@ fi
 
 scratch="$(realpath -e -- "$(mktemp -d)")"
 proxy_pid=''
+relay_pid=''
 docker_pid=''
+proxy_cid=''
+relay_cid=''
+worker_cid=''
 proxy_starting=0
+relay_starting=0
 proxy_pending=0
+relay_pending=0
 proxy_identity_verified=0
+relay_identity_verified=0
 docker_starting=0
 worker_pending=0
 worker_identity_verified=0
 pending_signal=0
 request_stop() {
-    if [[ "$proxy_starting" == 1 || "$docker_starting" == 1 ]]; then
+    if [[ "$proxy_starting" == 1 || "$relay_starting" == 1 || "$docker_starting" == 1 ]]; then
         [[ "$pending_signal" == 0 ]] && pending_signal=$1
         return 0
     else
@@ -110,8 +121,9 @@ read_cid() {
     printf '%s' "$cid"
 }
 retire_container() {
-    local cid observed
+    local cid observed expected=$2
     cid=$(read_cid "$1") || return 1
+    [[ "$cid" == "$expected" ]] || return 1
     local -a engine=("${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}")
     observed=$(timeout --signal=TERM --kill-after=2 10 "${engine[@]}" ps --all --no-trunc --quiet --filter "id=$cid") || return 1
     [[ -z "$observed" || "$observed" == "$cid" ]] || return 1
@@ -125,7 +137,7 @@ cleanup() {
     local status=$?
     local uncertain=0
     trap - EXIT HUP INT TERM
-    if [[ "$proxy_starting" == 1 || "$docker_starting" == 1 ]]; then
+    if [[ "$proxy_starting" == 1 || "$relay_starting" == 1 || "$docker_starting" == 1 ]]; then
         uncertain=1
     fi
     if [[ -n "$docker_pid" ]]; then
@@ -140,10 +152,16 @@ cleanup() {
         done
         wait "$proxy_pid" 2>/dev/null || true
     fi
+    if [[ -n "$relay_pid" ]]; then
+        for child in $(jobs -pr); do
+            [[ "$child" == "$relay_pid" ]] && kill -TERM "$relay_pid" 2>/dev/null || true
+        done
+        wait "$relay_pid" 2>/dev/null || true
+    fi
     if [[ "$worker_pending" == 1 ]]; then
         if [[ "$operation" == run ]]; then
             if [[ "$worker_identity_verified" == 1 ]]; then
-                retire_container worker || uncertain=1
+                retire_container worker "$worker_cid" || uncertain=1
             else
                 uncertain=1
             fi
@@ -151,9 +169,16 @@ cleanup() {
             uncertain=1
         fi
     fi
+    if [[ "$uncertain" == 0 && "$relay_pending" == 1 ]]; then
+        if [[ "$relay_identity_verified" == 1 ]]; then
+            retire_container relay "$relay_cid" || uncertain=1
+        else
+            uncertain=1
+        fi
+    fi
     if [[ "$uncertain" == 0 && "$proxy_pending" == 1 ]]; then
         if [[ "$proxy_identity_verified" == 1 ]]; then
-            retire_container proxy || uncertain=1
+            retire_container proxy "$proxy_cid" || uncertain=1
         else
             uncertain=1
         fi
@@ -172,8 +197,16 @@ trap 'request_stop 129' HUP
 trap 'request_stop 130' INT
 trap 'request_stop 143' TERM
 
-readonly ready_file="$scratch/proxy.port"
-if [[ -n "$wlan_interface" ]]; then
+ready_file="$scratch/gateway-ready/proxy.port"
+proxy_listener=(--port 0 --ready-file /ready/proxy.port)
+proxy_interface=$wlan_interface
+if [[ "$isolated_acquisition" == 1 ]]; then
+    proxy_interface=$SECS_SELECTED_INTERFACE
+    ready_file="$scratch/gateway-ready/gateway.ready"
+    proxy_listener=(--unix-socket /gateway/proxy.sock --ready-file /ready/gateway.ready)
+fi
+if [[ -n "$wlan_interface" || "$isolated_acquisition" == 1 ]]; then
+mkdir -m 700 "$scratch/gateway" "$scratch/gateway-ready" "$scratch/relay-ready"
 bootstrap_dir="$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/bootstrap")"
 python3 "$(dirname -- "${BASH_SOURCE[0]}")/bootstrap_snapshot.py"
 repository_dir="$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/..")"
@@ -191,10 +224,11 @@ timeout --signal=TERM --kill-after=2 30 "${docker_cli[@]}" "${arguments[@]:0:$su
     --log-driver local --log-opt max-size=1m --log-opt max-file=2 \
     --env PROVIDER_CORE_IN_CONTAINER=1 \
     --mount "type=bind,src=$bootstrap_dir,dst=/bootstrap,readonly" \
-    --mount "type=bind,src=$scratch,dst=/receipt" "${resolver_mount[@]}" \
+    --mount "type=bind,src=$scratch/gateway,dst=/gateway" \
+    --mount "type=bind,src=$scratch/gateway-ready,dst=/ready" "${resolver_mount[@]}" \
     --entrypoint python "${SECS_BOOTSTRAP_IMAGE:?Pinned bootstrap image is required}" \
     -I -B -c 'import sys; sys.path.insert(0, "/bootstrap"); from provider_core.bound_http_proxy import main; main()' \
-    --interface "$wlan_interface" --port 0 --ready-file /receipt/proxy.port >"$scratch/proxy.output" &
+    --interface "$proxy_interface" "${proxy_listener[@]}" >"$scratch/proxy.output" &
 proxy_pid=$!
 proxy_starting=0
 [[ "$pending_signal" == 0 ]] || exit "$pending_signal"
@@ -217,6 +251,13 @@ proxy_settings=$(timeout --signal=TERM --kill-after=2 10 "${docker_cli[@]}" "${a
 [[ "$proxy_settings" == 'created no' ]] || {
     printf '%s\n' 'Created proxy must be stopped with restart disabled.' >&2; exit 2;
 }
+if [[ "$isolated_acquisition" == 1 ]]; then
+    gateway_network=$(timeout --signal=TERM --kill-after=2 10 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" inspect \
+        --format '{{.HostConfig.NetworkMode}}' "$proxy_cid") || {
+        printf '%s\n' 'Cannot inspect the gateway network.' >&2; exit 2;
+    }
+    [[ "$gateway_network" == host ]] || { printf '%s\n' 'Gateway did not receive host networking.' >&2; exit 2; }
+fi
 proxy_starting=1
 timeout --signal=TERM --kill-after=2 30 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" start "$proxy_cid" >/dev/null &
 proxy_pid=$!
@@ -242,25 +283,82 @@ proxy_running=$(timeout --signal=TERM --kill-after=2 10 "${docker_cli[@]}" "${ar
     printf '%s\n' 'Cannot inspect the proxy container.' >&2; exit 2;
 }
 [[ "$proxy_running" == true ]] || { printf '%s\n' 'Proxy container stopped before acquisition.' >&2; exit 2; }
-proxy_port=$(<"$ready_file")
-[[ "$proxy_port" =~ ^[0-9]{1,5}$ ]] && (( 10#$proxy_port > 0 && 10#$proxy_port <= 65535 )) || {
+if [[ "$isolated_acquisition" == 1 ]]; then
+    [[ -f "$ready_file" && ! -L "$ready_file" && $(stat -c %s "$ready_file") -le 128 ]] && \
+        cmp -s "$ready_file" <(printf '/gateway/proxy.sock\n') && \
+        [[ -S "$scratch/gateway/proxy.sock" && ! -L "$scratch/gateway/proxy.sock" && $(stat -c %a "$scratch/gateway/proxy.sock") == 600 ]] || {
+        printf '%s\n' 'Gateway socket readiness is invalid.' >&2; exit 2;
+    }
+    relay_starting=1
+    relay_pending=1
+    timeout --signal=TERM --kill-after=2 30 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" create --pull never \
+        --cidfile "$scratch/relay.cid" --network none --read-only \
+        --user "$proxy_user" --cap-drop ALL --security-opt no-new-privileges:true \
+        --pids-limit 64 --cpus 1 --memory 128m --memory-swap 128m \
+        --env PROVIDER_CORE_IN_CONTAINER=1 \
+        --mount "type=bind,src=$bootstrap_dir,dst=/bootstrap,readonly" \
+        --mount "type=bind,src=$scratch/gateway,dst=/gateway,readonly" \
+        --mount "type=bind,src=$scratch/relay-ready,dst=/ready" \
+        --entrypoint python "${SECS_BOOTSTRAP_IMAGE:?Pinned bootstrap image is required}" \
+        -I -B -c 'import sys; sys.path.insert(0, "/bootstrap"); from provider_core.bound_http_proxy import main; main()' \
+        --relay-socket /gateway/proxy.sock --port 0 --ready-file /ready/relay.port >"$scratch/relay.output" &
+    relay_pid=$!
+    relay_starting=0
+    [[ "$pending_signal" == 0 ]] || exit "$pending_signal"
+    if wait "$relay_pid"; then relay_pid=''; else status=$?; relay_pid=''; exit "$status"; fi
+    relay_cid=$(read_cid relay) || { printf '%s\n' 'Cannot verify the relay container identity.' >&2; exit 2; }
+    cmp -s "$scratch/relay.output" <(printf '%s\n' "$relay_cid") || {
+        printf '%s\n' 'Docker create output does not match its relay CID receipt.' >&2; exit 2;
+    }
+    relay_identity_verified=1
+    relay_settings=$(timeout --signal=TERM --kill-after=2 10 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" inspect \
+        --format '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}} {{.HostConfig.NetworkMode}}' "$relay_cid") || {
+        printf '%s\n' 'Cannot inspect the created relay container.' >&2; exit 2;
+    }
+    [[ "$relay_settings" == 'created no none' ]] || {
+        printf '%s\n' 'Created relay must be stopped, networkless and have restart disabled.' >&2; exit 2;
+    }
+    relay_starting=1
+    timeout --signal=TERM --kill-after=2 30 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" start "$relay_cid" >/dev/null &
+    relay_pid=$!
+    relay_starting=0
+    [[ "$pending_signal" == 0 ]] || exit "$pending_signal"
+    if wait "$relay_pid"; then relay_pid=''; else status=$?; relay_pid=''; exit "$status"; fi
+    for _ in {1..100}; do [[ -s "$scratch/relay-ready/relay.port" ]] && break; sleep 0.05; done
+    relay_running=$(timeout --signal=TERM --kill-after=2 10 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" inspect --format '{{.State.Running}}' "$relay_cid") || {
+        printf '%s\n' 'Cannot inspect the relay container.' >&2; exit 2;
+    }
+    [[ "$relay_running" == true && -f "$scratch/relay-ready/relay.port" && ! -L "$scratch/relay-ready/relay.port" && $(stat -c %s "$scratch/relay-ready/relay.port") -le 6 ]] || {
+        printf '%s\n' 'Relay stopped or did not publish readiness.' >&2; exit 2;
+    }
+    proxy_port=$(<"$scratch/relay-ready/relay.port")
+    port_file="$scratch/relay-ready/relay.port"
+else
+    proxy_port=$(<"$ready_file")
+    port_file=$ready_file
+fi
+[[ "$proxy_port" =~ ^[0-9]{1,5}$ ]] && (( 10#$proxy_port > 0 && 10#$proxy_port <= 65535 )) && \
+    cmp -s "$port_file" <(printf '%s\n' "$proxy_port") || {
     printf '%s\n' 'Proxy published an invalid port.' >&2; exit 2;
 }
 readonly proxy_url="http://127.0.0.1:$proxy_port"
 
-# The proxy is loopback-only. Host networking lets an already-networked build
-# or download container reach it without exposing a proxy listener to the LAN.
-if [[ "${arguments[$network_index]}" == --network ]]; then
-    arguments[$((network_index + 1))]=host
+if [[ "$isolated_acquisition" == 1 ]]; then
+    selected_network="container:$relay_cid"
 else
-    arguments[$network_index]=--network=host
+    selected_network=host
+fi
+if [[ "${arguments[$network_index]}" == --network ]]; then
+    arguments[$((network_index + 1))]=$selected_network
+else
+    arguments[$network_index]="--network=$selected_network"
 fi
 fi
 
 injected=()
 if [[ "${arguments[$subcommand_index]}" == run ]]; then
     injected=(--cidfile "$scratch/worker.cid" --pull never)
-    if [[ -n "$wlan_interface" ]]; then
+    if [[ -n "$wlan_interface" || "$isolated_acquisition" == 1 ]]; then
         injected+=(
         --env "HTTP_PROXY=$proxy_url"
         --env "HTTPS_PROXY=$proxy_url"
@@ -323,6 +421,15 @@ if [[ "$operation" == run ]]; then
         'created false false true true no') ;;
         *) printf '%s\n' 'Created worker must be stopped, use default output streams, and have restart disabled.' >&2; exit 2 ;;
     esac
+    if [[ "$isolated_acquisition" == 1 ]]; then
+        worker_network=$(timeout --signal=TERM --kill-after=2 10 "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" inspect \
+            --format '{{.HostConfig.NetworkMode}}' "$worker_cid") || {
+            printf '%s\n' 'Cannot inspect the acquisition worker network.' >&2; exit 2;
+        }
+        [[ "$worker_network" == "container:$relay_cid" ]] || {
+            printf '%s\n' 'Acquisition worker did not join its relay namespace.' >&2; exit 2;
+        }
+    fi
     docker_starting=1
     "${docker_cli[@]}" "${arguments[@]:0:$subcommand_index}" start "${start_arguments[@]}" "$worker_cid" <&0 &
 else
@@ -335,7 +442,7 @@ docker_starting=0
 [[ "$pending_signal" == 0 ]] || exit "$pending_signal"
 if wait "$docker_pid"; then
     docker_pid=''
-    worker_pending=0
+    if [[ "$operation" != run ]]; then worker_pending=0; fi
 else
     status=$?
     docker_pid=''

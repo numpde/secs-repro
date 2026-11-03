@@ -1,6 +1,6 @@
 override PROVIDER_IMAGE_TAG := secs-repro/provider:local
 override PROVIDER_PYTHON_BASE := docker.io/library/python:3.12.16-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
-override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.16/provider_core-0.5.16-py3-none-any.whl
+override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.17/provider_core-0.5.17-py3-none-any.whl
 override WHEELHOUSE_TOOL_NAME := wheelhouse-tool-0.5.14.pyz
 override WHEELHOUSE_TOOL_SHA256 := 9d8cd59c0aeffd61ce462fa81f2951a24fb8a8749a1332d5f87842b4c095d656
 override WHEELHOUSE_TOOL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.14/$(WHEELHOUSE_TOOL_NAME)
@@ -9,10 +9,10 @@ override WHEELHOUSE_TOOL_URL := https://github.com/numpde/nmr-provider-tools/rel
 # Pass the literal name through the environment to keep shell syntax out of it.
 .PHONY: provider/deployment/init provider/deployment/config provider/deployment/grant provider/deployment/up
 .PHONY: provider/deployment/status provider/deployment/down provider/deployment/update provider/deployment/retire-api provider/logs test/deployment
-.PHONY: test/deployment/e2e test/deployment/wheelhouse test/deployment/release-asset
+.PHONY: test/deployment/e2e test/deployment/acquisition-network test/deployment/wheelhouse test/deployment/release-asset
 DOCKER_MAKE_TARGETS += provider/deployment/config provider/deployment/grant provider/deployment/up provider/deployment/status \
 	provider/deployment/down provider/deployment/retire-api provider/logs test/deployment/e2e
-DOCKER_MAKE_TARGETS += provider/deployment/update
+DOCKER_MAKE_TARGETS += provider/deployment/update test/deployment/acquisition-network
 provider/deployment/init provider/deployment/config provider/deployment/grant provider/deployment/up provider/deployment/update provider/deployment/status provider/deployment/down provider/deployment/retire-api provider/logs: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
 provider/deployment/init: private export SECS_WORKER_TARGET := $(if $(filter command line,$(origin TARGET)),$(value TARGET),)
 provider/deployment/init: private export SECS_USE_MOCK_INDEX := $(if $(filter command line,$(origin USE_MOCK_INDEX)),$(value USE_MOCK_INDEX),0)
@@ -69,6 +69,10 @@ test/deployment/release-asset:
 	python3 -m unittest discover -v -s tests/deployment -p 'test_release_asset.py'
 
 .PHONY: test/deployment/e2e
+test/deployment/acquisition-network:
+	@cd "$(REPOSITORY_ROOT)"
+	DEPLOYMENT_TEST_IMAGE="$(PYTHON_BASE)" python3 -B -m unittest discover -v -s tests/deployment_acquisition -p test_acquisition_network.py
+
 test/deployment/e2e:
 	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
 	hold_image_operation_lock "$(REPOSITORY_ROOT)"

@@ -25,6 +25,11 @@ def main():
     parser.add_argument('--wheel', type=Path, help='regenerate from this exact release wheel')
     args = parser.parse_args()
     record = json.loads(RECORD.read_text())
+    if (SNAPSHOT.parent.parent.is_symlink() or SNAPSHOT.parent.is_symlink() or SNAPSHOT.is_symlink()
+            or (SNAPSHOT.exists() and not SNAPSHOT.is_dir())):
+        raise ValueError('SDK bootstrap must be a directory without a symlink')
+    if SNAPSHOT.exists() and {path.name for path in SNAPSHOT.iterdir()} - set(MEMBERS):
+        raise ValueError('SDK bootstrap directory must contain exactly the release files')
     if args.wheel:
         wheel = args.wheel.read_bytes()
         expected = record['files'].get(args.wheel.name)
@@ -40,6 +45,10 @@ def main():
                 sources[name] = archive.read(member)
                 verify_source(name, sources[name], record)
         SNAPSHOT.mkdir(parents=True, exist_ok=True)
+        for name in sources:
+            target = SNAPSHOT / name
+            if target.is_symlink() or (target.exists() and not target.is_file()):
+                raise ValueError(f'SDK bootstrap file must be regular and not a symlink: {name}')
         for name, source in sources.items():
             (SNAPSHOT / name).write_bytes(source)
     else:

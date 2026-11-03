@@ -2,8 +2,8 @@
 """Route acquisition HTTP/CONNECT traffic through one explicit interface.
 
 DNS and TCP sockets bind the selected device without an unbound resolver
-fallback. This IPv4-only loopback proxy supplies cooperative routing; the
-acquisition launcher owns process lifetime and container resources.
+fallback. A private Unix listener can serve a loopback relay in a networkless
+worker namespace. The acquisition launcher owns that isolation and lifetime.
 """
 
 # Adapted from the SECS interface-bound proxy so acquisition uses the same
@@ -258,7 +258,8 @@ def _query_ipv4(
     question = _dns_name(host) + struct.pack("!HH", 1, 1)
     request = struct.pack("!HHHHHH", transaction, 0x0100, 1, 0, 0, 0) + question
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as resolver:
-        resolver.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode() + b"\0")
+        if interface != "system":
+            resolver.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode() + b"\0")
         resolver.settimeout(_remaining(query_deadline, "DNS query"))
         resolver.connect((server, 53))
         resolver.settimeout(_remaining(query_deadline, "DNS query"))
@@ -361,7 +362,8 @@ def connect_bound(host: str, port: int, interface: str) -> socket.socket:
         _remaining(deadline, "connection")
         outbound = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            outbound.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode() + b"\0")
+            if interface != "system":
+                outbound.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, interface.encode() + b"\0")
             outbound.settimeout(_remaining(deadline, "connection"))
             outbound.connect((address, port))
             # A late successful connect still owns an open socket; reject it
@@ -464,6 +466,38 @@ class ProxyHandler(socketserver.BaseRequestHandler):
             self.report_failure(phase, error)
 
 
+class ConnectionAdmission:
+    """Bound active connections while allowing the owner to change the limit."""
+
+    def __init__(self, limit):
+        self._lock = threading.Lock()
+        self._active = 0
+        self.set_limit(limit)
+
+    def set_limit(self, limit):
+        if not (type(limit) is int and 0 < limit):
+            raise ValueError("Proxy connection capacity must be a positive integer.")
+        with self._lock:
+            self._limit = limit
+
+    def acquire(self):
+        with self._lock:
+            if self._active >= self._limit:
+                return False
+            self._active += 1
+            return True
+
+    def load(self):
+        with self._lock:
+            return self._active, self._limit
+
+    def release(self):
+        with self._lock:
+            if self._active == 0:
+                raise RuntimeError("Proxy connection capacity was released without an owner.")
+            self._active -= 1
+
+
 class ProxyServer(socketserver.ThreadingTCPServer):
     """Reserve finite worker capacity before allocating a request thread."""
 
@@ -474,7 +508,7 @@ class ProxyServer(socketserver.ThreadingTCPServer):
     def __init__(self, address: tuple[str, int], interface: str):
         """Own the selected device and the bounded worker slots for this listener."""
         self.outbound_interface = interface
-        self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        self._slots = ConnectionAdmission(MAX_CONNECTIONS)
         super().__init__(address, self.request_handler)
 
     def process_request(self, request: socket.socket, client_address: tuple[str, int]) -> None:
@@ -482,9 +516,13 @@ class ProxyServer(socketserver.ThreadingTCPServer):
         # Admission precedes ThreadingMixIn's allocation. A failed thread start
         # keeps ownership here, while a started worker releases in its finally.
         # https://github.com/numpde/magnet-deploy/blob/2d4ee50b0359e71900fce9289ea01f46d0f41249/scripts/image-build-proxy.py#L343-L365
-        if not self._slots.acquire(blocking=False):
+        if not self._slots.acquire():
             self.shutdown_request(request)
             return
+        self.start_reserved_request(request, client_address)
+
+    def start_reserved_request(self, request, client_address):
+        """Transfer an already reserved slot to a worker, or release it on failure."""
         try:
             super().process_request(request, client_address)
         except BaseException:
@@ -503,6 +541,52 @@ class ProxyServer(socketserver.ThreadingTCPServer):
         # A worker exception must not bypass the handler's request privacy rule.
         # https://github.com/numpde/magnet-deploy/blob/2d4ee50b0359e71900fce9289ea01f46d0f41249/scripts/image-build-proxy.py#L367-L370
         sys.stderr.write("Cannot serve proxy request: its worker failed; request contents are not logged.\n")
+
+
+class UnixProxyServer(ProxyServer):
+    """Serve the same destination proxy through a caller-owned private socket."""
+
+    address_family = socket.AF_UNIX
+
+    def __init__(self, address: Path, interface: str):
+        super().__init__(str(address), interface)
+
+    def server_bind(self):
+        # Never unlink an existing path. The launcher owns the private parent
+        # and removes it only after every container borrower has retired.
+        super().server_bind()
+        os.chmod(self.server_address, 0o600)
+
+
+class UnixRelayHandler(socketserver.BaseRequestHandler):
+    """Forward bytes to the Unix gateway, with no IP destination fallback."""
+
+    def handle(self):
+        phase = "gateway connection"
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as gateway:
+                gateway.settimeout(CONNECT_SECONDS)
+                gateway.connect(self.server.gateway_socket)
+                phase = "forwarding"
+                relay(self.request, gateway)
+        except OSError as error:
+            if phase == "gateway connection":
+                try:
+                    self.request.settimeout(1)
+                    self.request.sendall(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
+                except OSError:
+                    pass
+            sys.stderr.write(f"proxy relay {phase} failed: {type(error).__name__}\n")
+
+
+class UnixRelayServer(ProxyServer):
+    """Bound loopback TCP workers and carry their proxy traffic over Unix."""
+
+    request_handler = UnixRelayHandler
+
+    def __init__(self, address: tuple[str, int], gateway_socket: Path):
+        self.gateway_socket = str(gateway_socket)
+        super().__init__(address, "system")
 
 
 def require_interface_name(interface: str) -> None:
@@ -560,28 +644,47 @@ def publish_readiness(ready_file, content):
 def main() -> None:
     """Publish exclusive private readiness after listener and device admission.
 
-    The acquisition launcher explicitly supplies port zero for kernel selection.
-    Direct CLI callers must supply --port (use --port 0 for the same policy);
-    omission is a parse error before interface lookup or listener allocation.
+    TCP listeners explicitly supply port zero for kernel selection. A private
+    Unix gateway publishes its socket path; a loopback relay publishes its port.
+    The launcher grants the worker only the relay's networkless namespace.
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--interface", required=True)
-    parser.add_argument("--port", type=int, required=True, help="Listener port; 0 asks the kernel to choose a free port.")
+    upstream = parser.add_mutually_exclusive_group(required=True)
+    upstream.add_argument("--interface")
+    upstream.add_argument("--relay-socket", type=Path, help="Private Unix gateway for a loopback-only relay.")
+    listener = parser.add_mutually_exclusive_group(required=True)
+    listener.add_argument("--port", type=int, help="Listener port; 0 asks the kernel to choose a free port.")
+    listener.add_argument("--unix-socket", type=Path, help="Private Unix listener; an existing path is never replaced.")
     parser.add_argument("--ready-file", type=Path, required=True)
     args = parser.parse_args()
 
+    if args.relay_socket is not None:
+        if args.unix_socket is not None:
+            parser.error("--relay-socket requires a TCP --port listener")
+        with UnixRelayServer(("127.0.0.1", args.port), args.relay_socket) as server:
+            publish_readiness(args.ready_file, f"{server.server_address[1]}\n")
+            server.serve_forever()
+        return
+
     try:
-        require_interface(args.interface)
+        if args.interface != "system":
+            require_interface(args.interface)
     except ValueError as error:
         raise SystemExit(str(error)) from None
 
     # Prove interface binding before publishing readiness, without any transfer.
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, args.interface.encode() + b"\0")
+    if args.interface != "system":
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, args.interface.encode() + b"\0")
 
-    with ProxyServer(("127.0.0.1", args.port), args.interface) as server:
-        publish_readiness(args.ready_file, f"{server.server_address[1]}\n")
-        server.serve_forever()
+    if args.unix_socket is not None:
+        with UnixProxyServer(args.unix_socket, args.interface) as server:
+            publish_readiness(args.ready_file, f"{server.server_address}\n")
+            server.serve_forever()
+    else:
+        with ProxyServer(("127.0.0.1", args.port), args.interface) as server:
+            publish_readiness(args.ready_file, f"{server.server_address[1]}\n")
+            server.serve_forever()
 
 
 if __name__ == "__main__":

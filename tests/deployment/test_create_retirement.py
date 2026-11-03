@@ -117,7 +117,7 @@ fi
                 'SECS_DOCKER_ENDPOINT': 'unix:///tmp/test-docker.sock',
                 'SECS_NETWORK_INTERFACE_ORIGIN': 'command line', 'SECS_NETWORK_INTERFACE_INPUT': 'system',
                 'SECS_OLD_WLAN_ORIGIN': 'undefined'}
-            result = subprocess.run(['bash', str(ROOT / 'tools/docker.sh'), 'run', '--rm', '--network', 'bridge', 'image'],
+            result = subprocess.run(['bash', str(ROOT / 'tools/docker.sh'), 'run', '--rm', '--network', 'none', 'image'],
                                     env=env, cwd=ROOT, capture_output=True, timeout=10)
             try:
                 self.assertNotEqual(result.returncode, 0)
@@ -148,7 +148,7 @@ esac
                 'SECS_NETWORK_INTERFACE_ORIGIN': 'command line', 'SECS_NETWORK_INTERFACE_INPUT': 'system',
                 'SECS_OLD_WLAN_ORIGIN': 'undefined'}
             result = subprocess.run(['bash', str(ROOT / 'tools/docker.sh'),
-                                     'run', '--rm', '--network', 'bridge', '--pull', 'never', 'image'],
+                                     'run', '--rm', '--network', 'none', '--pull', 'never', 'image'],
                                     env=env, cwd=ROOT, capture_output=True, timeout=10)
             try:
                 self.assertNotEqual(result.returncode, 0)
