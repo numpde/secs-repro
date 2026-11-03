@@ -9,7 +9,7 @@ import unittest
 
 from provider_core.execution import ObservationGapExpired
 from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
-from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession
+from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession, PreparationRejected
 from secs_inference.provider.worker import WorkerDeadlineBeforeDispatch
 
 
@@ -27,17 +27,27 @@ def choice(identity="choice"):
     }, identity)
 
 
+async def _accept_selection(action):
+    return action
+
+
 class ScriptedCarrier:
+    identity = '{}'
+    retirement_confirmed = True
+
     def __init__(self, *turns):
         self.turns = iter(turns)
         self.requests = []
 
-    async def complete(self, messages, tools):
+    async def complete(self, messages, tools, *, not_after=None):
         self.requests.append(deepcopy(messages))
         turn = next(self.turns)
         if isinstance(turn, Exception):
             raise turn
         return {"role": "assistant", "tool_calls": turn}
+
+    async def retire(self):
+        pass
 
 
 class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
@@ -53,7 +63,7 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
         session = self.session(chat, inspect)
         session.deadline = monotonic() + 0.05
         with self.assertRaises(WorkerDeadlineBeforeDispatch) as caught:
-            await session.select()
+            await session.run(_accept_selection)
         self.assertIs(caught.exception, refusal)
 
     async def test_observation_expiry_survives_interpreter_deadline(self):
@@ -68,7 +78,7 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
         session = self.session(chat, inspect)
         session.deadline = monotonic() + 0.05
         with self.assertRaises(ObservationGapExpired) as caught:
-            await session.select()
+            await session.run(_accept_selection)
         self.assertIs(caught.exception, expiry)
 
     def session(self, chat, inspect, turns=3):
@@ -87,17 +97,16 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
             [choice()], [call("report_input_problem", {"explanation": "No supported input remains."}, "refusal")],
         )
         session = self.session(chat, inspect)
-        task = asyncio.create_task(session.select())
+        async def reject(decision):
+            self.assertIsInstance(decision, SelectedRepresentation)
+            raise PreparationRejected("The selected representation cannot be prepared.")
+        task = asyncio.create_task(session.run(reject))
         try:
             await asyncio.wait_for(entered.wait(), 1)
             self.assertFalse(task.done())
             release.set()
-            self.assertIsInstance(await task, SelectedRepresentation)
-            deadline = session.deadline
-            session.reject("The selected representation cannot be prepared.")
-            self.assertIsInstance(await session.select(), CannotAnalyse)
-            self.assertEqual(session.deadline, deadline)
-            self.assertEqual(session.remaining_turns, 0)
+            self.assertIsInstance(await task, CannotAnalyse)
+            self.assertEqual(len(chat.requests), 3)
             self.assertEqual(chat.requests[-1][-1]["tool_call_id"], "choice")
         finally:
             release.set()
@@ -108,20 +117,20 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
             self.fail("Multiple tools must not execute")
         chat = ScriptedCarrier([choice("one"), choice("two")], [choice("corrected")])
         session = self.session(chat, inspect, turns=2)
-        self.assertIsInstance(await session.select(), SelectedRepresentation)
+        self.assertIsInstance(await session.run(_accept_selection), SelectedRepresentation)
         feedback = chat.requests[-1][-2:]
         self.assertEqual([item["tool_call_id"] for item in feedback], ["one", "two"])
-        self.assertEqual(session.remaining_turns, 0)
+        self.assertEqual(len(chat.requests), 2)
 
     async def test_carrier_failure_is_not_input_feedback_or_an_implicit_resend(self):
         failure = OSError("model service unavailable")
         chat = ScriptedCarrier(failure)
         session = self.session(chat, None)
         with self.assertRaises(OSError) as caught:
-            await session.select()
+            await session.run(_accept_selection)
         self.assertIs(caught.exception, failure)
         self.assertEqual(len(chat.requests), 1)
-        self.assertEqual(len(session.messages), 2)
+        self.assertEqual(session.conversation.correction_failures, [])
 
     async def test_deadline_during_inspection_is_not_semantic_feedback(self):
         entered = asyncio.Event()
@@ -133,10 +142,10 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
         session = self.session(chat, inspect)
         session.deadline = monotonic() + 0.05
         with self.assertRaisesRegex(InterpretationFailed, "interpretation deadline elapsed"):
-            await session.select()
+            await session.run(_accept_selection)
         self.assertTrue(entered.is_set())
         self.assertEqual(len(chat.requests), 1)
-        self.assertEqual(session.messages[-1]["role"], "assistant")
+        self.assertEqual(len(chat.requests), 1)
         self.assertEqual(session.rejections, [])
 
     async def test_cancelled_observation_does_not_turn_interruption_into_input_feedback(self):
@@ -144,23 +153,23 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(phase=phase):
                 entered = asyncio.Event()
                 class Carrier(ScriptedCarrier):
-                    async def complete(self, messages, tools):
+                    async def complete(self, messages, tools, *, not_after=None):
                         if phase == "carrier":
                             self.requests.append(deepcopy(messages))
                             entered.set()
                             await asyncio.Event().wait()
-                        return await super().complete(messages, tools)
+                        return await super().complete(messages, tools, not_after=not_after)
                 async def inspect(_source):
                     entered.set()
                     await asyncio.Event().wait()
                 chat = Carrier([call("inspect_source", {
                     "source": {"upload_ref": "upload:chosen", "member": None}}, "inspect")])
                 session = self.session(chat, inspect)
-                task = asyncio.create_task(session.select())
+                task = asyncio.create_task(session.run(_accept_selection))
                 await asyncio.wait_for(entered.wait(), 1)
                 task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await task
                 self.assertEqual(len(chat.requests), 1)
-                self.assertNotEqual(session.messages[-1]["role"], "tool")
+                self.assertEqual(session.conversation.correction_failures, [])
                 self.assertEqual(session.rejections, [])

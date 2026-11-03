@@ -1,6 +1,6 @@
 override PROVIDER_IMAGE_TAG := secs-repro/provider:local
 override PROVIDER_PYTHON_BASE := docker.io/library/python:3.12.16-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
-override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.4/provider_core-0.5.4-py3-none-any.whl
+override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.15/provider_core-0.5.15-py3-none-any.whl
 override WHEELHOUSE_TOOL_NAME := wheelhouse-tool-0.5.14.pyz
 override WHEELHOUSE_TOOL_SHA256 := 9d8cd59c0aeffd61ce462fa81f2951a24fb8a8749a1332d5f87842b4c095d656
 override WHEELHOUSE_TOOL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.14/$(WHEELHOUSE_TOOL_NAME)

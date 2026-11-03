@@ -11,7 +11,7 @@ from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpi
 from provider_core.attempt_record import ProtectedEvidence
 
 from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
-from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession
+from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession, PreparationRejected
 from secs_inference.provider.outcomes import AnalysisOutcome, NO_STARTING_CANDIDATES_MESSAGE
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.worker import NativeWorkerExited, WorkerDeadlineBeforeDispatch
@@ -123,7 +123,7 @@ class SecsSession:
         self._conversation = InterpretationSession(
             self.chat, instructions.specification_text, self.sources.members,
             lambda source: self._inspect(source, require_execution),
-            deadline=interpretation_deadline, max_turns=self.max_turns,
+            deadline=interpretation_deadline, max_turns=self.max_turns, secrets=self._secrets,
         )
         return await self._prepare_choice(require_execution)
 
@@ -136,10 +136,7 @@ class SecsSession:
         return response["facts"]
 
     async def _prepare_choice(self, require_execution):
-        while True:
-            decision = await self._conversation.select()
-            if isinstance(decision, CannotAnalyse):
-                return self._failure("cannot_analyse", "No analysis was produced. Interpreter explanation: " + decision.explanation)
+        async def prepare(decision):
             if not isinstance(decision, SelectedRepresentation):
                 raise TypeError("Cannot prepare SECS input: interpretation returned no representation selection")
             choice = asdict(decision)
@@ -147,14 +144,16 @@ class SecsSession:
             change = await self.sources.reconcile()
             if change is not None:
                 choice["reading_error"] = str(change)
-                self._conversation.reject(str(change))
-                continue
+                if monotonic() >= self._conversation.deadline:
+                    raise InterpretationFailed("selecting an input representation", "the interpretation deadline elapsed without a usable decision")
+                raise PreparationRejected(str(change))
             response = await self._request({"operation": "prepare", "selection": choice}, self._deadline,
                                            require_execution=require_execution)
             if response["outcome"] == "input_rejected":
                 choice["reading_error"] = response["reason"]
-                self._conversation.reject(response["reason"])
-                continue
+                if monotonic() >= self._conversation.deadline:
+                    raise InterpretationFailed("selecting an input representation", "the interpretation deadline elapsed without a usable decision")
+                raise PreparationRejected(response["reason"])
             self._handle = response["prepared_handle"]
             self._quiescent = False
             self._prepared = PreparedAnalysis(ProtectedEvidence("secs.prepared.input.v1", _document({
@@ -162,6 +161,11 @@ class SecsSession:
                 "selection": choice, "acquired_uploads": self.sources.evidence(),
             })))
             return self._prepared
+
+        decision = await self._conversation.run(prepare)
+        if isinstance(decision, CannotAnalyse):
+            return self._failure("cannot_analyse", "No analysis was produced. Interpreter explanation: " + decision.explanation)
+        return decision
 
     async def execute(self, prepared, *, report_condition):
         if prepared is not self._prepared or prepared is None or self._retired:
@@ -253,7 +257,10 @@ class SecsSession:
                     cleanup_failed = True
                 failures.append(cause)
         try:
-            await self.chat.retire()
+            if self._conversation is None:
+                await self.chat.retire()
+            else:
+                await self._conversation.retire()
         except (Exception, BaseExceptionGroup) as cause:
             cleanup_failed = True
             failures.append(cause)

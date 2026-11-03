@@ -11,12 +11,16 @@ import unittest
 
 from secs_inference.provider.config import CONFIG_PATH, decode_provider_config
 from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
-from secs_inference.provider.interpreter import InterpretationSession
+from secs_inference.provider.interpreter import InterpretationSession, PreparationRejected
 from provider_core.upload_response import UploadMember as JobUpload
 from provider_core.chat import ChatEndpoint
 from provider_core.startup_file import read_startup_file
 from secs_inference.provider.main import _read_chat_settings
 from secs_inference.provider.source_access import InputReadError
+
+
+async def _accept_selection(action):
+    return action
 
 
 class LiveInterpreterTests(unittest.IsolatedAsyncioTestCase):
@@ -75,7 +79,7 @@ class LiveInterpreterTests(unittest.IsolatedAsyncioTestCase):
         return result
 
     async def test_missing_input_is_explained_not_invented(self):
-        outcome = await self.session("Please elucidate this molecule.", ()).select()
+        outcome = await self.session("Please elucidate this molecule.", ()).run(_accept_selection)
         self.assertIsInstance(outcome, CannotAnalyse)
         self.assertTrue(outcome.explanation.strip())
         self.assertIn("formula", outcome.explanation.lower())
@@ -83,7 +87,7 @@ class LiveInterpreterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_selects_proton_experiment_among_distractors(self):
         session = self.session("Find the structure with molecular formula C7H8ClN.", self.uploads)
-        self.assert_proton_selection(await session.select())
+        self.assert_proton_selection(await session.run(_accept_selection))
 
     async def test_selects_bruker_processed_pair(self):
         """Require a processed Bruker pair selection; reader tests own decoding."""
@@ -93,7 +97,7 @@ class LiveInterpreterTests(unittest.IsolatedAsyncioTestCase):
         )
         uploads = (JobUpload("upload:bruker", "Archive of an NMR experiment; inspect the processed data.", 8192, None),)
         session = self.session("Find the structure with molecular formula C21H22N2O2.", uploads)
-        outcome = await session.select()
+        outcome = await session.run(_accept_selection)
         self.assertIsInstance(outcome, SelectedRepresentation, session.rejections)
         sources = {source["member"] for source in self.representations[outcome.representation_id]["sources"]}
         self.assertEqual(sources, {"NMR-test-1/pdata/1/1r", "NMR-test-1/pdata/1/procs"})
@@ -108,13 +112,12 @@ class LiveInterpreterTests(unittest.IsolatedAsyncioTestCase):
         resubmitting the same selection. No scientific reader runs here.
         """
         session = self.session("Find the structure with molecular formula C7H8ClN.", self.uploads)
-        self.assert_proton_selection(await session.select())
-        remaining = session.remaining_turns
-        session.reject("Cannot read the processed JCAMP-DX spectrum because the file does not contain an XYDATA table.")
-        outcome = await session.select()
+        async def reject(selection):
+            self.assert_proton_selection(selection)
+            raise PreparationRejected("Cannot read the processed JCAMP-DX spectrum because the file does not contain an XYDATA table.")
+        outcome = await session.run(reject)
         self.assertIsInstance(outcome, CannotAnalyse)
         self.assertIn("xydata", outcome.explanation.lower())
-        self.assertLess(session.remaining_turns, remaining)
 
     def assert_proton_selection(self, outcome):
         """The expected source and formula are evaluator facts, not tool instructions."""

@@ -1,8 +1,7 @@
 """Let the interpreter own source selection, inspection and explained correction.
 
-The same-conversation correction loop follows magnet-deploy. A scientific
-selection suspends this session: inference does not consume model turns, and
-only an expected input rejection resumes the retained conversation.
+The shared conversation owns model turns and feedback. Scientific preparation
+does not consume model turns; only an expected input rejection requests another.
 """
 
 import asyncio
@@ -15,7 +14,9 @@ from secs_inference.provider.input_operations import (
     interpreter_tools,
 )
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
-from provider_core.response_json import read_document
+from provider_core.conversation import (
+    ConversationFailed, TextCorrection, ToolConversation, ToolFinished, ToolRejected, ToolReply,
+)
 from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpired
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.worker import WorkerDeadlineBeforeDispatch
@@ -47,20 +48,46 @@ class _InvalidArguments(ValueError):
     """Only malformed model arguments may request conversational repair."""
 
 
-class InterpretationSession:
-    """One transcript and one turn/time budget across inspection and correction."""
+class PreparationRejected(ToolRejected):
+    """The selected scientific input was safely rejected during preparation."""
 
-    def __init__(self, chat, specification_text: str, uploads, inspect, *, deadline: float, max_turns: int = 8):
-        self.chat = chat
-        self.inspect = inspect
-        self.specification_text = specification_text
-        self.deadline = deadline
-        self.remaining_turns = max_turns
-        self.pending_call = None
-        # Keep provider-issued rejections, not raw arguments or inspected file
-        # contents. They distinguish a bad tool call from a reader that ran.
+
+class _ScientificRejection(ToolRejected):
+    def __init__(self, stage, reason, feedback):
+        super().__init__(feedback)
+        self.stage, self.reason = stage, reason
+
+
+class _DeadlineEndpoint:
+    """Bound model calls without applying the interpretation limit to preparation."""
+
+    def __init__(self, session, endpoint):
+        self.session, self.endpoint = session, endpoint
+
+    @property
+    def identity(self):
+        return self.endpoint.identity
+
+    @property
+    def retirement_confirmed(self):
+        return self.endpoint.retirement_confirmed
+
+    async def complete(self, messages, tools):
+        return await self.session._interpret(
+            lambda: self.endpoint.complete(messages, tools, not_after=self.session.deadline)
+        )
+
+    async def retire(self):
+        await self.endpoint.retire()
+
+
+class InterpretationSession:
+    """Own scientific decisions while the SDK owns one conversation transcript."""
+
+    def __init__(self, chat, specification_text: str, uploads, inspect, *, deadline: float, max_turns: int = 8, secrets=()):
+        self.inspect, self.specification_text, self.deadline = inspect, specification_text, deadline
         self.rejections = []
-        self.messages = [
+        self._initial_messages = [
             {"role": "system", "content": _INSTRUCTIONS},
             {"role": "user", "content": json.dumps({
                 "analysis_kind_ref": ANALYSIS_KIND_REF,
@@ -68,13 +95,19 @@ class InterpretationSession:
                 "uploads": [asdict(upload) for upload in uploads],
             }, ensure_ascii=False)},
         ]
+        self.conversation = ToolConversation(
+            (_DeadlineEndpoint(self, chat),), max_turns=max_turns, secrets=secrets,
+            text_correction=TextCorrection(None), argument_bytes=262144,
+        )
 
-    async def select(self):
-        """Bound asynchronous interpretation without resetting its retained budget."""
+    async def _interpret(self, operation):
+        if monotonic() >= self.deadline:
+            raise InterpretationFailed("selecting an input representation",
+                                       "the interpretation deadline elapsed without a usable decision")
         deadline = asyncio.timeout_at(self.deadline)
         try:
             async with deadline:
-                return await self._select()
+                return await operation()
         except (ConditionRecoveryExpired, ObservationGapExpired, WorkerDeadlineBeforeDispatch):
             raise
         except TimeoutError:
@@ -83,99 +116,54 @@ class InterpretationSession:
             raise InterpretationFailed("selecting an input representation",
                                        "the interpretation deadline elapsed without a usable decision") from None
 
-    async def _select(self):
-        if self.pending_call is not None:
-            raise AssertionError("A selected representation must finish or reject before another selection")
-        while self.remaining_turns > 0 and monotonic() < self.deadline:
-            self.remaining_turns -= 1
-            message = await self.chat.complete(self.messages, interpreter_tools())
-            calls = message.get("tool_calls", [])
-            if type(calls) is not list or not calls or any(
-                type(call) is not dict or type(call.get("id")) is not str or not call["id"]
-                for call in calls
-            ):
-                raise InterpretationFailed("checking the model's requested action", "the reply contains no identifiable tool call")
-            if len({call["id"] for call in calls}) != len(calls):
-                raise InterpretationFailed("checking the model's requested action", "the reply repeats a tool call identity")
-            if any(
-                call.get("type") != "function" or type(call.get("function")) is not dict
-                or type(call["function"].get("name")) is not str
-                or type(call["function"].get("arguments")) is not str
-                for call in calls
-            ):
-                # An invalid carrier cannot be replayed as an assistant message
-                # for correction. Invalid JSON *inside* its text can be repaired.
-                raise InterpretationFailed("checking the model's requested action", "the reply does not identify a function and text arguments for each tool call")
-            self.messages.append({"role": "assistant", "content": None, "tool_calls": calls})
-            if len(calls) != 1:
-                reason = "Choose exactly one tool per turn; no operations were performed."
-                self.rejections.append({"stage": "tool_call", "reason": reason})
-                for call in calls:
-                    self._feedback(call["id"], reason)
-                continue
-            call = calls[0]
+    async def run(self, prepare):
+        async def dispatch(name, arguments):
             try:
-                action = _decode_call(call)
+                action = _decode_action(name, arguments)
+                if isinstance(action, SelectedRepresentation):
+                    evidence = action.formula_evidence
+                    if evidence.get("kind") == "job_specification":
+                        quote = evidence["quote"]
+                        if normalize_formula_notation(quote) != normalize_formula_notation(action.formula):
+                            raise _InvalidArguments("The Job-specification quote and selected formula must express the same formula")
+                        if not _contains_formula_quote(self.specification_text, quote):
+                            raise _InvalidArguments("The quoted formula does not occur in the Job specification")
             except _InvalidArguments as error:
-                self.rejections.append({"stage": "tool_call", "reason": str(error)})
-                self._feedback(call["id"], f"{error}. Correct this call.")
-                continue
-            if isinstance(action, SelectedRepresentation):
-                evidence = action.formula_evidence
-                if evidence.get("kind") == "job_specification":
-                    quote = evidence["quote"]
-                    if normalize_formula_notation(quote) != normalize_formula_notation(action.formula):
-                        reason = "The Job-specification quote and selected formula must express the same formula"
-                        self.rejections.append({"stage": "tool_call", "reason": reason})
-                        self._feedback(call["id"], reason + ". Correct this call.")
-                        continue
-                    if not _contains_formula_quote(self.specification_text, quote):
-                        reason = "The quoted formula does not occur in the Job specification"
-                        self.rejections.append({"stage": "tool_call", "reason": reason})
-                        self._feedback(call["id"], reason + ". Correct this call.")
-                        continue
+                raise _ScientificRejection("tool_call", str(error), f"{error}. Correct this call.") from error
             if isinstance(action, SourceRef):
                 try:
-                    facts = await self.inspect(action)
+                    facts = await self._interpret(lambda: self.inspect(action))
                 except InputReadError as error:
-                    self.rejections.append({"stage": "inspection", "reason": str(error)})
-                    self._feedback(call["id"], str(error))
-                else:
-                    self._feedback(call["id"], json.dumps(facts, ensure_ascii=False))
-                continue
+                    raise _ScientificRejection("inspection", str(error), str(error)) from error
+                return ToolReply(facts)
             if monotonic() >= self.deadline:
-                break
-            if not isinstance(action, CannotAnalyse):
-                self.pending_call = call["id"]
-            return action
-        reason = ("the interpretation deadline elapsed" if monotonic() >= self.deadline
-                  else "the allowed model turns were exhausted")
-        raise InterpretationFailed("selecting an input representation", reason + " without a usable decision")
+                raise InterpretationFailed("selecting an input representation", "the interpretation deadline elapsed without a usable decision")
+            if isinstance(action, CannotAnalyse):
+                return ToolFinished(action)
+            return ToolFinished(await prepare(action))
 
-    def reject(self, reason: str) -> None:
-        """Return correctable input feedback to the selection awaiting its result."""
-        if self.pending_call is None:
-            raise AssertionError("No selected representation is awaiting its result")
-        self._feedback(self.pending_call, reason)
-        self.pending_call = None
+        try:
+            result = await self.conversation.run(self._initial_messages, interpreter_tools(), dispatch)
+            return result.value
+        except ConversationFailed as error:
+            raise InterpretationFailed("selecting an input representation", str(error)) from error
+        finally:
+            self.rejections = [
+                {"stage": failure.stage, "reason": failure.reason}
+                if isinstance(failure, _ScientificRejection) else {"stage": "tool_call", "reason": str(failure)}
+                for _, failure in self.conversation.correction_failures
+                if not isinstance(failure, PreparationRejected)
+            ]
 
-    def _feedback(self, call_id: str, text: str) -> None:
-        self.messages.append({"role": "tool", "tool_call_id": call_id, "content": text})
+    async def retire(self):
+        await self.conversation.retire()
 
 
-def _decode_call(call: dict):
-    """Admit typed arguments, leaving scientific syntax to the selected reader."""
-    function = call["function"]
-    name = function["name"]
+def _decode_action(name: str, arguments: dict):
+    """Admit scientific tool arguments after the conversation owns JSON parsing."""
     operation = next((item for item in INPUT_OPERATIONS if item.name == name), None)
     if operation is None:
         raise _InvalidArguments("The requested tool is not available; choose one of the advertised tools")
-    try:
-        arguments = read_document(function["arguments"].encode("utf-8"), 262144)
-        if type(arguments) is not dict:
-            raise ValueError("Tool arguments must form an object")
-    except (ValueError, RecursionError) as error:
-        raise _InvalidArguments("Tool arguments are not readable JSON") from error
     if set(arguments) != set(operation.parameters["required"]):
         raise _InvalidArguments(f"The {operation.name} operation requires exactly these arguments: {', '.join(operation.parameters['required'])}")
     for key in ("representation_id", "formula", "processing", "explanation"):

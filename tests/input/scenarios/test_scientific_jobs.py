@@ -15,6 +15,10 @@ from secs_inference.provider.interpreter import InterpretationSession
 from input.helpers import FIXTURES, WorkerCase
 
 
+async def _accept_selection(action):
+    return action
+
+
 class ScientificJobScenarios(WorkerCase, unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         super().setUp()
@@ -37,13 +41,16 @@ class ScientificJobScenarios(WorkerCase, unittest.IsolatedAsyncioTestCase):
                           'formula_evidence': {'kind': 'job_specification', 'quote': quote},
                           'processing': 'as_stored', 'explanation': 'Use the supplied proton spectrum and formula.'}
                 chat = Mock()
+                chat.identity = '{}'
+                chat.retirement_confirmed = True
+                chat.retire = AsyncMock()
                 chat.complete = AsyncMock()
-                chat.complete.return_value = {'tool_calls': [{'id': 'selection', 'type': 'function',
+                chat.complete.return_value = {'role': 'assistant', 'tool_calls': [{'id': 'selection', 'type': 'function',
                     'function': {'name': 'select_representation', 'arguments': json.dumps(choice)}}]}
                 session = InterpretationSession(chat,
                     f'Molecular formula: {quote}.', [], Mock(),
                     deadline=monotonic() + 10, max_turns=1)
-                decision = asdict(await session.select())
+                decision = asdict(await session.run(_accept_selection))
                 self.assertEqual(decision, choice)
                 response = self.search(selection=decision)
                 self.assertEqual(response['outcome'], 'no_starting_candidates')

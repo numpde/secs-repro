@@ -469,6 +469,57 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("worker-stop", events)
         self.assertEqual(events[-1], ("sources-retire", True))
 
+    async def test_preparation_can_finish_after_interpretation_deadline(self):
+        session, worker, chat, _ = self.make_session([{"outcome": "prepared", "prepared_handle": 7}])
+        session.interpretation_seconds = 0.05
+        request = worker.request
+
+        async def slow_prepare(command, **kwargs):
+            if command["operation"] == "prepare":
+                await asyncio.sleep(0.1)
+            return await request(command, **kwargs)
+
+        worker.request = slow_prepare
+        self.assertIsInstance(await self.prepare(session), PreparedAnalysis)
+        self.assertEqual(len(chat.requests), 1)
+        await session.retire()
+
+    async def test_late_preparation_rejection_does_not_start_another_model_turn(self):
+        session, worker, chat, _ = self.make_session(
+            [{"outcome": "input_rejected", "reason": "Choose another representation."}],
+            [[choice("first")], [choice("second")]],
+        )
+        session.interpretation_seconds = 0.05
+        request = worker.request
+
+        async def slow_prepare(command, **kwargs):
+            if command["operation"] == "prepare":
+                await asyncio.sleep(0.1)
+            return await request(command, **kwargs)
+
+        worker.request = slow_prepare
+        result = await self.prepare(session)
+        self.assertIsInstance(result, AnalysisFailure)
+        self.assertEqual(result.code, "interpretation_failed")
+        self.assertEqual(len(chat.requests), 1)
+        await session.retire()
+
+    async def test_late_source_rejection_does_not_prepare_or_resume(self):
+        session, worker, chat, _ = self.make_session([], [[choice("first")], [choice("second")]])
+        session.interpretation_seconds = 0.05
+
+        async def slow_reconcile():
+            await asyncio.sleep(0.1)
+            return ValueError("The selected source changed.")
+
+        session.sources.reconcile = slow_reconcile
+        result = await self.prepare(session)
+        self.assertIsInstance(result, AnalysisFailure)
+        self.assertEqual(result.code, "interpretation_failed")
+        self.assertEqual(len(chat.requests), 1)
+        self.assertEqual(worker.commands, [])
+        await session.retire()
+
     async def test_mock_index_success_and_failure_identify_the_limited_search(self):
         session, _, _, _ = self.make_session([
             {"outcome": "prepared", "prepared_handle": 7},
