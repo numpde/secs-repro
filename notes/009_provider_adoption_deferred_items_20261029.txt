@@ -330,3 +330,10 @@ image. Qualify the migrated image with the existing GPU challenge lane and
 then update its immutable deployment pin when GPU execution is in scope.
 The localhost CPU worker was updated through the maintained combined update;
 its provider published hello, but this rollout did not run a scientific Job.
+
+The local v0.5.10 tool acquisition reported unconfirmed Docker retirement and
+retained /tmp/tmp.exugXm6ZZ1. The asset's SHA-256 matches the release and the
+offline cache check passes. Both recorded containers are absent from the engine,
+but no host PID/start-time was recorded and the bounded process scan had
+unreadable entries. The original failure cause and native retirement remain
+unconfirmed; preserve the receipts rather than treating engine absence as proof.
