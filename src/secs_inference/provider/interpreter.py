@@ -17,9 +17,7 @@ from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from provider_core.conversation import (
     ConversationFailed, TextCorrection, ToolConversation, ToolFinished, ToolRejected, ToolReply,
 )
-from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpired
 from secs_inference.provider.source_access import InputReadError
-from secs_inference.provider.worker import WorkerDeadlineBeforeDispatch
 from secs_inference.provider.formula_notation import is_formula_space, normalize_formula_notation
 
 
@@ -108,10 +106,8 @@ class InterpretationSession:
         try:
             async with deadline:
                 return await operation()
-        except (ConditionRecoveryExpired, ObservationGapExpired, WorkerDeadlineBeforeDispatch):
-            raise
-        except TimeoutError:
-            if not deadline.expired():
+        except TimeoutError as error:
+            if type(error) is not TimeoutError or not deadline.expired():
                 raise
             raise InterpretationFailed("selecting an input representation",
                                        "the interpretation deadline elapsed without a usable decision") from None
