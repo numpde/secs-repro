@@ -1,6 +1,7 @@
 """Acquire one small pinned release asset into an existing shared wheelhouse."""
 
 import argparse
+import errno
 import fcntl
 import hashlib
 import http.client
@@ -9,13 +10,56 @@ from pathlib import Path
 import re
 import secrets
 import stat
+import socket
+import ssl
 import sys
 import time
+import urllib.error
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 from tools.extract_checkpoint import open_url
 
 MAX_ASSET_BYTES = 16 * 1024 * 1024
 DOWNLOAD_SECONDS = 300
+
+
+def network_failure(error):
+    """Match the provider-tools wheelhouse_tool/network.py retry policy."""
+    if isinstance(error, urllib.error.HTTPError):
+        delay = None
+        if error.code in (429, 503):
+            value = error.headers.get("Retry-After") if error.headers else None
+            if value:
+                try:
+                    if value.isascii() and value.isdecimal():
+                        digits = value.lstrip("0") or "0"
+                        delay = 31 if len(digits) > 2 else int(digits)
+                    else:
+                        delay = max(0, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())
+                except (ValueError, TypeError, OverflowError):
+                    pass
+        return error.code in (429, 500, 502, 503, 504), f"HTTP {error.code}", delay
+    if isinstance(error, urllib.error.URLError):
+        return network_failure(error.reason) if isinstance(error.reason, BaseException) else (False, "network request failed", None)
+    if isinstance(error, ssl.SSLError):
+        return False, "TLS error", None
+    if isinstance(error, socket.gaierror):
+        return error.errno == socket.EAI_AGAIN, "DNS error", None
+    if isinstance(error, (TimeoutError, socket.timeout)):
+        return True, "network timeout", None
+    if isinstance(error, (http.client.IncompleteRead, http.client.RemoteDisconnected)):
+        return True, "connection interrupted", None
+    if isinstance(error, OSError):
+        if match := re.match(r"^Tunnel connection failed: ([0-9]{3})(?:\s|$)", str(error)):
+            status = int(match[1])
+            return status in (429, 500, 502, 503, 504), f"proxy tunnel HTTP {status}", None
+        return error.errno in (errno.ECONNRESET, errno.ECONNREFUSED, errno.ETIMEDOUT, errno.ECONNABORTED, errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EPIPE), f"network error (errno {error.errno})" if isinstance(error.errno, int) else "network error", None
+    return False, "network request failed", None
+
+
+class NetworkFailure(Exception):
+    pass
 
 
 def check(directory, name, expected):
@@ -41,17 +85,19 @@ def acquire(directory, name, expected, url):
             try:
                 source = open_url(url)
             except (OSError, ValueError, http.client.HTTPException) as error:
-                raise OSError(f"Cannot acquire {name}: the download failed.") from error
+                raise NetworkFailure(error) from error
             size = 0
             with source:
                 while True:
                     if time.monotonic() >= deadline:
-                        raise TimeoutError(f"Cannot acquire {name}: the download deadline elapsed.")
+                        raise NetworkFailure(TimeoutError())
                     try:
                         block = source.read1(1024 * 1024)
                     except (OSError, http.client.HTTPException) as error:
-                        raise OSError(f"Cannot acquire {name}: the download failed.") from error
+                        raise NetworkFailure(error) from error
                     if not block:
+                        if isinstance(getattr(source, "length", None), int) and source.length > 0:
+                            raise NetworkFailure(http.client.IncompleteRead(b""))
                         break
                     size += len(block)
                     if size > MAX_ASSET_BYTES:
@@ -73,6 +119,20 @@ def acquire(directory, name, expected, url):
         os.unlink(temporary, dir_fd=directory)
 
 
+def acquire_with_retry(directory, name, expected, url):
+    for attempt in range(1, 4):
+        try:
+            acquire(directory, name, expected, url)
+            return
+        except NetworkFailure as failure:
+            retry, cause, retry_after = network_failure(failure.args[0])
+            if retry_after is not None and retry_after > 30:
+                raise OSError(f"Cannot acquire {name}: {cause}; Retry-After exceeds 30 seconds.") from failure
+            if not retry or attempt == 3:
+                raise OSError(f"Cannot acquire {name}: download failed after {attempt} attempt(s): {cause}.") from failure
+            time.sleep(max(attempt, retry_after or 0))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("check", "acquire"))
@@ -92,7 +152,7 @@ def main():
                 return 0
             if args.action == "check":
                 return 10
-            acquire(directory, args.name, args.sha256, args.url)
+            acquire_with_retry(directory, args.name, args.sha256, args.url)
             return 0
         finally:
             os.close(directory)
