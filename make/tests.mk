@@ -90,6 +90,7 @@ test/integration:
 		--mount type=bind,src="$$checkpoint_dir",dst=/checkpoint,readonly \
 		--mount type=bind,src="$$fixtures_dir",dst=/fixtures,readonly \
 		--mount type=bind,src="$$reference_lock",dst=/contracts/upstream/frontend_reference.json,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/requirements/native.lock",dst=/input/native.lock,readonly \
 		--mount type=bind,src="$$tests_dir",dst=/tests,readonly \
 		--entrypoint /bin/sh "$$cpu_packages_image" \
 		-c 'python -P /opt/materialize.py --verify-only --lock /input/molformer.lock.toml --output /cache && python -m unittest discover -v -s /tests -p "test_*.py"'
@@ -172,6 +173,7 @@ test/provider test/provider/diagnostics:
 		--mount type=bind,src="$$tests_dir",dst=/workspace/tests/provider,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/integration/native_worker_fixture.py",dst=/workspace/tests/integration/native_worker_fixture.py,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/contracts",dst=/workspace/contracts,readonly \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/requirements/provider.lock",dst=/workspace/provider.lock,readonly \
 		--entrypoint python "$$provider_image" \
 		-m unittest discover -v -s /workspace/tests/provider -p '$(if $(filter test/provider/diagnostics,$@),test_diagnostics.py,test_*.py)'
 
@@ -216,15 +218,18 @@ interpreter/model-behavior:
 		ca_mount=(--mount "type=bind,src=$$config_dir/interpreter-ca.crt,dst=/run/config/provider/interpreter-ca.crt,readonly")
 	fi
 	provider_image=$$($(DOCKER_MAKE) --no-print-directory provider/image)
-	SECS_NETWORK_INTERFACE_ORIGIN='command line' SECS_NETWORK_INTERFACE_INPUT=system $(DOCKER) run --rm --init --pull never --network bridge --read-only \
-		--user "$(HOST_UID):$(HOST_GID)" --cap-drop ALL --security-opt no-new-privileges:true \
+	source tools/acquisition.sh
+	export SECS_NETWORK_INTERFACE_ORIGIN='command line' SECS_NETWORK_INTERFACE_INPUT=system
+	grants=(--init --read-only --cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 256m --memory-swap 256m \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777 \
 		--mount "type=bind,src=$$config_dir/provider.toml,dst=/run/config/provider/provider.toml,readonly" \
 		--mount "type=bind,src=$$key_file,dst=/run/secrets/provider/interpreter.key,readonly" \
 		"$${ca_mount[@]}" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/tests/model_behavior,dst=/tests,readonly" \
-		--entrypoint python "$$provider_image" -P /tests/test_interpreter_live.py --failfast
+		--entrypoint python)
+	application=(-P /tests/test_interpreter_live.py --failfast)
+	secs_acquire "$$provider_image" grants application
 
 .PHONY: test/provider/e2e test/provider/mock-runner/e2e
 test/provider/mock-runner/e2e:

@@ -3,6 +3,7 @@
 from importlib import import_module
 from importlib.metadata import distribution
 from pathlib import Path
+import re
 import subprocess
 import sys
 import unittest
@@ -11,7 +12,9 @@ import unittest
 class SdkInstallationTests(unittest.TestCase):
     def test_released_sdk_imports_from_its_installed_distribution(self):
         installed = distribution("provider-core")
-        self.assertEqual(installed.version, "0.5.17")
+        match = re.search(r'^provider-core==([^\s]+)', Path('/workspace/provider.lock').read_text(), re.MULTILINE)
+        self.assertIsNotNone(match)
+        self.assertEqual(installed.version, match.group(1))
         self.assertGreaterEqual(sys.version_info[:2], (3, 12))
         package = import_module("provider_core")
         self.assertEqual(Path(package.__file__).resolve(),

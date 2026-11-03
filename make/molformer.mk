@@ -21,8 +21,8 @@ molformer/cache:
 	secs_engine_active=1
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
-	$(DOCKER) run --rm --init --pull never --network bridge --read-only \
-		--user "$(HOST_UID):$(HOST_GID)" \
+	source tools/acquisition.sh
+	grants=(--init --read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 256m --memory-swap 256m \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
@@ -30,8 +30,10 @@ molformer/cache:
 		--mount type=bind,src="$(MOLFORMER_LOCK)",dst=/input/molformer.lock.toml,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools/materialize_molformer_cache.py",dst=/opt/materialize.py,readonly \
 		--mount type=bind,src="$$stage",dst=/output \
-		--entrypoint python "$$packages_image" -P /opt/materialize.py \
-		--lock /input/molformer.lock.toml --output /output
+		--entrypoint python)
+	application=(-P /opt/materialize.py --lock /input/molformer.lock.toml --output /output)
+	begin_retained_engine "$$stage"
+	secs_acquire "$$packages_image" grants application
 	secs_engine_active=0
 	chmod 0755 "$$stage"
 	rm -rf "$$cache_path"

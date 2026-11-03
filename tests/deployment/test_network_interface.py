@@ -62,8 +62,8 @@ esac
                                     env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
             return result, receipt.read_text() if receipt.exists() else None
 
-    def test_noninteractive_download_requires_selection_before_docker(self):
-        result, receipt = self.invoke(['run', '--network', 'bridge', 'image'])
+    def test_noninteractive_build_requires_selection_before_docker(self):
+        result, receipt = self.invoke(['build', '--network', 'default', 'image'])
         self.assertNotEqual(result.returncode, 0)
         self.assertIsNone(receipt)
         self.assertIn(b'NETWORK_INTERFACE', result.stderr)
@@ -104,7 +104,7 @@ esac
         for selection, origin, old in [('missing-device', 'command line', 'undefined'), ('', 'environment', 'undefined'),
                                        ('system', 'command line', 'command line')]:
             with self.subTest(selection=selection, old=old):
-                result, receipt = self.invoke(['run', '--network', 'bridge', 'image'], selection=selection, origin=origin, old=old)
+                result, receipt = self.invoke(['build', '--network', 'default', 'image'], selection=selection, origin=origin, old=old)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIsNone(receipt)
         result, receipt = self.invoke(['pull', 'image'], old='command line')

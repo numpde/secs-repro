@@ -1,5 +1,5 @@
-override PACKAGES_PYTHON_VERSION := 3.12.12
-override PYTHON_BASE := docker.io/library/python:$(PACKAGES_PYTHON_VERSION)-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
+override PACKAGES_PYTHON_VERSION := 3.12.16
+override PYTHON_BASE = $(PROVIDER_PYTHON_BASE)
 override UV_IMAGE := ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b
 PACKAGES_LOCK_IMAGE_TAG := secs-repro/packages-lock
 packages_image_tag = secs-repro/packages-$(1):local
@@ -38,15 +38,17 @@ packages/pylock/locate:
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	cp "requirements/packages-$$SECS_PYLOCK_VARIANT.lock" "$$stage/requirements.lock"
 	source_url=$$(python3 -c 'import sys,tomllib; p=tomllib.load(open("secs/pyproject.toml","rb")); print(p["dependency-groups"]["packages-"+sys.argv[1]][0].split(" @ ",1)[1])' "$$SECS_PYLOCK_VARIANT")
-	identity=$$(python3 -m deployment.rootless_access "$(PYTHON_BASE)")
+	source tools/acquisition.sh
 	begin_retained_engine "$$stage"
-	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+	grants=(--read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
 		--mount type=bind,src="$$stage/requirements.lock",dst=/input/requirements.lock,readonly \
-		--entrypoint python "$(PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
+		--entrypoint python)
+	application=(-I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
 		--lock /input/requirements.lock --pool /pool --index-url https://pypi.org/simple \
-		--source "$$source_url" --require-source antlr4-python3-runtime > "$$stage/pylock.toml"
+		--source "$$source_url" --require-source antlr4-python3-runtime)
+	secs_acquire "$(PYTHON_BASE)" grants application > "$$stage/pylock.toml"
 	secs_engine_active=0
 	ln -T -- "$$stage/pylock.toml" "$$output"
 	printf 'Projected lock written to %s\n' "$$output" >&2
@@ -65,15 +67,17 @@ packages/pylock/acquire:
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 	cp -- "$$SECS_PYLOCK_INPUT" "$$stage/pylock.toml"
 	cp "requirements/packages-$$SECS_PYLOCK_VARIANT.lock" "$$stage/requirements.lock"
-	identity=$$(python3 -m deployment.rootless_access "$(PYTHON_BASE)")
+	source tools/acquisition.sh
 	begin_retained_engine "$$stage"
-	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+	grants=(--read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--mount type=bind,src="$$wheelhouse_directory",dst=/pool \
 		--mount type=bind,src="$$stage",dst=/input,readonly \
-		--entrypoint python "$(PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" acquire \
+		--entrypoint python)
+	application=(-I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" acquire \
 		--lock /input/pylock.toml --source-lock /input/requirements.lock --pool /pool \
-		--require-sdist antlr4-python3-runtime
+		--require-sdist antlr4-python3-runtime)
+	secs_acquire "$(PYTHON_BASE)" grants application
 	secs_engine_active=0
 
 packages/base-images/pull:
@@ -99,28 +103,30 @@ packages/locks/write:
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	source tools/acquisition.sh
 	for variant in cpu gpu; do
 		case "$$variant" in
 			cpu) group=packages-cpu ;;
 			gpu) group=packages-gpu ;;
 		esac
 		begin_retained_engine "$$stage"
-		$(DOCKER) run --rm --network bridge --read-only --cap-drop ALL \
-			--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
-			--pull never --pids-limit 64 --cpus 2 --memory 1g --memory-swap 1g \
+		grants=(--read-only --cap-drop ALL \
+			--security-opt no-new-privileges:true \
+			--pids-limit 64 --cpus 2 --memory 1g --memory-swap 1g \
 			--tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
 			--env UV_CACHE_DIR=/output/.uv-cache \
 			--workdir /input \
 			--mount type=bind,src="$(REPOSITORY_ROOT)/pyproject.toml",dst=/input/pyproject.toml,readonly \
 			--mount type=bind,src="$(REPOSITORY_ROOT)/secs",dst=/input/secs,readonly \
-			--mount type=bind,src="$$stage",dst=/output \
-			"$$lock_image" pyproject.toml \
+			--mount type=bind,src="$$stage",dst=/output)
+		application=(pyproject.toml \
 			--extra elucidation \
 			--group secs/pyproject.toml:packages-build \
 			--group "secs/pyproject.toml:$$group" --no-emit-package secs \
 			--python-version "$(PACKAGES_PYTHON_VERSION)" --python-platform x86_64-manylinux_2_28 \
 			--generate-hashes --index-url https://pypi.org/simple \
-			--output-file "/output/packages-$$variant.raw"
+			--output-file "/output/packages-$$variant.raw")
+		secs_acquire "$$lock_image" grants application
 		begin_retained_engine "$$stage"
 		$(DOCKER) run --rm --network none --read-only --cap-drop ALL \
 			--security-opt no-new-privileges:true --user "$(HOST_UID):$(HOST_GID)" \
@@ -176,7 +182,7 @@ packages/wheelhouse:
 	select_network_interface
 	export SECS_NETWORK_INTERFACE_INPUT="$$SECS_SELECTED_INTERFACE" SECS_NETWORK_INTERFACE_ORIGIN='command line'
 	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory" NETWORK_INTERFACE="$$SECS_SELECTED_INTERFACE"
-	identity=$$(python3 -m deployment.rootless_access "$(PYTHON_BASE)")
+	source tools/acquisition.sh
 	key=$$( { sha256sum "$$stage/requirements.lock" | cut -d' ' -f1; printf '%s\n' "$$SECS_PACKAGES_VARIANT" "$(PYTHON_BASE)" "$(WHEELHOUSE_TOOL_SHA256)" 'https://pypi.org/simple' "$$source_url" 'antlr4-python3-runtime'; } | sha256sum | cut -d' ' -f1 )
 	mkdir -p "$$wheelhouse_directory/.secs-pylocks"
 	exec {metadata_fd}<"$$wheelhouse_directory/.secs-pylocks"
@@ -184,13 +190,15 @@ packages/wheelhouse:
 	metadata="$$wheelhouse_directory/.secs-pylocks/pylock.packages-$$key.toml"
 	if [[ ! -e $$metadata && ! -L $$metadata ]]; then
 		begin_retained_engine "$$stage"
-		$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+		grants=(--read-only \
 			--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 			--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
 			--mount type=bind,src="$$stage/requirements.lock",dst=/input/requirements.lock,readonly \
-			--entrypoint python "$(PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
+			--entrypoint python)
+		application=(-I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
 			--lock /input/requirements.lock --pool /pool --index-url https://pypi.org/simple \
-			--source "$$source_url" --require-source antlr4-python3-runtime > "$$stage/generated.toml"
+			--source "$$source_url" --require-source antlr4-python3-runtime)
+		secs_acquire "$(PYTHON_BASE)" grants application > "$$stage/generated.toml"
 		secs_engine_active=0
 		unset SECS_RETIREMENT_RECEIPT
 		ln -T -- "$$stage/generated.toml" "$$metadata"
@@ -199,13 +207,15 @@ packages/wheelhouse:
 	test -f "$$stage/pylock.toml" && test ! -L "$$stage/pylock.toml" || { printf '%s\n' 'Cached package projection must be a regular file.' >&2; exit 2; }
 	exec {metadata_fd}<&-
 	begin_retained_engine "$$stage"
-	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+	grants=(--read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--mount type=bind,src="$$wheelhouse_directory",dst=/pool \
 		--mount type=bind,src="$$stage",dst=/input,readonly \
-		--entrypoint python "$(PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" acquire \
+		--entrypoint python)
+	application=(-I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" acquire \
 		--lock /input/pylock.toml --source-lock /input/requirements.lock --pool /pool \
-		--require-sdist antlr4-python3-runtime > "$$stage/acquired.json"
+		--require-sdist antlr4-python3-runtime)
+	secs_acquire "$(PYTHON_BASE)" grants application > "$$stage/acquired.json"
 	secs_engine_active=0
 	unset SECS_RETIREMENT_RECEIPT
 	mkdir "$$stage/recheck"

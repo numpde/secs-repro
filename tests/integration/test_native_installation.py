@@ -4,6 +4,7 @@ from importlib.metadata import version
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import unittest
@@ -15,7 +16,9 @@ class NativeInstallationTests(unittest.TestCase):
         for package, expected in (("numpy", "2.3.5"), ("certifi", "2026.7.22"), ("idna", "3.19")):
             self.assertEqual(version(package), expected)
         self.assertEqual(version("torch").split("+")[0], "2.10.0")
-        self.assertEqual(version("provider-core"), "0.5.16")
+        match = re.search(r'^provider-core==([^\s]+)', Path('/input/native.lock').read_text(), re.MULTILINE)
+        self.assertIsNotNone(match)
+        self.assertEqual(version("provider-core"), match.group(1))
         self.assertFalse(Path("/opt/native").exists())
         science = subprocess.run((sys.executable, "-I", "-m", "pip", "check"),
                                  capture_output=True, text=True)
@@ -30,7 +33,7 @@ class NativeInstallationTests(unittest.TestCase):
         self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
         facts = json.loads(checked.stdout)
         self.assertEqual(facts["native_prefix"], "/usr/local")
-        self.assertEqual(facts["sdk_version"], "0.5.16")
+        self.assertEqual(facts["sdk_version"], match.group(1))
         self.assertEqual(facts["science_prefix"], "/usr/local")
         self.assertEqual(facts["science_executable"], "/usr/local/bin/python")
         self.assertTrue(facts["same_child_reused"])

@@ -32,7 +32,7 @@ unexport WLAN_INTERFACE
 shell_quote = '$(subst ','"'"',$(1))'
 unexport DOCKER_HOST DOCKER_CONTEXT SECS_DOCKER_ENDPOINT
 unexport SECS_RETIREMENT_RECEIPT
-override export SECS_BOOTSTRAP_IMAGE = $(PYTHON_BASE)
+override export SECS_BOOTSTRAP_IMAGE = $(PROVIDER_PYTHON_BASE)
 DOCKER := env -u DOCKER_HOST -u DOCKER_CONTEXT $(CURDIR)/tools/docker.sh
 DOCKER_MAKE = $(MAKE) SECS_DOCKER_ENDPOINT=$(call shell_quote,$(SECS_DOCKER_ENDPOINT))
 
@@ -193,6 +193,7 @@ help:
 checkpoint/image:
 	@$(DOCKER) build --quiet --network none --pull=false \
 		--file containers/checkpoint/Dockerfile \
+		--build-arg PYTHON_BASE="$(PROVIDER_PYTHON_BASE)" \
 		--tag "$(CHECKPOINT_IMAGE_TAG)" \
 		"$(REPOSITORY_ROOT)"
 
@@ -236,7 +237,7 @@ checkpoint:
 	checkpoint_stage_dir=$$(realpath -e -- "$$checkpoint_stage")
 	converter_image=$$($(DOCKER_MAKE) --no-print-directory packages/cpu/image)
 	extractor_image=$$($(DOCKER_MAKE) --no-print-directory checkpoint/image)
-	extractor_args=(--rm --init --pull never --read-only
+	extractor_args=(--init --read-only
 		"--cap-drop" ALL --security-opt no-new-privileges:true
 		"--pids-limit" 32 --cpus 1 --memory 2304m --memory-swap 2304m
 		"--tmpfs" /scratch:size=2g,mode=1777,noexec,nosuid,nodev
@@ -244,13 +245,10 @@ checkpoint:
 	)
 	archive_source_args=()
 	if test -n "$${ARCHIVE_INPUT:-}"; then
-		extractor_args+=(--network none --mount "type=bind,src=$$archive_path,dst=/input/archive.tar.gz,readonly")
+		extractor_args+=(--mount "type=bind,src=$$archive_path,dst=/input/archive.tar.gz,readonly")
 		archive_source_args=(--archive /input/archive.tar.gz)
 	elif test -n "$${ARCHIVE_URL_INPUT:-}"; then
-		extractor_args+=(--network bridge)
 		archive_source_args=(--url "$${ARCHIVE_URL_INPUT}")
-	else
-		extractor_args+=(--network bridge)
 	fi
 	precision_args=()
 	if test -n "$${CHECKPOINT_PRECISION_INPUT:-}"; then
@@ -266,10 +264,16 @@ checkpoint:
 		"--entrypoint" python
 	)
 	secs_engine_active=1
-	$(DOCKER) run "$${extractor_args[@]}" "$$extractor_image" \
-		"$${archive_source_args[@]}" \
-		--spec /input/checkpoint.toml \
-		--scratch-directory /scratch \
+	extractor_application=("$${archive_source_args[@]}" --spec /input/checkpoint.toml --scratch-directory /scratch)
+	run_checkpoint_extractor() {
+		if test -n "$${ARCHIVE_INPUT:-}"; then
+			$(DOCKER) run --rm --pull never --network none "$${extractor_args[@]}" "$$extractor_image" "$${extractor_application[@]}"
+		else
+			source tools/acquisition.sh
+			secs_acquire "$$extractor_image" extractor_args extractor_application
+		fi
+	}
+	run_checkpoint_extractor \
 	| $(DOCKER) run -i "$${converter_args[@]}" "$$converter_image" \
 		-P /opt/checkpoint/convert.py \
 		--scratch-directory /scratch \

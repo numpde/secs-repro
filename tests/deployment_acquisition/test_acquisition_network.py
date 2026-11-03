@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import os
 from pathlib import Path
 import subprocess
+import sys
 import threading
 import unittest
 
@@ -68,9 +69,10 @@ for tunnel in (False, True):
                 env = os.environ | {'SECS_NETWORK_INTERFACE_INPUT': 'system',
                                     'SECS_NETWORK_INTERFACE_ORIGIN': 'command line'}
                 process = subprocess.Popen(
-                    ['bash', str(ROOT / 'tools/docker.sh'), 'run', '--rm', '--network', 'bridge',
-                     '--pull', 'never', '--read-only', '--entrypoint', 'python3',
-                     os.environ['DEPLOYMENT_TEST_IMAGE'], '-I', '-B', '-c', worker, str(origin.server_port)],
+                    ['bash', '-c',
+                     'source tools/acquisition.sh; grants=(--read-only --entrypoint python3); '
+                     'application=(-I -B -c "$2" "$3"); secs_acquire "$1" grants application',
+                     'bash', os.environ['DEPLOYMENT_TEST_IMAGE'], worker, str(origin.server_port)],
                     cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 )
                 try:
@@ -83,6 +85,8 @@ for tunnel in (False, True):
                         self.fail(f'Acquisition launcher {process.pid} did not confirm cleanup after TERM; inspect its owned resources.')
                     self.fail(f'Acquisition timed out; launcher exited {process.returncode} after TERM: {stderr}')
                 self.assertEqual(process.returncode, 0, stderr)
+                subprocess.run([sys.executable, '-B', str(ROOT / 'tools/acquisition_bootstrap.py')],
+                               cwd=ROOT, check=True)
             finally:
                 origin.shutdown()
                 thread.join(5)

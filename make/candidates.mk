@@ -88,16 +88,19 @@ candidates:
 			candidate-builder "$$1" "$${CANDIDATE_DTYPE_INPUT}" "$${CANDIDATE_CPUS_INPUT}" "$$package_image" "$$device"; \
 	}; \
 	run_network_extractor() { \
-		$(DOCKER) run --rm --pull never --network bridge --read-only \
+		source tools/acquisition.sh; \
+		grants=(--read-only \
 			--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 64 \
 			--cpus 1 --memory 2304m --memory-swap 2304m \
 			--tmpfs /scratch:rw,noexec,nosuid,nodev,size=2g \
 			--mount type=bind,src="$$checkpoint_directory/checkpoint.toml",dst=/input/checkpoint.toml,readonly \
 			--mount type=bind,src="$$candidate_spec",dst=/input/candidates.toml,readonly \
 			--mount type=bind,src="$(CURDIR)/tools/extract_checkpoint.py",dst=/opt/extract.py,readonly \
-			--entrypoint python3 $(CHECKPOINT_IMAGE_TAG) \
+			--entrypoint python3); \
+		application=( \
 			-P /opt/extract.py "$$@" --spec /input/checkpoint.toml \
-			--member-spec /input/candidates.toml --scratch-directory /scratch; \
+			--member-spec /input/candidates.toml --scratch-directory /scratch); \
+		secs_acquire "$(CHECKPOINT_IMAGE_TAG)" grants application; \
 	}; \
 	secs_engine_active=1; \
 	if test -n "$${ARCHIVE_INPUT}"; then \

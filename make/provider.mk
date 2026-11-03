@@ -1,6 +1,5 @@
 override PROVIDER_IMAGE_TAG := secs-repro/provider:local
 override PROVIDER_PYTHON_BASE := docker.io/library/python:3.12.16-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
-override PROVIDER_CORE_WHEEL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.17/provider_core-0.5.17-py3-none-any.whl
 override WHEELHOUSE_TOOL_NAME := wheelhouse-tool-0.5.14.pyz
 override WHEELHOUSE_TOOL_SHA256 := 9d8cd59c0aeffd61ce462fa81f2951a24fb8a8749a1332d5f87842b4c095d656
 override WHEELHOUSE_TOOL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.5.14/$(WHEELHOUSE_TOOL_NAME)
@@ -105,15 +104,16 @@ provider/wheelhouse/tool:
 		status=$$?
 	fi
 	if test "$$status" -ne 10; then exit "$$status"; fi
-	identity=$$(python3 -m deployment.rootless_access "$(PROVIDER_PYTHON_BASE)")
-	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" \
-		--cap-drop ALL --security-opt no-new-privileges:true --pull never \
+	source tools/acquisition.sh
+	grants=(--read-only --cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 128m --memory-swap 128m \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tools",dst=/workspace/tools,readonly \
 		--mount type=bind,src="$$wheelhouse_directory",dst=/wheelhouse \
-		--workdir /workspace --entrypoint python "$(PROVIDER_PYTHON_BASE)" \
+		--workdir /workspace --entrypoint python)
+	application=( \
 		-I -B -c 'import sys; sys.path.insert(0, "/workspace"); from tools.acquire_release_asset import main; raise SystemExit(main())' \
-		acquire /wheelhouse "$(WHEELHOUSE_TOOL_NAME)" "$(WHEELHOUSE_TOOL_SHA256)" "$(WHEELHOUSE_TOOL_URL)"
+		acquire /wheelhouse "$(WHEELHOUSE_TOOL_NAME)" "$(WHEELHOUSE_TOOL_SHA256)" "$(WHEELHOUSE_TOOL_URL)")
+	secs_acquire "$(PROVIDER_PYTHON_BASE)" grants application
 
 # Both install profiles are exact issuer locks from the selected SDK release.
 provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requirements/native.lock
@@ -143,12 +143,14 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 	printf '%s\n' 'Shared wheelhouse is missing an SDK artifact; locating locked sources.' >&2
 	checksum=$$(awk '/^provider-core==/ {getline; sub(/^ *--hash=sha256:/, ""); print; exit}' "$$stage/requirements.lock")
 	[[ $$checksum =~ ^[0-9a-f]{64}$$ ]] || { printf '%s\n' 'SDK lock must contain the pinned provider-core hash.' >&2; exit 2; }
-	source_url="$(PROVIDER_CORE_WHEEL_URL)#sha256=$$checksum"
+	sdk_version=$$(awk '/^provider-core==/ {sub(/^provider-core==/, ""); sub(/[[:space:]\\].*/, ""); print; exit}' "$$stage/requirements.lock")
+	[[ $$sdk_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$$ ]] || { printf '%s\n' 'SDK lock must contain an exact provider-core version.' >&2; exit 2; }
+	source_url="https://github.com/numpde/nmr-provider-tools/releases/download/v$$sdk_version/provider_core-$$sdk_version-py3-none-any.whl#sha256=$$checksum"
 	source tools/network_interface.sh
 	select_network_interface
 	export SECS_NETWORK_INTERFACE_INPUT="$$SECS_SELECTED_INTERFACE" SECS_NETWORK_INTERFACE_ORIGIN='command line'
 	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory" NETWORK_INTERFACE="$$SECS_SELECTED_INTERFACE"
-	identity=$$(python3 -m deployment.rootless_access "$(PROVIDER_PYTHON_BASE)")
+	source tools/acquisition.sh
 	key=$$( { sha256sum "$$stage/requirements.lock" | cut -d' ' -f1; printf '%s\n' "$$profile" "$(PROVIDER_PYTHON_BASE)" "$(WHEELHOUSE_TOOL_SHA256)" 'https://pypi.org/simple' "$$source_url"; } | sha256sum | cut -d' ' -f1 )
 	mkdir -p "$$wheelhouse_directory/.secs-pylocks"
 	exec {metadata_fd}<"$$wheelhouse_directory/.secs-pylocks"
@@ -156,12 +158,14 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 	metadata="$$wheelhouse_directory/.secs-pylocks/pylock.sdk-$$key.toml"
 	if [[ ! -e $$metadata && ! -L $$metadata ]]; then
 		begin_retained_engine "$$stage"
-		$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+		grants=(--read-only \
 			--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 			--mount type=bind,src="$$wheelhouse_directory",dst=/pool,readonly \
 			--mount type=bind,src="$$stage/requirements.lock",dst=/input/requirements.lock,readonly \
-			--entrypoint python "$(PROVIDER_PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
-			--lock /input/requirements.lock --pool /pool --index-url https://pypi.org/simple --source "$$source_url" > "$$stage/generated.toml"
+			--entrypoint python)
+		application=(-I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" locate \
+			--lock /input/requirements.lock --pool /pool --index-url https://pypi.org/simple --source "$$source_url")
+		secs_acquire "$(PROVIDER_PYTHON_BASE)" grants application > "$$stage/generated.toml"
 		secs_engine_active=0
 		unset SECS_RETIREMENT_RECEIPT
 		ln -T -- "$$stage/generated.toml" "$$metadata"
@@ -170,12 +174,14 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 	test -f "$$stage/pylock.toml" && test ! -L "$$stage/pylock.toml" || { printf '%s\n' 'Cached SDK projection must be a regular file.' >&2; exit 2; }
 	exec {metadata_fd}<&-
 	begin_retained_engine "$$stage"
-	$(DOCKER) run --rm --network bridge --read-only --user "$$identity" --pull never \
+	grants=(--read-only \
 		--cap-drop ALL --security-opt no-new-privileges:true --pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--mount type=bind,src="$$wheelhouse_directory",dst=/pool \
 		--mount type=bind,src="$$stage",dst=/input,readonly \
-		--entrypoint python "$(PROVIDER_PYTHON_BASE)" -I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" acquire \
-		--lock /input/pylock.toml --source-lock /input/requirements.lock --pool /pool > "$$stage/acquired.json"
+		--entrypoint python)
+	application=(-I -S "/pool/$(WHEELHOUSE_TOOL_NAME)" acquire \
+		--lock /input/pylock.toml --source-lock /input/requirements.lock --pool /pool)
+	secs_acquire "$(PROVIDER_PYTHON_BASE)" grants application > "$$stage/acquired.json"
 	secs_engine_active=0
 	unset SECS_RETIREMENT_RECEIPT
 	mkdir "$$stage/recheck"
