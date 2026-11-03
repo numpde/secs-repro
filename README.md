@@ -65,7 +65,8 @@ noninteractive acquisition fails. The device choice routes cooperating HTTP(S)
 clients through the SDK proxy, which binds DNS and TCP to that device. This is
 not a firewall for clients that bypass the proxy. `system` uses normal routing.
 Offline operations do not ask, and Docker base-image pulls use the daemon's
-default route. GitHub and provider API traffic use their normal routes.
+default route. Git commands and provider API traffic use their normal routes;
+wheel and GitHub release asset downloads use the selected acquisition route.
 
 `make provider/deployment/down DEPLOYMENT=<name> DOCKER_CONTEXT=<local-context>` stops
 admission and waits for work and selected reports before stopping the scientific
