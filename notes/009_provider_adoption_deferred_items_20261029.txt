@@ -346,6 +346,17 @@ still verifies selected hashes and refuses to replace conflicting files; do not
 claim that the warm check discovers every conflict before any network access.
 Normal package and SDK acquisition now recheck the acquired pool with target
 pip and the same frozen lock before reporting success. That added cold-branch
-transition has been reviewed, but has not been executed since it was added:
-the current pools are complete, and no cached wheel was removed or redownloaded
-to manufacture a miss. The unchanged warm checks passed on both hosts.
+transition has been reviewed, but has not completed since it was added. The
+unchanged warm checks passed on both hosts.
+
+On 2026-11-03, an authorized local cold witness deliberately moved the pinned
+provider-core 0.5.4 wheel aside with a verified backup. The normal provider
+wheelhouse target detected the missing wheel but its download request failed;
+the post-acquisition check did not run. The client exited with status 2 and
+retained /home/ra/Downloads/wheelhouse/.secs-provider.qyRethbO because worker
+retirement is unconfirmed. No worker CID or host PID receipt was captured;
+absence of a matching Docker container does not establish host retirement.
+The shared owner restored the verified wheel from backup under the exclusive
+pool-directory lease with a no-overwrite hard link and verified its SHA-256.
+The backup and retained stage remain in place. Do not retry or remove the stage
+until the outstanding retirement uncertainty is resolved.
