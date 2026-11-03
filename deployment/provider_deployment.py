@@ -245,15 +245,53 @@ def _write_provider_image_ref(path: Path, image_id: str) -> None:
         _replace_private_file(path, updated)
 
 
+def _worker_image_ref(path: Path) -> str:
+    lines = _private_file(path).splitlines()
+    values = [line[len(b"WORKER_IMAGE_REF="):] for line in lines if line.startswith(b"WORKER_IMAGE_REF=")]
+    if len(values) != 1:
+        raise ValueError("Deployment env must contain exactly one WORKER_IMAGE_REF.")
+    try:
+        value = values[0].decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError("Deployment worker image pin must be ASCII.") from error
+    if value and _IMAGE_ID.fullmatch(value) is None:
+        raise ValueError("Deployment worker image pin must be empty or an immutable sha256 image ID.")
+    return value
+
+
+def _write_image_refs(path: Path, provider_id: str, worker_id: str) -> None:
+    """Publish both admitted pins in one private configuration replacement."""
+    content = _private_file(path)
+    lines = content.splitlines(keepends=True)
+    for key, value in ((b"PROVIDER_IMAGE_REF=", provider_id), (b"WORKER_IMAGE_REF=", worker_id)):
+        matches = [index for index, line in enumerate(lines) if line.startswith(key)]
+        if len(matches) != 1:
+            raise ValueError(f"Deployment env must contain exactly one {key[:-1].decode()}.")
+        current = lines[matches[0]]
+        newline = b"\r\n" if current.endswith(b"\r\n") else (b"\n" if current.endswith(b"\n") else b"")
+        lines[matches[0]] = key + value.encode("ascii") + newline
+    updated = b"".join(lines)
+    if updated != content:
+        _replace_private_file(path, updated)
+
+
 def _update_deployment_locked(repository: Path, name: str, project: ComposeProject,
-                              mock_index_selection: bool | None, image_id: str) -> dict:
+                              mock_index_selection: bool | None, image_id: str,
+                              worker_image_id: str | None = None) -> dict:
     """Verify and preflight the built image before draining and applying its immutable pin."""
     config = configuration_directory(repository, name)
     previous_image = _provider_image_ref(config / "deployment.env")
+    previous_worker = _worker_image_ref(config / "deployment.env") if worker_image_id is not None else None
     image_id = _inspect_provider_image(project, image_id)
+    if worker_image_id is not None and _IMAGE_ID.fullmatch(worker_image_id) is None:
+        raise ValueError("Worker update requires an immutable sha256 image ID.")
     network = _provider_network(repository, name)
-    plan = _render_deployment(repository, name, config, network, mock_index_selection,
-                              provider_image_id=image_id)
+    overrides = {"provider_image_id": image_id}
+    if worker_image_id is not None:
+        overrides["worker_image_id"] = worker_image_id
+    plan = _render_deployment(repository, name, config, network, mock_index_selection, **overrides)
+    if worker_image_id is not None and plan["services"]["worker"].get("environment", {}).get("SECS_MOCK_RUNNER") == "1":
+        raise ValueError("Cannot update a mock runner with a separate worker image.")
     _admit_provider_network(project, repository, name, network)
     _admit_worker_image(project, plan)
     if os.path.lexists(config / "old-api-retirement.json"):
@@ -271,15 +309,22 @@ def _update_deployment_locked(repository: Path, name: str, project: ComposeProje
     if any(record["State"]["Running"] for record in stopped.values()):
         raise RuntimeError("Provider update stopped without confirming every deployment service is stopped.")
     try:
-        _write_provider_image_ref(config / "deployment.env", image_id)
+        if worker_image_id is None:
+            _write_provider_image_ref(config / "deployment.env", image_id)
+        else:
+            _write_image_refs(config / "deployment.env", image_id, worker_image_id)
     except BaseException as error:
         try:
             observed_image = _provider_image_ref(config / "deployment.env")
+            observed_worker = _worker_image_ref(config / "deployment.env") if worker_image_id is not None else None
         except BaseException:
             observed_image = "unreadable"
+            observed_worker = "unreadable"
         error.add_note(
             f"The deployment was drained before provider pin publication failed; the pin currently reads "
-            f"{observed_image!r}. Inspect status and logs, then use provider/deployment/up or retry update."
+            f"{observed_image!r}. "
+            + (f"The worker pin currently reads {observed_worker!r}. " if worker_image_id else "")
+            + "Inspect status and logs, then use provider/deployment/up or retry update."
         )
         raise
     try:
@@ -287,7 +332,8 @@ def _update_deployment_locked(repository: Path, name: str, project: ComposeProje
     except BaseException as error:
         previous = previous_image or "<empty>"
         error.add_note(f"Provider pin is {image_id}; previous pin was {previous}. "
-                       "Startup is unconfirmed and containers may remain; inspect status and logs before retrying.")
+                       + (f"Worker pin is {worker_image_id}; previous pin was {previous_worker}. " if worker_image_id else "")
+                       + "Startup is unconfirmed and containers may remain; inspect status and logs before retrying.")
         raise
 
 
@@ -309,7 +355,7 @@ def _replace_private_file(path: Path, content: bytes) -> None:
 
 def _render_deployment(repository: Path, name: str, config: Path, network: dict,
                        mock_index_selection: bool | None = None,
-                       provider_image_id: str | None = None) -> dict:
+                       provider_image_id: str | None = None, worker_image_id: str | None = None) -> dict:
     """Render one deployment from an already validated network policy."""
     worker_config = _toml_document(config / "worker.toml")
     worker_device = worker_config.get("device", "cuda:0")
@@ -360,6 +406,8 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict,
                             "CHECKPOINT_DIRECTORY": "/", "MOLFORMER_CACHE_DIRECTORY": "/"})
     if provider_image_id is not None:
         environment["PROVIDER_IMAGE_REF"] = provider_image_id
+    if worker_image_id is not None:
+        environment["WORKER_IMAGE_REF"] = worker_image_id
     project = _project(repository, name)
     base_recipe = ComposeProject(repository, project.name, ("provider", "worker", "sources-init", "session-init"))
     plan = base_recipe.render(
@@ -1000,7 +1048,10 @@ def main(arguments: list[str] | None = None) -> int:
     parser.add_argument("deployment")
     parser.add_argument("--source", type=Path)
     parser.add_argument("--provider-image-id")
+    parser.add_argument("--worker-image-id")
     options = parser.parse_args(arguments)
+    if options.worker_image_id is not None and options.operation != "update":
+        parser.error("--worker-image-id is accepted only for update")
     installing = options.operation in {"credential-install", "interpreter-key-install"}
     if installing != (options.source is not None):
         parser.error("--source is required only for credential-install or interpreter-key-install")
@@ -1066,9 +1117,12 @@ def main(arguments: list[str] | None = None) -> int:
             elif options.operation == "update":
                 records = _update_deployment_locked(
                     repository, options.deployment, project, index_selection, options.provider_image_id,
+                    options.worker_image_id,
                 )
                 print(json.dumps(_status(records), indent=2))
-                print("Provider image updated; worker configuration and durable state were retained.")
+                print("Provider and worker images updated; worker configuration and durable state were retained."
+                      if options.worker_image_id else
+                      "Provider image updated; worker configuration and durable state were retained.")
                 print("The worker may have been recreated; check status before relying on it.")
                 print("Check provider logs for hello publication or errors.")
             elif options.operation == "down":

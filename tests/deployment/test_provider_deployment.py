@@ -135,6 +135,64 @@ class ProviderDeploymentTests(unittest.TestCase):
             self.assertEqual(deployment_env.read_text().splitlines()[0], f"PROVIDER_IMAGE_REF={previous}")
             start.assert_not_called()
 
+    def test_update_publishes_provider_and_worker_together_after_preflight(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, deployment_env, _previous, image_id, project = self._update_fixture(root)
+            worker_id = 'sha256:' + 'e' * 64
+            preflight = self._update_preflight(image_id)
+
+            def start(*_args):
+                text = deployment_env.read_text()
+                self.assertIn(f'PROVIDER_IMAGE_REF={image_id}', text)
+                self.assertIn(f'WORKER_IMAGE_REF={worker_id}', text)
+                return {}
+
+            with preflight[0], preflight[1] as render, preflight[2], preflight[3], preflight[4], \
+                    patch('deployment.provider_deployment.start_deployment', side_effect=start), _locked_parent(config.parent):
+                _update_deployment_locked(root, 'example', project, None, image_id, worker_id)
+            render.assert_called_once_with(root, 'example', config, {}, None,
+                                           provider_image_id=image_id, worker_image_id=worker_id)
+            project.stop.assert_called_once()
+
+    def test_worker_preflight_failure_preserves_both_pins_and_does_not_drain(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, deployment_env, _previous, image_id, project = self._update_fixture(root)
+            original = deployment_env.read_bytes()
+            preflight = self._update_preflight(image_id)
+            with preflight[0], preflight[1], preflight[2], \
+                    patch('deployment.provider_deployment._admit_worker_image', side_effect=ValueError('worker mismatch')), \
+                    preflight[4], _locked_parent(config.parent), self.assertRaisesRegex(ValueError, 'worker mismatch'):
+                _update_deployment_locked(root, 'example', project, None, image_id, 'sha256:' + 'e' * 64)
+            self.assertEqual(deployment_env.read_bytes(), original)
+            project.stop.assert_not_called()
+
+    def test_mock_runner_rejects_separate_worker_before_drain(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, deployment_env, _previous, image_id, project = self._update_fixture(root)
+            original = deployment_env.read_bytes()
+            plan = {'services': {'worker': {'environment': {'SECS_MOCK_RUNNER': '1'}}}}
+            with patch('deployment.provider_deployment._provider_network', return_value={}), \
+                    patch('deployment.provider_deployment._render_deployment', return_value=plan), \
+                    _locked_parent(config.parent), self.assertRaisesRegex(ValueError, 'mock runner'):
+                _update_deployment_locked(root, 'example', project, None, image_id, 'sha256:' + 'e' * 64)
+            self.assertEqual(deployment_env.read_bytes(), original)
+            project.stop.assert_not_called()
+
+    def test_worker_update_keeps_both_pins_when_drain_fails(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config, deployment_env, _previous, image_id, project = self._update_fixture(root)
+            original = deployment_env.read_bytes()
+            project.stop.side_effect = RuntimeError('drain failure')
+            preflight = self._update_preflight(image_id)
+            with preflight[0], preflight[1], preflight[2], preflight[3], preflight[4], \
+                    _locked_parent(config.parent), self.assertRaisesRegex(RuntimeError, 'drain failure'):
+                _update_deployment_locked(root, 'example', project, None, image_id, 'sha256:' + 'e' * 64)
+            self.assertEqual(deployment_env.read_bytes(), original)
+
     def test_update_does_not_pin_after_unclean_provider_exit(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
