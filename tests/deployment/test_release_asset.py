@@ -164,6 +164,17 @@ class ReleaseAssetTests(TestCase):
             self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2)])
             self.assertEqual((Path(directory) / "tool.pyz").read_bytes(), payload)
 
+    def test_http_408_retries(self):
+        with TemporaryDirectory() as directory:
+            payload = b"verified release asset"
+            args = ["asset", "acquire", directory, "tool.pyz", hashlib.sha256(payload).hexdigest(), "https://example.invalid/tool.pyz"]
+            error = urllib.error.HTTPError("https://example.invalid", 408, "timeout", {}, None)
+            with mock.patch.object(sys, "argv", args), mock.patch.object(acquire_release_asset, "open_url", side_effect=[error, io.BytesIO(payload)]) as fetch, \
+                    mock.patch.object(acquire_release_asset.time, "sleep") as sleep:
+                self.assertEqual(acquire_release_asset.main(), 0)
+            self.assertEqual(fetch.call_count, 2)
+            sleep.assert_called_once_with(1)
+
     def test_simultaneous_acquisition_downloads_once(self):
         with TemporaryDirectory() as directory:
             pool = Path(directory)

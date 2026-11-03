@@ -39,7 +39,7 @@ def network_failure(error):
                         delay = max(0, (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds())
                 except (ValueError, TypeError, OverflowError):
                     pass
-        return error.code in (429, 500, 502, 503, 504), f"HTTP {error.code}", delay
+        return error.code in (408, 429, 500, 502, 503, 504), f"HTTP {error.code}", delay
     if isinstance(error, urllib.error.URLError):
         return network_failure(error.reason) if isinstance(error.reason, BaseException) else (False, "network request failed", None)
     if isinstance(error, ssl.SSLError):
@@ -53,7 +53,7 @@ def network_failure(error):
     if isinstance(error, OSError):
         if match := re.match(r"^Tunnel connection failed: ([0-9]{3})(?:\s|$)", str(error)):
             status = int(match[1])
-            return status in (429, 500, 502, 503, 504), f"proxy tunnel HTTP {status}", None
+            return status in (408, 429, 500, 502, 503, 504), f"proxy tunnel HTTP {status}", None
         return error.errno in (errno.ECONNRESET, errno.ECONNREFUSED, errno.ETIMEDOUT, errno.ECONNABORTED, errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EPIPE), f"network error (errno {error.errno})" if isinstance(error.errno, int) else "network error", None
     return False, "network request failed", None
 
