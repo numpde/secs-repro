@@ -337,3 +337,10 @@ offline cache check passes. Both recorded containers are absent from the engine,
 but no host PID/start-time was recorded and the bounded process scan had
 unreadable entries. The original failure cause and native retirement remain
 unconfirmed; preserve the receipts rather than treating engine absence as proof.
+
+The normal warm-pool check stops when target pip reports its first unresolved
+requirement. A genuinely missing earlier requirement can therefore prevent that
+check from examining a later conflicting cached artifact before metadata network
+access begins. No SECS mixed-pool occurrence was captured. The shared publisher
+still verifies selected hashes and refuses to replace conflicting files; do not
+claim that the warm check discovers every conflict before any network access.
