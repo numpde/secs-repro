@@ -2,6 +2,7 @@
 
 import asyncio
 from hashlib import sha256
+import json
 import os
 from pathlib import Path
 import select
@@ -18,6 +19,7 @@ from provider_core.attempt_record import RecoveryScope
 from provider_core.job_input import FeedInputFacts
 from provider_core.ownership import AttemptClaims, LiveAttemptLimits
 from secs_inference.provider.runtime import run_execution
+from secs_inference.provider.main import _report_idle_exit_diagnostic
 from secs_inference.provider.worker import NativeWorkerExited, WorkerClient
 
 
@@ -33,6 +35,8 @@ class PreStartReadinessTests(unittest.IsolatedAsyncioTestCase):
                 return SimpleNamespace(jobs=(SimpleNamespace(input=facts),))
 
         class Worker:
+            idle_exit_diagnostic_failure = None
+
             async def check_ready(self, *, deadline):
                 events.append(("ready", deadline))
                 if len(events) == 1:
@@ -51,14 +55,28 @@ class PreStartReadinessTests(unittest.IsolatedAsyncioTestCase):
                 stop.set()
 
         claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
+        worker = Worker()
+        diagnostic = OSError("fixture diagnostic sink failure")
         with patch("secs_inference.provider.runtime.monotonic", side_effect=lambda: clock[0]), \
-             patch("secs_inference.provider.runtime.failure_evidence", return_value={}):
+             patch("secs_inference.provider.runtime.failure_evidence", return_value={}), \
+             patch("secs_inference.provider.runtime._LOG.warning", side_effect=diagnostic):
             await run_execution(
                 api=Discovery(), scope=RecoveryScope("https://api.test", "provider:test", "secs", "idle"),
                 claims=claims, stop=stop, poll_seconds=0.01, assemble=lambda _pending: Controller(),
-                worker=Worker(), startup_seconds=5,
+                worker=worker, startup_seconds=5,
             )
         self.assertEqual(events, [("ready", 105), ("retired", 100), ("ready", 115), ("admitted", 110)])
+        exit_failure, sink_failure = worker.idle_exit_diagnostic_failure
+        self.assertIsInstance(exit_failure, NativeWorkerExited)
+        self.assertIs(sink_failure, diagnostic)
+        with patch("secs_inference.provider.main.write_stderr") as notice:
+            _report_idle_exit_diagnostic(worker)
+        document = json.loads(notice.call_args.args[0])
+        self.assertEqual(document["returncode"], 70)
+        self.assertEqual(document["diagnostic_error_type"], "OSError")
+        self.assertNotIn("fixture diagnostic sink failure", str(document))
+        with patch("secs_inference.provider.main.write_stderr", side_effect=OSError("fallback failed")):
+            _report_idle_exit_diagnostic(worker)
 
     async def test_unsettled_controller_blocks_discovery_of_another_job(self):
         stop, entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()

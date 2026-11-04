@@ -124,6 +124,7 @@ raise SystemExit(main.main())
     async def test_lifetime_close_and_runtime_failures_both_reach_process_owner(self):
         runtime_failure = BaseExceptionGroup("contained exit", [SystemExit("private fixture detail")])
         close_failure = OSError("fixture lifetime close failure")
+        notice_failure = SystemExit("fixture fallback interruption")
         hello, discovery = SimpleNamespace(retire=AsyncMock()), SimpleNamespace(retire=AsyncMock())
         settings = ApiSettings(SigningIdentity("https://api.test", "credential:fixture", Ed25519PrivateKey.generate()),
                                HttpsSettings(ssl.create_default_context(), 1, 1), "dev-local")
@@ -144,10 +145,11 @@ raise SystemExit(main.main())
                 patch.object(main, "api_settings_with_material", return_value=(settings, "provider:fixture", object())),
                 patch.object(main, "ProviderAPI", side_effect=(hello, discovery)),
                 patch.object(main, "publish_hello_until_stopped", side_effect=runtime_failure),
+                patch.object(main, "_report_idle_exit_diagnostic", side_effect=notice_failure),
                 patch.object(ProviderLifetime, "close", autospec=True, side_effect=failing_close),
             ):
                 with self.assertRaises(BaseExceptionGroup) as caught:
                     await main.run_provider(root / "provider.toml")
-            self.assertEqual(caught.exception.exceptions, (runtime_failure, close_failure))
+            self.assertEqual(caught.exception.exceptions, (runtime_failure, notice_failure, close_failure))
             hello.retire.assert_awaited_once()
             discovery.retire.assert_awaited_once()

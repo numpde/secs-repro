@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import replace
+import json
 import logging
 import os
 from pathlib import Path
@@ -40,6 +41,19 @@ _LOG = logging.getLogger(__name__)
 LIFETIME_DIRECTORY = Path("/state")
 SOURCE_DIRECTORY = Path("/run/secs/sources/current")
 WORKER_SOCKET = Path("/run/secs/worker/worker.sock")
+
+
+def _report_idle_exit_diagnostic(worker):
+    if worker is None or worker.idle_exit_diagnostic_failure is None:
+        return
+    exit_failure, diagnostic = worker.idle_exit_diagnostic_failure
+    try:
+        write_stderr(json.dumps({"operation": "report idle scientific worker exit",
+                                 "returncode": exit_failure.runner.original_exit.returncode,
+                                 "diagnostic_error_type": type(diagnostic).__name__}).encode())
+    except Exception:
+        # A broken fallback sink cannot change successful retirement into failure.
+        pass
 
 
 def _diagnostic_details(error, text, diagnostic_window):
@@ -215,6 +229,10 @@ async def run_provider(config_path=CONFIG_PATH):
             except BaseException as cause:
                 cleanup_failed = True
                 failures.append(cause)
+        try:
+            _report_idle_exit_diagnostic(worker)
+        except BaseException as cause:
+            failures.append(cause)
         for number in handlers:
             try:
                 loop.remove_signal_handler(number)

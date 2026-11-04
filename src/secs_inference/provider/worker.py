@@ -56,6 +56,7 @@ class WorkerClient:
             raise ValueError("Native exit observation must leave part of the retirement allowance for stopping")
         self.path, self.startup_seconds = path, startup_seconds
         self.retirement_seconds, self.observation_seconds = retirement_seconds, observation_seconds
+        self.idle_exit_diagnostic_failure = None
         self._begin_lifetime()
 
     def _begin_lifetime(self):

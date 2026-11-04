@@ -98,9 +98,13 @@ async def run_execution(*, api, scope, claims, stop, poll_seconds, assemble, wor
         try:
             await worker.check_ready(deadline=startup_deadline)
         except NativeWorkerExited as cause:
-            _LOG.warning("Idle scientific worker exited; retiring it before a new Attempt is admitted; evidence=%s",
-                         json.dumps({"returncode": cause.runner.original_exit.returncode,
-                                     "failure": failure_evidence(cause, secrets=())}))
+            try:
+                _LOG.warning("Idle scientific worker exited; retiring it before a new Attempt is admitted; evidence=%s",
+                             json.dumps({"returncode": cause.runner.original_exit.returncode,
+                                         "failure": failure_evidence(cause, secrets=())}))
+            except Exception as diagnostic:
+                if worker.idle_exit_diagnostic_failure is None:
+                    worker.idle_exit_diagnostic_failure = (cause, diagnostic)
             await worker.stop()
             if stop.is_set():
                 break
