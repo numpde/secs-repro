@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, Mock
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
-from provider_core.analysis import AnalysisSuccess, PreparedAnalysis
+from provider_core.analysis import AnalysisFailure, AnalysisSuccess, PreparedAnalysis
 from provider_core.api import ProviderAPI
 from provider_core.api_config import api_settings_with_material
 from provider_core.attempt_record import ProtectedEvidence, RecoveryScope, StartPending, TerminalOperation
@@ -36,7 +36,7 @@ from provider_core.transport import HttpResponse
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.config import HelloPolicy
 from secs_inference.provider.interpreter import InterpretationFailed
-from secs_inference.provider.runtime import _drain_controller, run_services
+from secs_inference.provider.runtime import _drain_controller, run_execution, run_services
 from secs_inference.provider.session import SecsSession
 from secs_inference.provider.worker import WorkerClient
 from test_async_interpretation import call, choice
@@ -55,11 +55,12 @@ class LifecycleTransport:
     exchange_seconds, retirement_seconds = 1, 1
     retirement_confirmed, pending_owner, last_failure = True, None, None
 
-    def __init__(self, *, fail_observations=0, fail_conditions=0):
+    def __init__(self, *, fail_observations=0, fail_conditions=0, facts=FACTS, attempt=ATTEMPT):
         self.fail_observations = fail_observations
         self.fail_conditions = fail_conditions
         self.observation_requests = []
         self.condition_requests = []
+        self.facts, self.attempt = facts, attempt
 
     @staticmethod
     def unavailable():
@@ -79,7 +80,7 @@ class LifecycleTransport:
         path = request.url.path
         if path.endswith("/start"):
             document = {"schema_id": "nmr.provider.execution_attempt_start_response.v1",
-                        "execution_attempt_ref": ATTEMPT, "job_ref": FACTS.job_ref,
+                        "execution_attempt_ref": self.attempt, "job_ref": self.facts.job_ref,
                         "analysis_kind_ref": ANALYSIS_KIND_REF, "provider_ref": PROVIDER,
                         "state": "in_progress", "started_at": "2026-10-29T00:00:00Z", "replayed": False}
         elif path.endswith("/progress"):
@@ -90,15 +91,15 @@ class LifecycleTransport:
                     self.fail_conditions -= 1
                     return self.unavailable()
             document = {"schema_id": "nmr.provider.execution_attempt_progress_response.v1",
-                        "execution_attempt_ref": ATTEMPT, "phase": command["phase"],
+                        "execution_attempt_ref": self.attempt, "phase": command["phase"],
                         "condition_code": command["condition_code"], "updated_at": "2026-10-29T00:00:00Z"}
-        elif request.method == "GET" and path.endswith(ATTEMPT):
+        elif request.method == "GET" and path.endswith(self.attempt):
             self.observation_requests.append(request)
             if self.fail_observations:
                 self.fail_observations -= 1
                 return self.unavailable()
             document = {"schema_id": "nmr.provider.execution_attempt_read_response.v1",
-                        "execution_attempt_ref": ATTEMPT, "job_ref": FACTS.job_ref,
+                        "execution_attempt_ref": self.attempt, "job_ref": self.facts.job_ref,
                         "state": "in_progress", "job_state": "closed"}
         else:
             raise AssertionError(f"Unexpected API effect: {request.method} {path}")
@@ -169,6 +170,92 @@ class Discovery:
 
 
 class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
+    async def test_settled_failure_is_durable_before_next_job_succeeds(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ipc").mkdir(mode=0o700)
+            (root / "queue").mkdir(mode=0o700)
+            endpoint = DeliveryEndpoint(ORIGIN, PROVIDER, root / "ipc/delivery.sock")
+            limits = QueueLimits(2, 4194304, 2, 4194304)
+            queue = DeliveryQueue(root / "queue", limits=limits)
+            inbox = SharedDeliveryInbox(queue, SharedDeliverySocket(endpoint.socket_path, None), request_seconds=1,
+                                        on_accepted=lambda _outcome: None, on_failure=lambda *_args: None)
+            key = Ed25519PrivateKey.generate()
+            credential = json.dumps({
+                "schema_id": "nmr.provider.private_signing_credential.v1", "profile": "dev-local",
+                "principal_ref": PROVIDER, "credential_ref": "credential:test", "algorithm": "ed25519",
+                "public_key_spki_der_b64": base64.b64encode(key.public_key().public_bytes(
+                    Encoding.DER, PublicFormat.SubjectPublicKeyInfo)).decode(),
+                "private_key_pkcs8_pem": key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()).decode(),
+            }, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+            fields = {"origin": ORIGIN, "profile": "dev-local", "topology": "dev-local", "provider_ref": PROVIDER,
+                      "credential_file": "/fixture/credential", "exchange_seconds": 1, "retirement_seconds": 1}
+            _, _, publication = api_settings_with_material(fields, lambda *_args, **_kwargs: credential)
+            delivery = SharedDeliveryClient(endpoint, publication, exchange_seconds=1, retirement_seconds=1)
+            second = FeedInputFacts("job:second", FACTS.input_schema_id, FACTS.input_fingerprint, FACTS.input_byte_length)
+            jobs = (FACTS, second)
+            attempts = (ATTEMPT, "execution_attempt:sha256:" + "c" * 64)
+            stop = asyncio.Event()
+            claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
+            scope = RecoveryScope(ORIGIN, PROVIDER, "secs", "two-jobs")
+            sciences, controllers = [], []
+
+            class FailedScience(Science):
+                async def prepare(self, acknowledged, instructions, *, report_condition):
+                    self.preparations += 1
+                    return AnalysisFailure("interpretation_failed", "fixture failure",
+                                           ProtectedEvidence("fixture.evidence.v1", b"observed"))
+
+            class TwoJobs:
+                async def jobs(self, **_query):
+                    if len(controllers) == len(jobs):
+                        stop.set()
+                        return SimpleNamespace(jobs=())
+                    return SimpleNamespace(jobs=(SimpleNamespace(input=jobs[len(controllers)]),))
+
+            def assemble(pending):
+                index = len(controllers)
+                if index == 1:
+                    self.assertEqual(queue.status(ORIGIN, PROVIDER, attempts[0])["operation"], TerminalOperation.FAIL.value)
+                    self.assertTrue(controllers[0].shutdown_ready)
+                    self.assertEqual(claims.live_owners(), ())
+                science = FailedScience() if index == 0 else Science()
+                sciences.append(science)
+                identity = SigningIdentity(ORIGIN, "credential:test", key)
+                controller = AttemptController.live(
+                    ProviderAPI(identity, LifecycleTransport(facts=jobs[index], attempt=attempts[index]), expected_topology="dev-local"),
+                    claims, science, scope=scope, stopping=asyncio.Event(), admission_stopping=stop,
+                    start_policy=LiveStartPolicy(0.001, lambda *_args: None, lambda *_args: None),
+                    preverified_input=VerifiedJobInput(jobs[index], PAYLOAD), delivery=delivery,
+                    on_delivery_retry=lambda *_args: None, delivery_retry_initial_seconds=0.01,
+                    delivery_retry_max_seconds=0.01, allowed_job_states=frozenset({"open", "closed"}),
+                    poll_seconds=0.01, task_settle_seconds=1,
+                )
+                controllers.append(controller)
+                return controller
+
+            try:
+                await inbox.start()
+                await asyncio.wait_for(run_execution(api=TwoJobs(), scope=scope, claims=claims, stop=stop,
+                    poll_seconds=0.01, assemble=assemble, worker=SimpleNamespace(check_ready=AsyncMock()),
+                    startup_seconds=1), 5)
+                self.assertEqual([(s.preparations, s.executions, s.retirements) for s in sciences], [(1, 0, 1), (1, 1, 1)])
+                self.assertTrue(all(controller.shutdown_ready for controller in controllers))
+                self.assertEqual(claims.live_owners(), ())
+            finally:
+                await delivery.retire()
+                await inbox.close()
+                queue.close()
+            reopened = DeliveryQueue(root / "queue", limits=limits)
+            try:
+                items = {row["execution_attempt_ref"]: row for row in reopened.inventory(ORIGIN, PROVIDER)}
+                self.assertEqual(set(items), set(attempts))
+                self.assertEqual(items[attempts[0]]["operation"], TerminalOperation.FAIL.value)
+                self.assertEqual(items[attempts[1]]["operation"], TerminalOperation.COMPLETE.value)
+                self.assertEqual([items[a]["job_ref"] for a in attempts], [job.job_ref for job in jobs])
+            finally:
+                reopened.close()
+
     async def test_observation_and_condition_recover_without_restarting_science(self):
         from secs_inference.provider.main import _api_recovery_policies
 
