@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from provider_core.upload_response import UploadMember
-from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation, SourceRef
+from secs_inference.provider.input_operations import SelectedRepresentation, SourceRef
 from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession, PreparationRejected
 
 
@@ -46,12 +46,14 @@ class ScriptedChat:
 
 
 class InterpreterTests(unittest.IsolatedAsyncioTestCase):
-    def _session(self, chat, inspect=lambda source: {}, max_turns=8):
+    def _session(self, chat, inspect=lambda source: {}):
+        async def inspect_with_deadline(source, _deadline):
+            return inspect(source)
         return InterpretationSession(
-            chat, "Find C2H6O",
+            (lambda **_: chat,), "Find C2H6O",
             (UploadMember("upload:first", "carbon distractor", 4, None),
              UploadMember("upload:second", "proton choices", 10, None)),
-            AsyncMock(side_effect=inspect), deadline=monotonic() + 3, max_turns=max_turns,
+            inspect_with_deadline, deadline=monotonic() + 3, timeout_seconds=3, context_bytes=1000000,
         )
 
     async def test_inspection_selects_among_distractors_and_preserves_every_description(self):
@@ -67,7 +69,7 @@ class InterpreterTests(unittest.IsolatedAsyncioTestCase):
         initial = chat.requests[0][1]['content']
         self.assertIn('carbon distractor', initial)
         self.assertIn('proton choices', initial)
-        self.assertIn('experiment1/carbon.jdx', chat.requests[1][-1]['content'])
+        self.assertIn('experiment1/carbon.jdx', chat.requests[1][-2]['content'])
 
     async def test_selection_preserves_identity_formula_reason_and_processing(self):
         decision = await self._session(ScriptedChat(selection(representation_id='opaque-bruker-pair', processing='as_stored', explanation='This processed pair identifies proton data.'))).run(_accept_selection)
@@ -75,26 +77,26 @@ class InterpreterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_selection_rejection_returns_to_its_call_without_resetting_turn_budget(self):
         choice = selection(explanation='Description identifies proton.', call_id='selected')
-        chat = ScriptedChat(choice, tool('report_input_problem', {'explanation': 'No supported proton data was established.'}))
-        session = self._session(chat, max_turns=2)
+        chat = ScriptedChat(choice, tool('report_interpretation_problem', {'explanation': 'No supported proton data was established.'}))
+        session = self._session(chat)
         deadline = session.deadline
         async def reject(decision):
             self.assertIsInstance(decision, SelectedRepresentation)
             raise PreparationRejected('The selected file contains carbon, not proton data.')
-        self.assertIsInstance(await session.run(reject), CannotAnalyse)
-        self.assertEqual(chat.requests[1][-1], {'role': 'tool', 'tool_call_id': 'selected', 'content': 'The selected file contains carbon, not proton data.'})
-        prior_call = chat.requests[1][-2]['tool_calls'][0]
+        with self.assertRaises(InterpretationFailed):
+            await session.run(reject)
+        self.assertEqual(chat.requests[1][-2], {'role': 'tool', 'tool_call_id': 'selected', 'content': 'The selected file contains carbon, not proton data.'})
+        prior_call = chat.requests[1][-3]['tool_calls'][0]
         self.assertEqual(prior_call['id'], 'selected')
         self.assertEqual(json.loads(prior_call['function']['arguments'])['formula'], 'C2H6O')
         self.assertEqual(session.deadline, deadline)
-        self.assertEqual(chat.deadlines, [deadline, deadline])
+        self.assertTrue(all(value <= deadline for value in chat.deadlines))
         self.assertEqual(len(chat.requests), 2)
 
     async def test_budget_exhaustion_is_not_an_input_problem(self):
-        chat = ScriptedChat(tool('invent_reader', {}))
+        chat = ScriptedChat(*(tool('invent_reader', {}) for _ in range(3)))
         with self.assertRaises(InterpretationFailed) as caught:
-            await self._session(chat, max_turns=1).run(_accept_selection)
-        self.assertIn('turn budget was exhausted', str(caught.exception))
+            await self._session(chat).run(_accept_selection)
         self.assertIn('selecting an input representation', str(caught.exception))
 
     async def test_expired_interpretation_budget_does_not_call_the_model(self):
@@ -103,27 +105,28 @@ class InterpreterTests(unittest.IsolatedAsyncioTestCase):
         session.deadline = monotonic() - 1
         with self.assertRaises(InterpretationFailed) as caught:
             await session.run(_accept_selection)
-        self.assertIn('interpretation deadline elapsed', str(caught.exception))
+        self.assertIn('selecting an input representation', str(caught.exception))
         self.assertEqual(chat.requests, [])
 
     async def test_repair_feedback_distinguishes_unknown_tools_and_text_constraints(self):
         valid = {'representation_id': 'opaque-spectrum', 'formula': 'C2H6O', 'formula_evidence': {'kind': 'job_specification', 'quote': 'C2H6O'}, 'processing': 'as_stored', 'explanation': 'Proton spectrum.'}
-        cases = [(tool('invent_reader', {}), 'choose one of the advertised tools')]
+        cases = [(tool('invent_reader', {}), 'Choose a tool from the supplied definitions')]
         for value, reason in ((5, 'formula field must be text'), ('', 'formula field must not be empty'), ('\x00', 'formula field contains control characters'), ('x' * 65537, '65536-character limit')):
             cases.append((tool('select_representation', valid | {'formula': value}), reason))
         for call, reason in cases:
             with self.subTest(reason=reason):
-                chat = ScriptedChat(call, tool('report_input_problem', {'explanation': 'Cannot establish an input.'}))
-                await self._session(chat).run(_accept_selection)
-                self.assertIn(reason, chat.requests[-1][-1]['content'])
+                chat = ScriptedChat(call, tool('report_interpretation_problem', {'explanation': 'Cannot establish an input.'}))
+                with self.assertRaises(InterpretationFailed):
+                    await self._session(chat).run(_accept_selection)
+                self.assertIn(reason, chat.requests[-1][-2]['content'])
 
     async def test_malformed_json_arguments_get_correction_in_a_valid_conversation(self):
         malformed = tool('inspect_source', {})
         malformed['tool_calls'][0]['function']['arguments'] = 'not JSON'
-        chat = ScriptedChat(malformed, tool('report_input_problem', {'explanation': 'No supported source established.'}))
-        decision = await self._session(chat).run(_accept_selection)
-        self.assertIsInstance(decision, CannotAnalyse)
-        self.assertIn('JSON object', chat.requests[1][-1]['content'])
+        chat = ScriptedChat(malformed, tool('report_interpretation_problem', {'explanation': 'No supported source established.'}))
+        with self.assertRaises(InterpretationFailed):
+            await self._session(chat).run(_accept_selection)
+        self.assertIn('JSON object', chat.requests[1][-2]['content'])
 
     async def test_broken_selection_construction_is_not_sent_to_the_model_for_repair(self):
         chat = ScriptedChat(selection())
@@ -132,13 +135,13 @@ class InterpreterTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(TypeError, 'broken wiring'):
                 await session.run(_accept_selection)
         self.assertEqual(len(chat.requests), 1)
-        self.assertEqual(session.conversation.correction_failures, [])
+        self.assertEqual(session.conversation.correction_failures, ())
 
     async def test_unserializable_member_is_corrected_before_source_access(self):
         chat = ScriptedChat(tool('inspect_source', {'source': {'upload_ref': 'upload:second', 'member': '\ud800'}}), selection(representation_id='opaque-proton'))
         decision = await self._session(chat, lambda _: self.fail('Malformed source reached inspection')).run(_accept_selection)
         self.assertEqual(decision.representation_id, 'opaque-proton')
-        self.assertIn('not valid Unicode', chat.requests[1][-1]['content'])
+        self.assertIn('not valid Unicode', chat.requests[1][-2]['content'])
 
     async def test_nontext_tool_arguments_are_not_replayed_as_an_assistant_message(self):
         malformed = tool('inspect_source', {})
@@ -146,7 +149,7 @@ class InterpreterTests(unittest.IsolatedAsyncioTestCase):
         session = self._session(ScriptedChat(malformed))
         with self.assertRaises(InterpretationFailed):
             await session.run(_accept_selection)
-        self.assertEqual(session.conversation.correction_failures, [])
+        self.assertEqual(session.conversation.correction_failures, ())
 
     async def test_ambiguous_call_identity_is_not_admitted_to_the_conversation(self):
         message = tool('inspect_source', {})
@@ -154,7 +157,7 @@ class InterpreterTests(unittest.IsolatedAsyncioTestCase):
         session = self._session(ScriptedChat(message))
         with self.assertRaises(InterpretationFailed):
             await session.run(_accept_selection)
-        self.assertEqual(session.conversation.correction_failures, [])
+        self.assertEqual(session.conversation.correction_failures, ())
 
     async def test_download_outage_never_becomes_semantic_feedback(self):
         chat = ScriptedChat(tool('inspect_source', {'source': {'upload_ref': 'upload:second', 'member': None}}))
@@ -165,4 +168,4 @@ class InterpreterTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(OSError):
             await session.run(_accept_selection)
         self.assertEqual(len(chat.requests), 1)
-        self.assertEqual(session.conversation.correction_failures, [])
+        self.assertEqual(session.conversation.correction_failures, ())

@@ -37,6 +37,7 @@ def repository():
         root = Path(temporary)
         (root / "config").mkdir()
         for destination, source in TEMPLATES.items():
+            (root / source).parent.mkdir(parents=True, exist_ok=True)
             (root / source).write_text(f"example for {destination}\n")
         (root / ".gitignore").write_text("/config/deployments/\n")
         git(root, "init", "--quiet")

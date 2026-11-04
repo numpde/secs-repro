@@ -30,9 +30,12 @@ provider/deployment/init provider/deployment/config provider/deployment/grant pr
 .PHONY: provider/credential/install provider/interpreter-key/install
 provider/credential/install provider/interpreter-key/install: private export DEPLOYMENT_INPUT := $(value DEPLOYMENT)
 provider/credential/install provider/interpreter-key/install: private export SECRET_SOURCE_INPUT := $(value SOURCE)
+provider/credential/install provider/interpreter-key/install: private export INTERPRETER_KEY_NAME_INPUT := $(value KEY_NAME)
 provider/credential/install provider/interpreter-key/install:
 	@cd "$(REPOSITORY_ROOT)"
-	python3 -m deployment.provider_deployment "$(word 2,$(subst /, ,$@))-install" "$${DEPLOYMENT_INPUT}" --source "$${SECRET_SOURCE_INPUT}"
+	key_name=()
+	if [[ "$(@F)" == install && "$@" == provider/interpreter-key/install ]]; then key_name=(--key-name "$${INTERPRETER_KEY_NAME_INPUT}"); fi
+	python3 -m deployment.provider_deployment "$(word 2,$(subst /, ,$@))-install" "$${DEPLOYMENT_INPUT}" --source "$${SECRET_SOURCE_INPUT}" "$${key_name[@]}"
 
 .PHONY: provider/deployment/update
 provider/deployment/update: private export SECS_UPDATE_WORKER := $(value UPDATE_WORKER)

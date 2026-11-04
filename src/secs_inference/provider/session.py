@@ -6,17 +6,18 @@ from time import monotonic
 
 from provider_core.analysis import AnalysisFailure, AnalysisOutcomeUnresolved, AnalysisSuccess, ObservedWorkerCrash, PreparedAnalysis
 from provider_core.chat import ChatFailed
-from provider_core.diagnostics import failure_evidence
+from provider_core.diagnostics import describe_core_failure, failure_evidence
 from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpired
+from provider_core.interpreter import ModelWindowExpired
 from provider_core.attempt_record import ProtectedEvidence
 
-from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
-from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession, PreparationRejected
+from secs_inference.provider.input_operations import SelectedRepresentation
+from secs_inference.provider.interpreter import InterpretationFailed, InterpretationProblemReport, InterpretationSession, PreparationRejected
 from secs_inference.provider.outcomes import AnalysisOutcome, NO_STARTING_CANDIDATES_MESSAGE
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.worker import NativeWorkerExited, WorkerDeadlineBeforeDispatch
 from secs_inference.provider.worker_protocol import ScientificWorkerFailed, WorkerError, scientific_worker_failure
-from secs_inference.provider.sources import SourceAcquisitionFailed
+from secs_inference.provider.sources import SourceAcquisitionFailed, SourceDeadlineBeforeDispatch
 
 
 RESULT_SCHEMA_ID = "secs.elucidation.result.v1"
@@ -27,6 +28,12 @@ def _document(value):
                       sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _diagnostic_details(error, text, diagnostic_window):
+    if type(error) is InterpretationProblemReport:
+        return {"explanation": str(error)}
+    return describe_core_failure(error, text, diagnostic_window)
+
+
 class SecsSession:
     """Borrow the resident worker; release sources only after this work settles.
 
@@ -35,11 +42,12 @@ class SecsSession:
     Healthy completed searches leave the resident worker available for reuse.
     """
 
-    def __init__(self, *, worker, sources, chat, work_seconds, interpretation_seconds,
-                 startup_seconds, max_turns, secrets=(), mock_index=False):
-        self.worker, self.sources, self.chat = worker, sources, chat
+    def __init__(self, *, worker, sources, endpoint_factories, work_seconds, interpretation_seconds,
+                 startup_seconds, context_bytes, secrets=(), mock_index=False):
+        self.worker, self.sources, self.endpoint_factories = worker, sources, endpoint_factories
         self.work_seconds, self.interpretation_seconds = work_seconds, interpretation_seconds
-        self.startup_seconds, self.max_turns = startup_seconds, max_turns
+        self.startup_seconds = startup_seconds
+        self.context_bytes = context_bytes
         self._secrets, self._diagnostic = secrets, None
         self._mock_index = mock_index
         self._acknowledged = self._conversation = self._prepared = None
@@ -49,16 +57,22 @@ class SecsSession:
         self._retired = False
 
     def _evidence(self):
+        reports = [] if self._conversation is None else [
+            failure_evidence(error, secrets=self._secrets, describe_owner=_diagnostic_details)
+            for _, error in self._conversation.conversation.failures
+            if isinstance(error.__cause__, InterpretationProblemReport)
+        ]
         return ProtectedEvidence("secs.analysis.evidence.v1", _document({
             "input_choices": self._choices,
             "interpretation_rejections": [] if self._conversation is None else self._conversation.rejections,
+            "interpretation_reports": reports,
             "acquired_uploads": self.sources.evidence(),
             "failure": self._diagnostic,
         }))
 
     def _failure(self, code, message, cause=None):
         if cause is not None:
-            self._diagnostic = failure_evidence(cause, secrets=self._secrets)
+            self._diagnostic = failure_evidence(cause, secrets=self._secrets, describe_owner=_diagnostic_details)
             if isinstance(cause, ScientificWorkerFailed):
                 # The child supplies only its structural exception projection;
                 # it has no API/interpreter credentials or raw exception text.
@@ -121,16 +135,23 @@ class SecsSession:
         await self.sources.open(deadline=self._deadline, readers_quiescent=self._quiescent)
         interpretation_deadline = min(self._deadline, monotonic() + self.interpretation_seconds)
         self._conversation = InterpretationSession(
-            self.chat, instructions.specification_text, self.sources.members,
-            lambda source: self._inspect(source, require_execution),
-            deadline=interpretation_deadline, max_turns=self.max_turns, secrets=self._secrets,
+            self.endpoint_factories, instructions.specification_text, self.sources.members,
+            lambda source, deadline: self._inspect(source, deadline, require_execution),
+            deadline=interpretation_deadline, timeout_seconds=self.interpretation_seconds,
+            context_bytes=self.context_bytes, secrets=self._secrets,
         )
         return await self._prepare_choice(require_execution)
 
-    async def _inspect(self, source, require_execution):
-        await self.sources.acquire(source.upload_ref, deadline=self._conversation.deadline)
-        response = await self._request({"operation": "inspect", "source": asdict(source)},
-                                       self._conversation.deadline, require_execution=require_execution)
+    async def _inspect(self, source, deadline, require_execution):
+        try:
+            await self.sources.acquire(source.upload_ref, deadline=deadline)
+        except SourceDeadlineBeforeDispatch as cause:
+            raise ModelWindowExpired() from cause
+        try:
+            response = await self._request({"operation": "inspect", "source": asdict(source)},
+                                           deadline, require_execution=require_execution)
+        except WorkerDeadlineBeforeDispatch as cause:
+            raise ModelWindowExpired() from cause
         if response["outcome"] == "input_rejected":
             raise InputReadError(response["reason"])
         return response["facts"]
@@ -162,10 +183,7 @@ class SecsSession:
             })))
             return self._prepared
 
-        decision = await self._conversation.run(prepare)
-        if isinstance(decision, CannotAnalyse):
-            return self._failure("cannot_analyse", "No analysis was produced. Interpreter explanation: " + decision.explanation)
-        return decision
+        return await self._conversation.run(prepare)
 
     async def execute(self, prepared, *, report_condition):
         if prepared is not self._prepared or prepared is None or self._retired:
@@ -198,10 +216,12 @@ class SecsSession:
         command = request | {"attempt_ref": self._acknowledged.admission.execution_attempt_ref}
         if request["operation"] != "execute":
             command |= self.sources.worker_inputs()
+        was_quiescent = self._quiescent
         self._quiescent = False
         try:
             response = await self.worker.request(command, deadline=deadline, require_execution=require_execution)
         except WorkerDeadlineBeforeDispatch:
+            self._quiescent = was_quiescent
             raise
         except (ConditionRecoveryExpired, ObservationGapExpired):
             raise
@@ -257,9 +277,7 @@ class SecsSession:
                     cleanup_failed = True
                 failures.append(cause)
         try:
-            if self._conversation is None:
-                await self.chat.retire()
-            else:
+            if self._conversation is not None:
                 await self._conversation.retire()
         except (Exception, BaseExceptionGroup) as cause:
             cleanup_failed = True

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import sys
 
 
-_FILES = {"provider.signing.private.json", "interpreter.key"}
 _LIMIT = 65536
 
 
@@ -84,7 +84,8 @@ def main(arguments: list[str]) -> int:
     directory = Path(arguments[0])
     name = arguments[1]
     status = directory.lstat()
-    if (name not in _FILES or not stat.S_ISDIR(status.st_mode) or os.geteuid() == 0
+    if ((name != "provider.signing.private.json" and re.fullmatch(r"[a-z0-9][a-z0-9_-]*\.key", name) is None)
+            or not stat.S_ISDIR(status.st_mode) or os.geteuid() == 0
             or not os.access(directory, os.W_OK | os.X_OK, effective_ids=True)):
         raise ValueError("The runtime secret directory must grant the nonroot container user write and traversal access.")
     content = sys.stdin.buffer.read(_LIMIT + 1)

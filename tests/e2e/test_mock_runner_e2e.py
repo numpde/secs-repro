@@ -92,9 +92,8 @@ class MockRunnerEndToEndTests(unittest.IsolatedAsyncioTestCase):
                 scope = RecoveryScope(wire.origin, "provider:test", "secs", "scientific-e2e")
                 worker = WorkerClient(Path("/run/secs/worker/worker.sock"), startup_seconds=300,
                                       retirement_seconds=10, observation_seconds=2)
-                execution = ExecutionConfig(wire.origin + "/chat", "scripted-choice", wire.origin,
-                                            work_seconds=120, interpretation_seconds=60, worker_startup_seconds=300,
-                                            poll_seconds=0.1, max_turns=6)
+                execution = ExecutionConfig(wire.origin, work_seconds=120, worker_startup_seconds=300,
+                                            poll_seconds=0.1)
                 config = ProviderConfig("fixture", 1234, {}, 2, 0.1, 1,
                                         HelloPolicy("SECS test", "Local workflow proof", 3600, 1, mock_runner=True), execution)
                 controllers = []

@@ -29,11 +29,6 @@ services:
         target: /run/config/provider
         read_only: true
         bind: {create_host_path: false}
-      - type: bind
-        source: "${INTERPRETER_KEY_FILE:?set the interpreter API key file}"
-        target: /run/secrets/provider/interpreter.key
-        read_only: true
-        bind: {create_host_path: false}
       - type: volume
         source: lifetime
         target: /state

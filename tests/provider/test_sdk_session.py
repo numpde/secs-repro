@@ -17,10 +17,12 @@ from provider_core.analysis import AnalysisFailure, AnalysisOutcomeUnresolved, A
 from provider_core.attempt_record import RecoveryScope, StartPending, acknowledge_start
 from provider_core.attempt_request import fail_body, start_body
 from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpired
+from provider_core.interpreter import ModelWindowExpired
 from provider_core.attempt_response import AttemptAdmission
 from provider_core.job_input import FeedInputFacts, VerifiedJobInput
 
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
+from secs_inference.provider.input_operations import SourceRef
 from secs_inference.provider.session import SecsSession
 from secs_inference.provider.worker import WorkerClient, WorkerDeadlineBeforeDispatch
 from secs_inference.provider.worker_protocol import InvalidFailureEnvelope, ScientificWorkerFailed, WorkerError
@@ -141,6 +143,28 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(b"fixture no-write", outcome.evidence.content)
         finally:
             await session.retire()
+        self.assertNotIn("worker-stop", events)
+        self.assertIn(("sources-retire", True), events)
+
+    async def test_inspection_deadline_before_dispatch_allows_model_handoff(self):
+        session, worker, _, _ = self.make_session([])
+        session._acknowledged, _ = admission()
+        async def refused(command, *, deadline, require_execution):
+            raise WorkerDeadlineBeforeDispatch("no request was sent")
+        worker.request = refused
+        with self.assertRaises(ModelWindowExpired):
+            await session._inspect(SourceRef("upload:chosen"), monotonic() - 1, lambda: None)
+        self.assertTrue(session._quiescent)
+
+    async def test_execute_deadline_retains_prepared_handle_until_worker_stops(self):
+        session, worker, _, events = self.make_session([{"outcome": "prepared", "prepared_handle": 7}])
+        prepared = await self.prepare(session)
+        async def refused(command, *, deadline, require_execution):
+            raise WorkerDeadlineBeforeDispatch("no request was sent")
+        worker.request = refused
+        outcome = await session.execute(prepared, report_condition=condition)
+        self.assertEqual(outcome.code, "work_deadline_exceeded")
+        await session.retire()
         self.assertLess(events.index("worker-stop"), events.index(("sources-retire", True)))
 
     async def test_unknown_preparation_reply_is_unresolved(self):
@@ -431,16 +455,16 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(("sources-retire", True), events)
                 await session.retire()
                 self.assertEqual(events.count("worker-stop"), 1)
-                self.assertEqual(events.count("chat-retire"), 1)
+                self.assertEqual(events.count("chat-retire"), 2)
                 self.assertEqual(events.count(("sources-retire", True)), 1)
 
     def make_session(self, responses, turns=None):
         events = []
         worker = Worker(events, *responses)
         chat = Carrier(events, *(turns or [[choice()]]))
-        session = SecsSession(worker=worker, sources=Sources(events), chat=chat,
+        session = SecsSession(worker=worker, sources=Sources(events), endpoint_factories=(lambda **_: chat,),
                               work_seconds=3, interpretation_seconds=1,
-                              startup_seconds=1, max_turns=3)
+                              startup_seconds=1, context_bytes=1000000)
         return session, worker, chat, events
 
     async def prepare(self, session):
@@ -573,10 +597,10 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_explicit_inability_is_a_failure_without_search_or_forced_worker_restart(self):
         session, worker, _, events = self.make_session([], [[call(
-            "report_input_problem", {"explanation": "No supported spectrum."}, "refusal")]])
+            "report_interpretation_problem", {"explanation": "No supported spectrum."}, "refusal")]])
         outcome = await self.prepare(session)
         self.assertIsInstance(outcome, AnalysisFailure)
-        self.assertEqual(outcome.code, "cannot_analyse")
+        self.assertEqual(outcome.code, "interpretation_failed")
         await session.retire()
         self.assertEqual(worker.commands, [])
         self.assertNotIn("worker-stop", events)

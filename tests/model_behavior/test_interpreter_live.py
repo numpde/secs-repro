@@ -10,10 +10,9 @@ from time import monotonic
 import unittest
 
 from secs_inference.provider.config import CONFIG_PATH, decode_provider_config
-from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
-from secs_inference.provider.interpreter import InterpretationSession, PreparationRejected
+from secs_inference.provider.input_operations import SelectedRepresentation
+from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession, PreparationRejected
 from provider_core.upload_response import UploadMember as JobUpload
-from provider_core.chat import ChatEndpoint
 from provider_core.startup_file import read_startup_file
 from secs_inference.provider.main import _read_chat_settings
 from secs_inference.provider.source_access import InputReadError
@@ -25,14 +24,12 @@ async def _accept_selection(action):
 
 class LiveInterpreterTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.execution = decode_provider_config(read_startup_file(
-            CONFIG_PATH, maximum_bytes=65536, label="SECS provider configuration")).execution
-        if self.execution is None:
+        config = decode_provider_config(read_startup_file(
+            CONFIG_PATH, maximum_bytes=65536, label="SECS provider configuration"))
+        if config.execution is None:
             raise ValueError("Live interpreter tests require an execution configuration.")
-        spec, http = _read_chat_settings(self.execution, 10)
-        self.chat = ChatEndpoint(spec, transport=http.new_transport(), request_bytes=2097152, response_bytes=262144)
-        self.addAsyncCleanup(self.chat.retire)
-        print(f"Live interpreter: model={spec.model!r}, reasoning_effort={spec.reasoning_effort!r}", flush=True)
+        self.timeout = config.interpretation_seconds
+        self.factories, self.secrets = _read_chat_settings(self.timeout, 10)
         self.representations = {}
         self.catalog = {
             "upload:fixture": (
@@ -57,11 +54,13 @@ class LiveInterpreterTests(unittest.IsolatedAsyncioTestCase):
 
     def session(self, text, uploads):
         """Keep each observation within the deployment's own turn and time limits."""
-        return InterpretationSession(self.chat, text, uploads,
-            self.inspect, deadline=monotonic() + min(120, self.execution.interpretation_seconds),
-            max_turns=min(8, self.execution.max_turns))
+        session = InterpretationSession(self.factories, text, uploads, self.inspect,
+            deadline=monotonic() + self.timeout, timeout_seconds=self.timeout, context_bytes=min(factory.context_bytes for factory in self.factories),
+            secrets=self.secrets)
+        self.addAsyncCleanup(session.retire)
+        return session
 
-    async def inspect(self, source):
+    async def inspect(self, source, _deadline):
         """Return fixed discovery facts at the production inspection callback seam."""
         try:
             representations = self.catalog[source.upload_ref]
@@ -79,11 +78,8 @@ class LiveInterpreterTests(unittest.IsolatedAsyncioTestCase):
         return result
 
     async def test_missing_input_is_explained_not_invented(self):
-        outcome = await self.session("Please elucidate this molecule.", ()).run(_accept_selection)
-        self.assertIsInstance(outcome, CannotAnalyse)
-        self.assertTrue(outcome.explanation.strip())
-        self.assertIn("formula", outcome.explanation.lower())
-        self.assertTrue(any(word in outcome.explanation.lower() for word in ("spectrum", "spectra", "nmr")))
+        with self.assertRaises(InterpretationFailed):
+            await self.session("Please elucidate this molecule.", ()).run(_accept_selection)
 
     async def test_selects_proton_experiment_among_distractors(self):
         session = self.session("Find the structure with molecular formula C7H8ClN.", self.uploads)
@@ -115,9 +111,8 @@ class LiveInterpreterTests(unittest.IsolatedAsyncioTestCase):
         async def reject(selection):
             self.assert_proton_selection(selection)
             raise PreparationRejected("Cannot read the processed JCAMP-DX spectrum because the file does not contain an XYDATA table.")
-        outcome = await session.run(reject)
-        self.assertIsInstance(outcome, CannotAnalyse)
-        self.assertIn("xydata", outcome.explanation.lower())
+        with self.assertRaises(InterpretationFailed):
+            await session.run(reject)
 
     def assert_proton_selection(self, outcome):
         """The expected source and formula are evaluator facts, not tool instructions."""

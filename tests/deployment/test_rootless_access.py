@@ -220,8 +220,14 @@ class RootlessAccessTests(unittest.TestCase):
             config.mkdir(parents=True, mode=0o700)
             config.parent.chmod(0o700)
             config.parent.parent.chmod(0o700)
-            (config / "provider.toml").write_text("[api]\n")
+            (config / "provider.toml").write_text("[api]\n[execution]\n")
             (config / "provider.toml").chmod(0o600)
+            endpoint_directory = config / "interpreter.d"
+            endpoint_directory.mkdir(mode=0o700)
+            endpoint = endpoint_directory / "00-primary.toml"
+            endpoint.write_text('url = "https://model.example/v1/chat/completions"\nmodel = "model"\n'
+                                'key_file = "/run/secrets/provider/interpreters/interpreter.key"\n')
+            endpoint.chmod(0o600)
             worker_config = config / "worker.toml"
             worker_config.write_text('device = "cpu"\n')
             worker_config.chmod(0o600)

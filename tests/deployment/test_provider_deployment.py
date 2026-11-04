@@ -58,7 +58,7 @@ class ProviderDeploymentTests(unittest.TestCase):
         )
         deployment_env.chmod(0o600)
         for filename in ("provider.toml", "worker.toml"):
-            (config / filename).write_text("fixture\n")
+            (config / filename).write_text("[hello]\n" if filename == "provider.toml" else "fixture\n")
             (config / filename).chmod(0o600)
         state = root / "secrets/deployments/example"
         state.mkdir(parents=True, mode=0o700)
@@ -267,6 +267,8 @@ class ProviderDeploymentTests(unittest.TestCase):
             mock = config / "worker.mock-index.toml"
             mock.write_text('device = "cpu"\nmock_index = true\n')
             mock.chmod(0o600)
+            (config / "provider.toml").write_text("[hello]\n")
+            (config / "provider.toml").chmod(0o600)
             def plan(*_args):
                 return {"services": {"provider": {}, "worker": {"command": ["python -m secs_inference.provider.worker_model"]}}}
             with patch("deployment.provider_deployment._project") as project, \
@@ -521,7 +523,7 @@ class ProviderDeploymentTests(unittest.TestCase):
             config.mkdir(parents=True, mode=0o700)
             for name in ("provider.toml", "worker.toml", "deployment.env"):
                 path = config / name
-                path.write_text("test")
+                path.write_text("[hello]\n" if name == "provider.toml" else "test")
                 path.chmod(0o600)
             state = root / "secrets/deployments/example"
             state.mkdir(parents=True, mode=0o700)
@@ -590,7 +592,7 @@ class ProviderDeploymentTests(unittest.TestCase):
         for socket_path in ("/run/secs/sources/delivery.sock", "/run/secs/delivery.sock"):
             with self.subTest(socket=socket_path), TemporaryDirectory() as temporary:
                 config = Path(temporary)
-                (config / "provider.toml").write_text('schema_id="secs.provider.config.v4"\n[shared]\nproject="fixture"\ngid=1000\n')
+                (config / "provider.toml").write_text('schema_id="secs.provider.config.v5"\n[shared]\nproject="fixture"\ngid=1000\n')
                 (config / "provider.toml").chmod(0o600)
                 projection = {"group_add": ["1000"], "volumes": {"fixture-ipc": {"external": True}},
                               "mounts": [{"type": "volume", "source": "fixture-ipc", "target": str(Path(socket_path).parent)}],
@@ -606,7 +608,7 @@ class ProviderDeploymentTests(unittest.TestCase):
     def test_shared_grants_preserve_existing_groups_and_scientific_mounts(self):
         with TemporaryDirectory() as temporary:
             config = Path(temporary)
-            (config / "provider.toml").write_text('schema_id="secs.provider.config.v4"\n[shared]\nproject="fixture"\ngid=1234\n')
+            (config / "provider.toml").write_text('schema_id="secs.provider.config.v5"\n[shared]\nproject="fixture"\ngid=1234\n')
             (config / "provider.toml").chmod(0o600)
             projection = {
                 "group_add": ["1234"],
@@ -635,7 +637,7 @@ class ProviderDeploymentTests(unittest.TestCase):
     def test_invalid_shared_grant_fails_before_sdk_projection(self):
         with TemporaryDirectory() as temporary:
             config = Path(temporary)
-            (config / "provider.toml").write_text('schema_id="secs.provider.config.v4"\n[shared]\nproject="../foreign"\ngid=0\n')
+            (config / "provider.toml").write_text('schema_id="secs.provider.config.v5"\n[shared]\nproject="../foreign"\ngid=0\n')
             (config / "provider.toml").chmod(0o600)
             project = Mock()
             with self.assertRaisesRegex(ValueError, "shared project name"):
@@ -649,7 +651,7 @@ class ProviderDeploymentTests(unittest.TestCase):
             provider.write_text('schema_id = "secs.provider.config.v3"\n[shared]\nproject="fixture"\ngid=1234\n')
             provider.chmod(0o600)
             project = Mock()
-            with self.assertRaisesRegex(ValueError, "schema_id secs.provider.config.v4"):
+            with self.assertRaisesRegex(ValueError, "schema_id secs.provider.config.v5"):
                 _apply_shared_grants({"services": {"provider": {"image": "image"}}}, project, config, config)
             project.command.assert_not_called()
 
@@ -945,7 +947,7 @@ class ProviderDeploymentTests(unittest.TestCase):
                     "deployment.templates._sync_directory", side_effect=sync_after_link,
                 ), patch.object(TemporaryDirectory, "_rmtree", side_effect=OSError("staging cleanup denied")), \
                         redirect_stderr(output):
-                    self.assertEqual(main(["interpreter-key-install", "production", "--source", str(source)]), 1)
+                    self.assertEqual(main(["interpreter-key-install", "production", "--source", str(source), "--key-name", "interpreter.key"]), 1)
                 self.assertEqual(destination.read_bytes(), b"test-only secret")
                 self.assertIn(f"File is visible at {destination}", output.getvalue())
                 self.assertIn("staging cleanup denied", output.getvalue())

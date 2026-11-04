@@ -201,31 +201,33 @@ test/support: provider/support/check test/qualification-tools test/input
 
 .PHONY: interpreter/model-behavior
 interpreter/model-behavior: private export LIVE_CONFIG_DIR_INPUT := $(value CONFIG_DIR)
-interpreter/model-behavior: private export LIVE_KEY_FILE_INPUT := $(value KEY_FILE)
+interpreter/model-behavior: private export LIVE_KEY_DIRECTORY_INPUT := $(value KEY_DIR)
 interpreter/model-behavior:
 	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
 	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	@test "$(HOST_UID)" -ne 0
-	test -n "$${LIVE_CONFIG_DIR_INPUT}" -a -n "$${LIVE_KEY_FILE_INPUT}" || { \
-		printf '%s\n' 'Set CONFIG_DIR to the provider configuration directory and KEY_FILE to its interpreter key. This live test makes paid model requests.' >&2; exit 2; }
+	test -n "$${LIVE_CONFIG_DIR_INPUT}" -a -n "$${LIVE_KEY_DIRECTORY_INPUT}" || { \
+		printf '%s\n' 'Set CONFIG_DIR to the provider configuration directory and KEY_DIR to its interpreter key directory. This live test makes paid model requests.' >&2; exit 2; }
 	config_dir=$$(realpath -e -- "$${LIVE_CONFIG_DIR_INPUT}")
-	key_file=$$(realpath -e -- "$${LIVE_KEY_FILE_INPUT}")
-	for path in "$$config_dir" "$$key_file" "$(REPOSITORY_ROOT)"; do
+	key_dir=$$(realpath -e -- "$${LIVE_KEY_DIRECTORY_INPUT}")
+	for path in "$$config_dir" "$$key_dir" "$(REPOSITORY_ROOT)"; do
 		[[ "$$path" != *,* && "$$path" != *$$'\n'* ]] || { printf '%s\n' 'Live test mount paths cannot contain commas or newlines.' >&2; exit 2; }
 	done
-	ca_mount=()
-	if test -f "$$config_dir/interpreter-ca.crt"; then
-		ca_mount=(--mount "type=bind,src=$$config_dir/interpreter-ca.crt,dst=/run/config/provider/interpreter-ca.crt,readonly")
-	fi
+	key_names=$$(python3 -B -c 'from pathlib import Path; from deployment.provider_deployment import _interpreter_endpoints; import sys; print("\n".join(sorted({item.key_file.name for item in _interpreter_endpoints(Path(sys.argv[1]))})))' "$$config_dir")
+	key_mounts=()
+	while IFS= read -r name; do
+		key_file=$$(realpath -e -- "$$key_dir/$$name")
+		[[ "$$key_file" == "$$key_dir/$$name" && "$$key_file" != *,* && "$$key_file" != *$$'\n'* ]] || { printf '%s\n' 'Interpreter key path must be canonical and cannot contain commas or newlines.' >&2; exit 2; }
+		key_mounts+=(--mount "type=bind,src=$$key_file,dst=/run/secrets/provider/interpreters/$$name,readonly")
+	done <<< "$$key_names"
 	provider_image=$$($(DOCKER_MAKE) --no-print-directory provider/image)
 	source tools/acquisition.sh
 	export SECS_NETWORK_INTERFACE_ORIGIN='command line' SECS_NETWORK_INTERFACE_INPUT=system
 	grants=(--init --read-only --cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 256m --memory-swap 256m \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777 \
-		--mount "type=bind,src=$$config_dir/provider.toml,dst=/run/config/provider/provider.toml,readonly" \
-		--mount "type=bind,src=$$key_file,dst=/run/secrets/provider/interpreter.key,readonly" \
-		"$${ca_mount[@]}" \
+		--mount "type=bind,src=$$config_dir,dst=/run/config/provider,readonly" \
+		"$${key_mounts[@]}" \
 		--mount "type=bind,src=$(REPOSITORY_ROOT)/tests/model_behavior,dst=/tests,readonly" \
 		--entrypoint python)
 	application=(-P /tests/test_interpreter_live.py --failfast)

@@ -12,9 +12,23 @@ and socket group ID to the values used by the shared services. These select the
 API proxy and outbox volumes. The same file selects that provider's API identity.
 The grant values are nonsecret; the signing credential remains in
 `secrets/deployments/<name>` and is installed separately.
-For an existing v3 deployment, change `schema_id` to `secs.provider.config.v4`
-and replace `[shared].settings_file` with `[shared].project` and `[shared].gid`
-before rendering or starting it. Keep the existing credential files unchanged.
+For an existing v4 deployment, move its interpreter URL, model, reasoning effort
+and optional CA selection to a new `interpreter.d/00-primary.toml` based on the
+example. Create `config/deployments/<name>/interpreter.d` with mode `0700`, copy
+`config/interpreter.d/00-primary.toml.example` there as `00-primary.toml`, and
+set the copy to mode `0600`. If the old endpoint used `interpreter-ca.crt`, copy
+that certificate into `interpreter.d` and select its new container path in the
+endpoint file. Set `schema_id` to `secs.provider.config.v5`, move the interpretation
+timeout to `[interpreter].timeout_seconds`, and remove the old interpreter fields
+and `max_turns` from `[execution]`. Install the existing key under the selected
+name with `make provider/interpreter-key/install DEPLOYMENT=<name> KEY_NAME=primary.key
+SOURCE=/absolute/path/to/key`; installation does not replace existing secrets.
+Additional endpoint files are tried in filename order. Perform this configuration
+migration before updating the deployment. Hello-only and mock-runner deployments
+do not require interpreter endpoint files or keys.
+The update preflight checks that endpoint files and selected keys exist, but the
+new provider validates model URLs, key contents and TLS trust when it starts,
+after the old deployment has drained. Check those settings before an update.
 The launcher borrows the independently managed API proxy and outbox sockets.
 `network.toml` separately controls interpreter and upload-store egress.
 The API and scientific images install the same SDK wheel using its issued API

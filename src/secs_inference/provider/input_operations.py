@@ -26,7 +26,7 @@ class SelectedRepresentation:
 
 
 @dataclass(frozen=True, slots=True)
-class CannotAnalyse:
+class InterpretationProblem:
     explanation: str
 
 
@@ -94,7 +94,7 @@ INPUT_OPERATIONS = (
         }),
     ),
     InputOperation(
-        "report_input_problem",
+        "report_interpretation_problem",
         "Explain why the available representations and evidence do not establish an executable "
         "spectrum and formula. Name what is missing or ambiguous without claiming invalid chemistry.",
         _arguments({"explanation": _EXPLANATION}),

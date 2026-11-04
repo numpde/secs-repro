@@ -1,0 +1,7 @@
+# Copy to 00-primary.toml and configure this endpoint for the deployment.
+# Additional *.toml files are selected in filename order.
+url = "https://model.example.test/v1/chat/completions"
+model = "replace-with-deployment-model"
+key_file = "/run/secrets/provider/interpreters/primary.key"
+# reasoning_effort = "none"
+# ca_file = "/run/config/provider/interpreter.d/ca.crt"

@@ -28,9 +28,14 @@ from deployment.rootless_access import (
     set_mapped_access,
 )
 
+# The host deployment adapter and the provider consume the same endpoint rules.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from secs_inference.provider.interpreter_config import read_endpoints
+
 
 TEMPLATES = {
     "provider.toml": Path("config/provider.toml.example"),
+    "interpreter.d/00-primary.toml.example": Path("config/interpreter.d/00-primary.toml.example"),
     "worker.toml": Path("config/worker.toml.example"),
     "worker.mock-index.toml": Path("config/worker.mock-index.toml.example"),
     "deployment.env": Path("config/deployment.env.example"),
@@ -48,6 +53,23 @@ def _toml_document(path: Path) -> dict:
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise ValueError(f"Deployment input is not valid TOML: {path}") from error
     return document
+
+
+def _interpreter_endpoints(config: Path):
+    directory = config / "interpreter.d"
+    _private_directory(directory)
+    endpoints = read_endpoints(directory, lambda path, **_kwargs: _private_file(path))
+    for endpoint in endpoints:
+        if endpoint.ca_file is not None:
+            _private_input(directory / endpoint.ca_file.name)
+    return endpoints
+
+
+def _interpreter_enabled(config: Path, worker: dict) -> bool:
+    return ("execution" in _toml_document(config / "provider.toml")
+            and worker.get("environment", {}).get("SECS_MOCK_RUNNER") != "1")
+
+
 
 
 def _host_gpu_uuid(repository: Path) -> str:
@@ -298,8 +320,8 @@ def _update_deployment_locked(repository: Path, name: str, project: ComposeProje
         raise ValueError("Cannot update deployment: old API retirement is incomplete; finish its retained cleanup first.")
     state = repository / "secrets/deployments" / name
     required = [config / "provider.toml", config / "worker.toml", state / "provider.signing.private.json"]
-    if plan["services"]["worker"].get("environment", {}).get("SECS_MOCK_RUNNER") != "1":
-        required.append(state / "interpreter.key")
+    if _interpreter_enabled(config, plan["services"]["worker"]):
+        required.extend(state / endpoint.key_file.name for endpoint in _interpreter_endpoints(config))
     for path in required:
         _private_input(path)
     if any(os.path.lexists(state / part) for part in ("state", "sources", "socket")):
@@ -395,7 +417,6 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict,
         "SECS_DEPLOYMENT": name,
         "SECS_CHECKOUT": str(repository.resolve()),
         "PROVIDER_CONFIG_DIRECTORY": str(config),
-        "INTERPRETER_KEY_FILE": str(state / "runtime/interpreter.key"),
         "WORKER_CONFIG_FILE": str(worker_config_file),
         "MOLFORMER_LOCK_FILE": str(repository / "molformer.lock.toml"),
         "CACHE_VERIFIER_FILE": str(repository / "tools/materialize_molformer_cache.py"),
@@ -420,13 +441,16 @@ def _render_deployment(repository: Path, name: str, config: Path, network: dict,
                                                 "SECS_MOCK_INDEX": "1" if mock_index else "0",
                                                 "SECS_MOCK_RUNNER": "1" if mock_runner else "0"})
     provider = plan["services"]["provider"]
+    if _interpreter_enabled(config, worker):
+        for key in sorted({endpoint.key_file.name for endpoint in _interpreter_endpoints(config)}):
+            provider["volumes"].append({"type": "bind", "source": str(state / "runtime" / key),
+                                        "target": f"/run/secrets/provider/interpreters/{key}",
+                                        "read_only": True, "bind": {"create_host_path": False}})
     provider.setdefault("environment", {}).update({"SECS_MOCK_INDEX": "1" if mock_index else "0",
                                                    "SECS_MOCK_RUNNER": "1" if mock_runner else "0"})
     if mock_runner:
         for role in ("provider", "worker"):
             plan["services"][role].setdefault("labels", {})["io.secs.mock-runner"] = "1"
-        provider["volumes"] = [mount for mount in provider["volumes"]
-                               if mount["target"] != "/run/secrets/provider/interpreter.key"]
         worker["image"] = provider["image"]
         worker["volumes"] = [mount for mount in worker["volumes"]
                              if mount["target"] not in {"/checkpoint", "/cache", "/input/molformer.lock.toml", "/opt/materialize.py"}]
@@ -691,7 +715,7 @@ def install_secret(repository: Path, name: str, filename: str, source: Path) -> 
     """Install an operator-supplied secret once; never replace a live credential or key."""
     config = configuration_directory(repository, name)
     _private_directory(config)
-    if filename not in {"provider.signing.private.json", "interpreter.key"}:
+    if filename != "provider.signing.private.json" and re.fullmatch(r"[a-z0-9][a-z0-9_-]*\.key", filename) is None:
         raise ValueError("Secret installation accepts only the provider credential or interpreter key.")
     content = _private_file(source.resolve(strict=True))
     state = _state_root(repository, name)
@@ -734,8 +758,8 @@ def start_deployment(repository: Path, name: str, mock_index_selection: bool | N
         raise
     state = repository / "secrets/deployments" / name
     required = [config / "provider.toml", config / "worker.toml", state / "provider.signing.private.json"]
-    if plan["services"]["worker"].get("environment", {}).get("SECS_MOCK_RUNNER") != "1":
-        required.append(state / "interpreter.key")
+    if _interpreter_enabled(config, plan["services"]["worker"]):
+        required.extend(state / endpoint.key_file.name for endpoint in _interpreter_endpoints(config))
     for path in required:
         _private_input(path)
     if any(os.path.lexists(state / part) for part in ("state", "sources", "socket")):
@@ -744,8 +768,8 @@ def start_deployment(repository: Path, name: str, mock_index_selection: bool | N
     access = _grant_runtime_inputs(project, plan, repository, name)
     runtime_directory = state / "runtime"
     runtime_required = [runtime_directory / "provider.signing.private.json"]
-    if plan["services"]["worker"].get("environment", {}).get("SECS_MOCK_RUNNER") != "1":
-        runtime_required.append(runtime_directory / "interpreter.key")
+    if _interpreter_enabled(config, plan["services"]["worker"]):
+        runtime_required.extend(runtime_directory / endpoint.key_file.name for endpoint in _interpreter_endpoints(config))
     for path in runtime_required:
         metadata = path.lstat()
         mapped = access["mapped_uid"]
@@ -760,8 +784,8 @@ def start_deployment(repository: Path, name: str, mock_index_selection: bool | N
 def _apply_shared_grants(plan, project, config, state):
     """Consume the SDK's shared socket grants alongside SECS-owned inputs."""
     document = _toml_document(config / "provider.toml")
-    if document.get("schema_id") != "secs.provider.config.v4":
-        raise ValueError("Provider configuration requires schema_id secs.provider.config.v4.")
+    if document.get("schema_id") != "secs.provider.config.v5":
+        raise ValueError("Provider configuration requires schema_id secs.provider.config.v5.")
     selection = document.get("shared")
     if type(selection) is not dict or set(selection) != {"project", "gid"}:
         raise ValueError("Provider configuration requires shared project and gid.")
@@ -927,12 +951,19 @@ def _grant_runtime_inputs(project: ComposeProject, plan: dict, repository: Path,
         ca_filenames.add(ca.name)
     execution = provider_document.get("execution")
     if type(execution) is dict:
-        if execution.get("interpreter_use_private_ca") is True:
-            ca_filenames.add("interpreter-ca.crt")
         if execution.get("upload_store_use_private_ca") is True:
             ca_filenames.add("upload-store-ca.crt")
     for ca_filename in ca_filenames:
         _ensure_mapped_file(config / ca_filename, mapped, owner_uid=os.getuid())
+    endpoints = ()
+    if _interpreter_enabled(config, worker):
+        endpoints = _interpreter_endpoints(config)
+        endpoint_directory = config / "interpreter.d"
+        _ensure_mapped_directory(endpoint_directory, mapped, "r-x", owner_uid=os.getuid())
+        for endpoint in endpoints:
+            _ensure_mapped_file(endpoint_directory / (endpoint.name + ".toml"), mapped, owner_uid=os.getuid())
+            if endpoint.ca_file is not None:
+                _ensure_mapped_file(endpoint_directory / endpoint.ca_file.name, mapped, owner_uid=os.getuid())
     worker_config = next(
         Path(mount["source"]) for mount in worker["volumes"]
         if mount.get("target") == "/run/config/worker/worker.toml"
@@ -949,13 +980,12 @@ def _grant_runtime_inputs(project: ComposeProject, plan: dict, repository: Path,
                 continue
             if target in {"/checkpoint", "/cache"}:
                 _ensure_mapped_tree(source, mapped, owner_uid=os.getuid())
-            elif target not in {"/run/secrets/provider/provider.signing.private.json",
-                                "/run/secrets/provider/interpreter.key"}:
+            elif (target != "/run/secrets/provider/provider.signing.private.json"
+                  and not target.startswith("/run/secrets/provider/interpreters/")):
                 _ensure_mapped_file(source, mapped, owner_uid=os.getuid())
 
     secret_paths = [state / "provider.signing.private.json"]
-    if worker.get("environment", {}).get("SECS_MOCK_RUNNER") != "1":
-        secret_paths.append(state / "interpreter.key")
+    secret_paths.extend(state / name for name in sorted({endpoint.key_file.name for endpoint in endpoints}))
     for source in secret_paths:
         _private_input(source)
         source_mode = stat.S_IMODE(source.lstat().st_mode)
@@ -1047,6 +1077,7 @@ def main(arguments: list[str] | None = None) -> int:
                                               "logs", "credential-install", "interpreter-key-install"))
     parser.add_argument("deployment")
     parser.add_argument("--source", type=Path)
+    parser.add_argument("--key-name")
     parser.add_argument("--provider-image-id")
     parser.add_argument("--worker-image-id")
     options = parser.parse_args(arguments)
@@ -1055,6 +1086,8 @@ def main(arguments: list[str] | None = None) -> int:
     installing = options.operation in {"credential-install", "interpreter-key-install"}
     if installing != (options.source is not None):
         parser.error("--source is required only for credential-install or interpreter-key-install")
+    if (options.operation == "interpreter-key-install") != (options.key_name is not None):
+        parser.error("--key-name is required only for interpreter-key-install")
     repository = Path(__file__).resolve().parents[1]
     try:
         if options.operation == "init":
@@ -1103,7 +1136,7 @@ def main(arguments: list[str] | None = None) -> int:
         # the lock needs no credential contents.
         with _locked_parent(config.parent):
             if installing:
-                filename = "provider.signing.private.json" if options.operation == "credential-install" else "interpreter.key"
+                filename = "provider.signing.private.json" if options.operation == "credential-install" else options.key_name
                 print(install_secret(repository, options.deployment, filename, options.source))
             elif options.operation == "grant":
                 plan = render_deployment(repository, options.deployment, index_selection)

@@ -29,8 +29,9 @@ class SourceRetirementTests(unittest.IsolatedAsyncioTestCase):
         failure = BaseExceptionGroup("contained fixture exit", [SystemExit("private fixture detail")])
         chat = SimpleNamespace(retire=AsyncMock(side_effect=failure))
         sources = SimpleNamespace(retire=AsyncMock())
-        session = SecsSession(worker=object(), sources=sources, chat=chat, work_seconds=1,
-                              interpretation_seconds=1, startup_seconds=1, max_turns=1)
+        session = SecsSession(worker=object(), sources=sources, endpoint_factories=(), work_seconds=1,
+                              interpretation_seconds=1, startup_seconds=1, context_bytes=1000000)
+        session._conversation = chat
         with self.assertRaises(BaseExceptionGroup) as caught:
             await session.retire()
         sources.retire.assert_awaited_once_with(readers_stopped=True)

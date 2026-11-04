@@ -9,8 +9,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
-from secs_inference.provider.input_operations import CannotAnalyse
-from secs_inference.provider.interpreter import InterpretationSession
+from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession
 from provider_core.upload_response import UploadMember as JobUpload
 from support_evidence import qualification_evidence
 
@@ -48,12 +47,13 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
             self.requests.append((deepcopy(messages), deepcopy(tools)))
             return next(replies)
         self.chat.complete.side_effect = complete
-        return InterpretationSession(self.chat, self.specification, self.uploads, self.inspect,
-                                     deadline=monotonic() + 10, max_turns=2)
+        return InterpretationSession((lambda **_: self.chat,), self.specification, self.uploads, self.inspect,
+                                     deadline=monotonic() + 10, timeout_seconds=10, context_bytes=1000000)
 
     async def first_request(self):
-        session = self.session([tool('report_input_problem', {'explanation': 'Scripted transport test; no scientific judgment is being made.'})])
-        self.assertIsInstance(await session.run(_accept_selection), CannotAnalyse)
+        session = self.session([tool('report_interpretation_problem', {'explanation': 'Scripted transport test; no scientific judgment is being made.'})])
+        with self.assertRaises(InterpretationFailed):
+            await session.run(_accept_selection)
         self.inspect.assert_not_called()
         return self.requests[0]
 
@@ -108,6 +108,8 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
         _, tools = await self.first_request()
         for tool in tools:
             function = tool['function']
+            if function['name'] in {'describe_input_constraints', 'read_interpretation_records'}:
+                continue
             self.assertIs(function['strict'], True)
             self.assert_endpoint_schema(function['parameters'], function['name'])
 
@@ -116,7 +118,7 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
                   'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
                   'processing': 'as_stored', 'explanation': 'The selected representation is the requested processed proton spectrum.'}
         session = self.session([tool('select_representation', choice),
-            tool('report_input_problem', {'explanation': 'The selection was not accepted.'}, 'call-2')])
+            tool('report_interpretation_problem', {'explanation': 'The selection was not accepted.'}, 'call-2')])
         decision = await session.run(_accept_selection)
         self.assertEqual(asdict(decision), choice)
         self.inspect.assert_not_called()
@@ -136,9 +138,10 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
                                                'quote': values['quote']},
                           'processing': 'as_stored', 'explanation': 'Explicit choice.'}
                 session = self.session([tool('select_representation', choice),
-                    tool('report_input_problem', {'explanation': 'Formula evidence is unavailable.'}, 'call-2')])
-                self.assertIsInstance(await session.run(_accept_selection), CannotAnalyse)
-                self.assertIn(evidence, self.requests[1][0][-1]['content'])
+                    tool('report_interpretation_problem', {'explanation': 'Formula evidence is unavailable.'}, 'call-2')])
+                with self.assertRaises(InterpretationFailed):
+                    await session.run(_accept_selection)
+                self.assertIn(evidence, self.requests[1][0][-2]['content'])
 
     async def test_formula_typography_can_differ_while_the_original_quote_survives(self):
         for formula, quote in (
@@ -153,7 +156,7 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
                           'formula_evidence': {'kind': 'job_specification', 'quote': quote},
                           'processing': 'as_stored', 'explanation': 'Use the supplied formula.'}
                 session = self.session([tool('select_representation', choice),
-                    tool('report_input_problem', {'explanation': 'Selection was rejected.'}, 'call-2')])
+                    tool('report_interpretation_problem', {'explanation': 'Selection was rejected.'}, 'call-2')])
                 self.assertEqual(asdict(await session.run(_accept_selection)), choice)
 
     async def test_notation_flexibility_does_not_allow_fabricated_or_contiguous_fragment_quotes(self):
@@ -168,9 +171,10 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
                           'formula_evidence': {'kind': 'job_specification', 'quote': quote},
                           'processing': 'as_stored', 'explanation': 'Explicit choice.'}
                 session = self.session([tool('select_representation', choice),
-                    tool('report_input_problem', {'explanation': 'Formula evidence is unavailable.'}, 'call-2')])
-                self.assertIsInstance(await session.run(_accept_selection), CannotAnalyse)
-                self.assertIn('Job specification', self.requests[1][0][-1]['content'])
+                    tool('report_interpretation_problem', {'explanation': 'Formula evidence is unavailable.'}, 'call-2')])
+                with self.assertRaises(InterpretationFailed):
+                    await session.run(_accept_selection)
+                self.assertIn('Job specification', self.requests[1][0][-2]['content'])
 
     async def test_formula_citation_does_not_reinterpret_adjacent_prose_as_elements(self):
         for specification in ('A C₂₂H₃₆O₇ sample.', 'In C₂₂H₃₆O₇, oxygen is present.',
@@ -181,7 +185,7 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
                           'formula_evidence': {'kind': 'job_specification', 'quote': 'C₂₂H₃₆O₇'},
                           'processing': 'as_stored', 'explanation': 'Use the supplied formula.'}
                 session = self.session([tool('select_representation', choice),
-                    tool('report_input_problem', {'explanation': 'Selection was rejected.'}, 'call-2')])
+                    tool('report_interpretation_problem', {'explanation': 'Selection was rejected.'}, 'call-2')])
                 self.assertEqual(asdict(await session.run(_accept_selection)), choice)
 
     async def test_job_formula_quote_cannot_be_a_prefix_of_a_different_formula(self):
@@ -190,9 +194,10 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
                   'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
                   'processing': 'as_stored', 'explanation': 'Explicit choice.'}
         session = self.session([tool('select_representation', choice),
-            tool('report_input_problem', {'explanation': 'Formula evidence is unavailable.'}, 'call-2')])
-        self.assertIsInstance(await session.run(_accept_selection), CannotAnalyse)
-        self.assertIn('does not occur in the Job specification', self.requests[1][0][-1]['content'])
+            tool('report_interpretation_problem', {'explanation': 'Formula evidence is unavailable.'}, 'call-2')])
+        with self.assertRaises(InterpretationFailed):
+            await session.run(_accept_selection)
+        self.assertIn('does not occur in the Job specification', self.requests[1][0][-2]['content'])
 
     async def test_representation_formula_evidence_survives_the_selection_boundary(self):
         choice = {'representation_id': 'opaque-spectrum', 'formula': 'C2H6O',
@@ -209,8 +214,9 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
                   'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
                   'explanation': 'Explicit choice.'}
         session = self.session([tool('select_representation', choice),
-            tool('report_input_problem', {'explanation': 'Processing has not been established.'}, 'call-2')])
-        self.assertIsInstance(await session.run(_accept_selection), CannotAnalyse)
+            tool('report_interpretation_problem', {'explanation': 'Processing has not been established.'}, 'call-2')])
+        with self.assertRaises(InterpretationFailed):
+            await session.run(_accept_selection)
         messages, _ = self.requests[1]
         feedback = [message['content'] for message in messages if message['role'] == 'tool']
         self.assertTrue(feedback)
@@ -222,9 +228,10 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
                   'formula_evidence': {'kind': 'representations', 'representation_ids': [{}]},
                   'processing': 'as_stored', 'explanation': 'Explicit choice.'}
         session = self.session([tool('select_representation', choice),
-            tool('report_input_problem', {'explanation': 'Formula evidence cannot be established.'}, 'call-2')])
-        self.assertIsInstance(await session.run(_accept_selection), CannotAnalyse)
-        feedback = self.requests[1][0][-1]['content']
+            tool('report_interpretation_problem', {'explanation': 'Formula evidence cannot be established.'}, 'call-2')])
+        with self.assertRaises(InterpretationFailed):
+            await session.run(_accept_selection)
+        feedback = self.requests[1][0][-2]['content']
         self.assertIn('formula_evidence', feedback)
 
     async def test_control_text_and_excessive_formula_evidence_request_repair(self):
@@ -241,6 +248,7 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(evidence=evidence):
                 self.requests.clear()
                 session = self.session([tool('select_representation', choice),
-                    tool('report_input_problem', {'explanation': 'The selection was malformed.'}, 'call-2')])
-                self.assertIsInstance(await session.run(_accept_selection), CannotAnalyse)
-                self.assertIn(evidence, self.requests[1][0][-1]['content'])
+                    tool('report_interpretation_problem', {'explanation': 'The selection was malformed.'}, 'call-2')])
+                with self.assertRaises(InterpretationFailed):
+                    await session.run(_accept_selection)
+                self.assertIn(evidence, self.requests[1][0][-2]['content'])

@@ -11,7 +11,7 @@ import signal
 from provider_core.api import ProviderAPI
 from provider_core.api_config import api_settings_with_material, https_settings
 from provider_core.attempt_record import RecoveryScope
-from provider_core.chat import ChatEndpoint, ChatEndpointSpec
+from provider_core.chat import ChatEndpointFactory, ChatEndpointSpec
 from provider_core.controller import AttemptController, LiveStartPolicy
 from provider_core.shared_delivery_client import SharedDeliveryClient
 from provider_core.shared_grants import SharedGrants
@@ -23,7 +23,8 @@ from provider_core.ownership import AttemptClaims, LiveAttemptLimits
 from provider_core.startup_file import read_startup_file
 
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
-from secs_inference.provider.config import CONFIG_PATH, INTERPRETER_KEY_PATH, decode_provider_config
+from secs_inference.provider.config import CONFIG_PATH, decode_provider_config
+from secs_inference.provider.interpreter_config import INTERPRETER_DIRECTORY, read_endpoints
 from secs_inference.provider.configuration_error import ConfigurationError
 from secs_inference.provider.diagnostics import scientific_failure_evidence
 from secs_inference.provider.process import publish_hello_until_stopped
@@ -82,20 +83,28 @@ def _api_recovery_policies(*, exchange_seconds, retirement_seconds, poll_seconds
     )
 
 
-def _read_chat_settings(execution, retirement_seconds):
-    key = read_startup_file(INTERPRETER_KEY_PATH, maximum_bytes=16384,
-                            label="interpreter API key", secret=True)
-    try:
-        key = key.decode("ascii").rstrip("\r\n")
-    except UnicodeDecodeError as cause:
-        raise ConfigurationError("Interpreter API key must contain header-safe ASCII text") from cause
-    spec = ChatEndpointSpec(configuration_id="secs-input", model=execution.interpreter_model,
-                            url=execution.interpreter_url, api_key=key,
-                            reasoning_effort=execution.interpreter_reasoning_effort)
-    table = {"exchange_seconds": execution.interpretation_seconds, "retirement_seconds": retirement_seconds}
-    if execution.interpreter_use_private_ca:
-        table["ca_file"] = "/run/config/provider/interpreter-ca.crt"
-    return spec, https_settings(table, "interpreter", read_startup_file)
+def _read_chat_settings(interpretation_seconds, retirement_seconds):
+    endpoints = read_endpoints(INTERPRETER_DIRECTORY, read_startup_file)
+    factories, secrets = [], []
+    for endpoint in endpoints:
+        key = read_startup_file(endpoint.key_file, maximum_bytes=16384,
+                                label="interpreter API key", secret=True)
+        try:
+            key = key.decode("ascii").rstrip("\r\n")
+        except UnicodeDecodeError as cause:
+            raise ConfigurationError("Interpreter API key must contain header-safe ASCII text") from cause
+        spec = ChatEndpointSpec(configuration_id=endpoint.name, model=endpoint.model,
+                                url=endpoint.url, api_key=key,
+                                reasoning_effort=endpoint.reasoning_effort)
+        table = {"exchange_seconds": interpretation_seconds, "retirement_seconds": retirement_seconds}
+        if endpoint.ca_file is not None:
+            table["ca_file"] = str(endpoint.ca_file)
+        http = https_settings(table, "interpreter", read_startup_file)
+        factories.append(ChatEndpointFactory(spec=spec, trust=http.trust,
+            retirement_seconds=http.retirement_seconds, proxy_socket=http.proxy_socket,
+            request_bytes=2097152, response_bytes=262144))
+        secrets.append(key)
+    return tuple(factories), tuple(secrets)
 
 
 async def run_provider(config_path=CONFIG_PATH):
@@ -140,7 +149,7 @@ async def run_provider(config_path=CONFIG_PATH):
         else:
             execution = config.execution
             if not mock_runner:
-                chat_spec, chat_http = _read_chat_settings(execution, settings.http.retirement_seconds)
+                endpoint_factories, interpreter_secrets = _read_chat_settings(config.interpretation_seconds, settings.http.retirement_seconds)
                 store_table = {"exchange_seconds": execution.work_seconds,
                                "retirement_seconds": settings.http.retirement_seconds}
                 if execution.upload_store_use_private_ca:
@@ -168,12 +177,11 @@ async def run_provider(config_path=CONFIG_PATH):
                         max_upload_bytes=execution.max_upload_bytes, max_total_bytes=execution.max_total_bytes,
                         retirement_seconds=store_http.retirement_seconds,
                     )
-                    chat = ChatEndpoint(chat_spec, transport=chat_http.new_transport(),
-                                        request_bytes=2097152, response_bytes=262144)
-                    session = SecsSession(worker=worker, sources=sources, chat=chat, work_seconds=execution.work_seconds,
-                                          interpretation_seconds=execution.interpretation_seconds,
-                                          startup_seconds=execution.worker_startup_seconds, max_turns=execution.max_turns,
-                                          secrets=(chat_spec.api_key,), mock_index=mock_index)
+                    session = SecsSession(worker=worker, sources=sources, endpoint_factories=endpoint_factories, work_seconds=execution.work_seconds,
+                                          interpretation_seconds=config.interpretation_seconds,
+                                          startup_seconds=execution.worker_startup_seconds,
+                                          context_bytes=min(factory.context_bytes for factory in endpoint_factories),
+                                          secrets=interpreter_secrets, mock_index=mock_index)
                 delivery = SharedDeliveryClient(grants.endpoint(settings.identity.origin, provider_ref), publication,
                                                 exchange_seconds=config.delivery_exchange_seconds,
                                                 retirement_seconds=settings.http.retirement_seconds)

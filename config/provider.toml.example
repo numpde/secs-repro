@@ -1,4 +1,4 @@
-schema_id = "secs.provider.config.v4"
+schema_id = "secs.provider.config.v5"
 
 # Set these nonsecret values to the shared project and its socket group.
 [shared]
@@ -26,18 +26,15 @@ provider_description = "Ranks and refines molecular-structure candidates from a 
 publication_interval_seconds = 3600
 retry_initial_seconds = 5
 
-# Omit this table to publish hello without accepting Jobs.
+# Omit both [execution] and [interpreter] to publish hello without accepting Jobs.
 [execution]
-interpreter_url = "https://model.example.test/v1/chat/completions"
-interpreter_model = "replace-with-deployment-model"
-# gpt-5.6-luna requires none for function tools on Chat Completions.
-# Other endpoints may use a different effort, or omit it for their default.
-interpreter_reasoning_effort = "none"
+# Configure ordered model endpoints in interpreter.d.
 upload_store_origin = "https://uploads.example.test"
 work_seconds = 1800
-interpretation_seconds = 120
 worker_startup_seconds = 600
 poll_seconds = 5
-max_turns = 12
 max_upload_bytes = 134217728
 max_total_bytes = 268435456
+
+[interpreter]
+timeout_seconds = 120

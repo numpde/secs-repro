@@ -12,39 +12,29 @@ import tomllib
 from secs_inference.provider.configuration_error import ConfigurationError
 
 
-SCHEMA_ID = "secs.provider.config.v4"
+SCHEMA_ID = "secs.provider.config.v5"
 CONFIG_PATH = Path("/run/config/provider/provider.toml")
-INTERPRETER_KEY_PATH = Path("/run/secrets/provider/interpreter.key")
 
 
 @dataclass(frozen=True, slots=True)
 class ExecutionConfig:
     """Execution is enabled by this table, never by finding ambient credentials."""
 
-    interpreter_url: str
-    interpreter_model: str
     upload_store_origin: str
     work_seconds: float = 1800
-    interpretation_seconds: float = 120
     worker_startup_seconds: float = 600
     poll_seconds: float = 5
-    max_turns: int = 12
     max_upload_bytes: int = 128 * 1024 * 1024
     max_total_bytes: int = 256 * 1024 * 1024
-    interpreter_use_private_ca: bool = False
     upload_store_use_private_ca: bool = False
-    interpreter_reasoning_effort: str | None = None
 
     def __post_init__(self):
-        if self.interpreter_reasoning_effort is not None and (
-                not isinstance(self.interpreter_reasoning_effort, str) or not self.interpreter_reasoning_effort.strip()):
-            raise ConfigurationError("Interpreter reasoning effort must be nonempty text when configured")
-        for name in ("interpreter_use_private_ca", "upload_store_use_private_ca"):
+        for name in ("upload_store_use_private_ca",):
             if type(getattr(self, name)) is not bool:
                 raise ConfigurationError(f"Execution {name} must be a boolean")
-        for name in ("work_seconds", "interpretation_seconds", "worker_startup_seconds", "poll_seconds"):
+        for name in ("work_seconds", "worker_startup_seconds", "poll_seconds"):
             _require_positive_seconds(getattr(self, name), "execution " + name)
-        for name in ("max_turns", "max_upload_bytes", "max_total_bytes"):
+        for name in ("max_upload_bytes", "max_total_bytes"):
             if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
                 raise ConfigurationError(f"Execution {name} must be a positive integer")
 
@@ -83,6 +73,7 @@ class ProviderConfig:
     delivery_retry_max_seconds: float
     hello: HelloPolicy
     execution: ExecutionConfig | None = None
+    interpretation_seconds: float | None = None
 
 
 def decode_provider_config(raw: bytes) -> ProviderConfig:
@@ -94,7 +85,7 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
         document = tomllib.loads(raw.decode("utf-8"))
     except (UnicodeError, tomllib.TOMLDecodeError) as error:
         raise ConfigurationError("Provider config is not valid TOML") from error
-    _require_fields("top level", document, {"shared", "api", "delivery", "hello", "schema_id"}, {"execution"})
+    _require_fields("top level", document, {"shared", "api", "delivery", "hello", "schema_id"}, {"execution", "interpreter"})
     if document["schema_id"] != SCHEMA_ID:
         raise ConfigurationError(f"Cannot load provider configuration: schema_id must be {SCHEMA_ID!r}")
 
@@ -137,15 +128,24 @@ def decode_provider_config(raw: bytes) -> ProviderConfig:
         retry_initial_seconds=hello["retry_initial_seconds"],
     )
     execution = None
+    interpretation_seconds = None
     if "execution" in document:
-        required = {"interpreter_url", "interpreter_model", "upload_store_origin"}
+        required = {"upload_store_origin"}
         table = _require_table(document, "execution", required,
                                set(ExecutionConfig.__dataclass_fields__) - required)
         execution = ExecutionConfig(**table)
+        if "interpreter" not in document:
+            raise ConfigurationError("Execution requires an interpreter timeout")
+        interpreter = _require_table(document, "interpreter", {"timeout_seconds"})
+        interpretation_seconds = interpreter["timeout_seconds"]
+        _require_positive_seconds(interpretation_seconds, "interpreter timeout_seconds")
+    elif "interpreter" in document:
+        raise ConfigurationError("Interpreter configuration requires execution to be enabled")
     return ProviderConfig(shared_project=shared_project, shared_gid=shared_gid, api=api,
                           delivery_exchange_seconds=delivery["exchange_seconds"],
                           delivery_retry_initial_seconds=delivery["retry_initial_seconds"],
-                          delivery_retry_max_seconds=delivery["retry_max_seconds"], hello=policy, execution=execution)
+                          delivery_retry_max_seconds=delivery["retry_max_seconds"], hello=policy,
+                          interpretation_seconds=interpretation_seconds, execution=execution)
 
 
 def _require_table(

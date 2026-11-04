@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 import httpcore
 from provider_core.transport import HttpTransport
 from provider_core.upload_response import ReadGrant, UploadMember, UploadSet
-from secs_inference.provider.sources import AttemptSources
+from secs_inference.provider.sources import AttemptSources, SourceDeadlineBeforeDispatch
 
 
 class Stream:
@@ -38,6 +38,18 @@ class Client:
 
 
 class SourceAcquisitionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_expired_model_window_does_not_start_upload_transfer(self):
+        ref = "upload:fixture"
+        sources = AttemptSources(job_ref="job:fixture", api=SimpleNamespace(), store=SimpleNamespace(),
+                                 store_origin="https://store.example", directory=Path("/unused"),
+                                 max_upload_bytes=10, max_total_bytes=10, retirement_seconds=1)
+        sources._deadline = monotonic() + 5
+        sources._uploads = {ref: UploadMember(ref, "fixture", 1, None)}
+        sources.transfer.acquire_file = AsyncMock()
+        with self.assertRaises(SourceDeadlineBeforeDispatch):
+            await sources.acquire(ref, deadline=monotonic() - 1)
+        sources.transfer.acquire_file.assert_not_awaited()
+
     async def test_store_refusal_gets_fresh_grant_then_one_success_is_cached_and_charged_once(self):
         ref = "upload:sha256:" + "a" * 64
         digest = "sha256:" + sha256(b"x").hexdigest()

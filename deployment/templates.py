@@ -32,7 +32,7 @@ def initialize_configuration(
     """Publish a new mode-0700 config directory, without replacing existing input.
 
     Template bytes come from a single HEAD revision, not the working tree.
-    Values name tracked regular files; keys are flat destination filenames.
+    Values name tracked regular files; destinations are flat or under interpreter.d.
     Config files are mode 0600. Cooperating initializers lock the parent until
     publication is durable. Other processes running as the owner are trusted.
     No credentials, runtime state, containers, or downloads are created.
@@ -47,8 +47,9 @@ def initialize_configuration(
     revision = _git(root, "rev-parse", "--verify", "HEAD^{commit}").decode().strip()
     contents = {}
     for filename, relative in templates.items():
-        if Path(filename).name != filename or filename in {"", ".", ".."}:
-            raise ValueError("Configuration template destinations must be flat filenames.")
+        parts = Path(filename).parts
+        if not (len(parts) == 1 or len(parts) == 2 and parts[0] == "interpreter.d") or parts[-1] in {"", ".", ".."}:
+            raise ValueError("Configuration template destination is invalid.")
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError("Configuration template sources must be repository-relative.")
         contents[filename] = _committed_template(root, revision, relative)
@@ -66,7 +67,11 @@ def initialize_configuration(
         try:
             with _temporary_directory(prefix=f".{name}.", dir=parent) as stage:
                 for filename, content in contents.items():
+                    if (stage / filename).parent != stage:
+                        (stage / filename).parent.mkdir(mode=0o700, exist_ok=True)
                     _write_new_file(stage / filename, content)
+                if (stage / "interpreter.d").exists():
+                    _sync_directory(stage / "interpreter.d")
                 _sync_directory(stage)
                 stage.rename(destination)
                 published = True

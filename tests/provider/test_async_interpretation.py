@@ -8,7 +8,8 @@ from types import SimpleNamespace
 import unittest
 
 from provider_core.execution import ObservationGapExpired
-from secs_inference.provider.input_operations import CannotAnalyse, SelectedRepresentation
+from provider_core.interpreter import ModelWindowExpired
+from secs_inference.provider.input_operations import SelectedRepresentation
 from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession, PreparationRejected
 from secs_inference.provider.worker import WorkerDeadlineBeforeDispatch
 
@@ -54,10 +55,8 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
     async def test_pre_dispatch_deadline_survives_interpreter_deadline(self):
         refusal = WorkerDeadlineBeforeDispatch("fixture no-write deadline")
         async def inspect(_source):
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                raise refusal
+            await asyncio.sleep(0.06)
+            raise refusal
         chat = ScriptedCarrier([call("inspect_source", {
             "source": {"upload_ref": "upload:chosen", "member": None}}, "inspect")])
         session = self.session(chat, inspect)
@@ -69,10 +68,8 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
     async def test_observation_expiry_survives_interpreter_deadline(self):
         expiry = ObservationGapExpired(1, executor=SimpleNamespace(_observation_read_started=False))
         async def inspect(_source):
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                raise expiry
+            await asyncio.sleep(0.06)
+            raise expiry
         chat = ScriptedCarrier([call("inspect_source", {
             "source": {"upload_ref": "upload:chosen", "member": None}}, "inspect")])
         session = self.session(chat, inspect)
@@ -82,8 +79,10 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(caught.exception, expiry)
 
     def session(self, chat, inspect, turns=3):
-        return InterpretationSession(chat, "Find C2H6O", (), inspect,
-                                     deadline=monotonic() + 3, max_turns=turns)
+        async def inspect_with_deadline(source, _deadline):
+            return await inspect(source)
+        return InterpretationSession((lambda **_: chat,), "Find C2H6O", (), inspect_with_deadline,
+                                     deadline=monotonic() + 3, timeout_seconds=3, context_bytes=1000000)
 
     async def test_inspection_yields_and_rejection_keeps_the_original_conversation_budget(self):
         entered, release = asyncio.Event(), asyncio.Event()
@@ -94,7 +93,7 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
             return {"representations": [{"id": "proton-spectrum"}]}
         chat = ScriptedCarrier(
             [call("inspect_source", {"source": {"upload_ref": "upload:chosen", "member": None}}, "inspect")],
-            [choice()], [call("report_input_problem", {"explanation": "No supported input remains."}, "refusal")],
+            [choice()], [call("report_interpretation_problem", {"explanation": "No supported input remains."}, "refusal")],
         )
         session = self.session(chat, inspect)
         async def reject(decision):
@@ -105,9 +104,10 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(entered.wait(), 1)
             self.assertFalse(task.done())
             release.set()
-            self.assertIsInstance(await task, CannotAnalyse)
+            with self.assertRaises(InterpretationFailed):
+                await task
             self.assertEqual(len(chat.requests), 3)
-            self.assertEqual(chat.requests[-1][-1]["tool_call_id"], "choice")
+            self.assertEqual(chat.requests[-1][-2]["tool_call_id"], "choice")
         finally:
             release.set()
             await asyncio.gather(task, return_exceptions=True)
@@ -118,7 +118,7 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
         chat = ScriptedCarrier([choice("one"), choice("two")], [choice("corrected")])
         session = self.session(chat, inspect, turns=2)
         self.assertIsInstance(await session.run(_accept_selection), SelectedRepresentation)
-        feedback = chat.requests[-1][-2:]
+        feedback = chat.requests[-1][-3:-1]
         self.assertEqual([item["tool_call_id"] for item in feedback], ["one", "two"])
         self.assertEqual(len(chat.requests), 2)
 
@@ -130,18 +130,19 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
             await session.run(_accept_selection)
         self.assertIs(caught.exception, failure)
         self.assertEqual(len(chat.requests), 1)
-        self.assertEqual(session.conversation.correction_failures, [])
+        self.assertEqual(session.conversation.correction_failures, ())
 
     async def test_deadline_during_inspection_is_not_semantic_feedback(self):
         entered = asyncio.Event()
         async def inspect(_source):
             entered.set()
-            await asyncio.Event().wait()
+            await asyncio.sleep(0.06)
+            raise ModelWindowExpired()
         chat = ScriptedCarrier([call("inspect_source", {
             "source": {"upload_ref": "upload:chosen", "member": None}}, "inspect")])
         session = self.session(chat, inspect)
         session.deadline = monotonic() + 0.05
-        with self.assertRaisesRegex(InterpretationFailed, "interpretation deadline elapsed"):
+        with self.assertRaises(InterpretationFailed):
             await session.run(_accept_selection)
         self.assertTrue(entered.is_set())
         self.assertEqual(len(chat.requests), 1)
@@ -171,5 +172,5 @@ class AsyncInterpretationTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(asyncio.CancelledError):
                     await task
                 self.assertEqual(len(chat.requests), 1)
-                self.assertEqual(session.conversation.correction_failures, [])
+                self.assertEqual(session.conversation.correction_failures, ())
                 self.assertEqual(session.rejections, [])

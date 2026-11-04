@@ -4,18 +4,19 @@ The shared conversation owns model turns and feedback. Scientific preparation
 does not consume model turns; only an expected input rejection requests another.
 """
 
-import asyncio
 from dataclasses import asdict
 import json
 from time import monotonic
 
 from secs_inference.provider.input_operations import (
-    INPUT_OPERATIONS, CannotAnalyse, SelectedRepresentation, SourceRef,
+    INPUT_OPERATIONS, InterpretationProblem, SelectedRepresentation, SourceRef,
     interpreter_tools,
 )
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
-from provider_core.conversation import (
-    ConversationFailed, TextCorrection, ToolConversation, ToolFinished, ToolRejected, ToolReply,
+from provider_core.conversation import ToolFinished, ToolRejected, ToolReply
+from provider_core.interpreter import (
+    Interpreter, InterpretationFailed as ModelsExhausted, InterpretationInputRejected,
+    ModelReportedInterpretationProblem, ModelWindowExpired,
 )
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.formula_notation import is_formula_space, normalize_formula_notation
@@ -50,39 +51,20 @@ class PreparationRejected(ToolRejected):
     """The selected scientific input was safely rejected during preparation."""
 
 
+class InterpretationProblemReport(Exception):
+    """Private model report retained only for protected operator evidence."""
+
+
 class _ScientificRejection(ToolRejected):
     def __init__(self, stage, reason, feedback):
         super().__init__(feedback)
         self.stage, self.reason = stage, reason
 
 
-class _DeadlineEndpoint:
-    """Bound model calls without applying the interpretation limit to preparation."""
-
-    def __init__(self, session, endpoint):
-        self.session, self.endpoint = session, endpoint
-
-    @property
-    def identity(self):
-        return self.endpoint.identity
-
-    @property
-    def retirement_confirmed(self):
-        return self.endpoint.retirement_confirmed
-
-    async def complete(self, messages, tools):
-        return await self.session._interpret(
-            lambda: self.endpoint.complete(messages, tools, not_after=self.session.deadline)
-        )
-
-    async def retire(self):
-        await self.endpoint.retire()
-
-
 class InterpretationSession:
     """Own scientific decisions while the SDK owns one conversation transcript."""
 
-    def __init__(self, chat, specification_text: str, uploads, inspect, *, deadline: float, max_turns: int = 8, secrets=()):
+    def __init__(self, endpoint_factories, specification_text: str, uploads, inspect, *, deadline: float, timeout_seconds: float, context_bytes: int, secrets=()):
         self.inspect, self.specification_text, self.deadline = inspect, specification_text, deadline
         self.rejections = []
         self._initial_messages = [
@@ -93,27 +75,13 @@ class InterpretationSession:
                 "uploads": [asdict(upload) for upload in uploads],
             }, ensure_ascii=False)},
         ]
-        self.conversation = ToolConversation(
-            (_DeadlineEndpoint(self, chat),), max_turns=max_turns, secrets=secrets,
-            text_correction=TextCorrection(None), argument_bytes=262144,
+        self.conversation = Interpreter(
+            endpoint_factories, timeout_seconds=timeout_seconds, context_bytes=context_bytes,
+            secrets=secrets,
         )
 
-    async def _interpret(self, operation):
-        if monotonic() >= self.deadline:
-            raise InterpretationFailed("selecting an input representation",
-                                       "the interpretation deadline elapsed without a usable decision")
-        deadline = asyncio.timeout_at(self.deadline)
-        try:
-            async with deadline:
-                return await operation()
-        except TimeoutError as error:
-            if type(error) is not TimeoutError or not deadline.expired():
-                raise
-            raise InterpretationFailed("selecting an input representation",
-                                       "the interpretation deadline elapsed without a usable decision") from None
-
     async def run(self, prepare):
-        async def dispatch(name, arguments):
+        async def dispatch(name, arguments, *, not_after):
             try:
                 action = _decode_action(name, arguments)
                 if isinstance(action, SelectedRepresentation):
@@ -128,26 +96,33 @@ class InterpretationSession:
                 raise _ScientificRejection("tool_call", str(error), f"{error}. Correct this call.") from error
             if isinstance(action, SourceRef):
                 try:
-                    facts = await self._interpret(lambda: self.inspect(action))
+                    if monotonic() >= not_after:
+                        raise ModelWindowExpired()
+                    facts = await self.inspect(action, not_after)
                 except InputReadError as error:
                     raise _ScientificRejection("inspection", str(error), str(error)) from error
                 return ToolReply(facts)
             if monotonic() >= self.deadline:
                 raise InterpretationFailed("selecting an input representation", "the interpretation deadline elapsed without a usable decision")
-            if isinstance(action, CannotAnalyse):
-                return ToolFinished(action)
+            if isinstance(action, InterpretationProblem):
+                try:
+                    raise InterpretationProblemReport(action.explanation)
+                except InterpretationProblemReport as report:
+                    raise ModelReportedInterpretationProblem(
+                        model_summary="The model could not establish an executable spectrum and formula."
+                    ) from report
             return ToolFinished(await prepare(action))
 
         try:
-            result = await self.conversation.run(self._initial_messages, interpreter_tools(), dispatch)
+            result = await self.conversation.run(self._initial_messages, interpreter_tools(), dispatch, not_after=self.deadline)
             return result.value
-        except ConversationFailed as error:
+        except (ModelsExhausted, InterpretationInputRejected) as error:
             raise InterpretationFailed("selecting an input representation", str(error)) from error
         finally:
             self.rejections = [
                 {"stage": failure.stage, "reason": failure.reason}
                 if isinstance(failure, _ScientificRejection) else {"stage": "tool_call", "reason": str(failure)}
-                for _, failure in self.conversation.correction_failures
+                for _, _, failure in self.conversation.correction_failures
                 if not isinstance(failure, PreparationRejected)
             ]
 
@@ -179,8 +154,8 @@ def _decode_action(name: str, arguments: dict):
                 value.encode("utf-8")
             except UnicodeError as error:
                 raise _InvalidArguments(f"The {key} field is not valid Unicode") from error
-    if name == "report_input_problem":
-        return CannotAnalyse(arguments["explanation"])
+    if name == "report_interpretation_problem":
+        return InterpretationProblem(arguments["explanation"])
     if name == "inspect_source":
         return _decode_source(arguments["source"])
     if name == "select_representation":

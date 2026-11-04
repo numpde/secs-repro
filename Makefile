@@ -126,7 +126,7 @@ help:
 	'      Grant mapped-UID read access to private inputs and prepare runtime-owned secret copies; no services start.' \
 	'      [shared].project and gid must match the shared services and select their volumes and socket group.' \
 	'  make provider/credential/install DEPLOYMENT=<name> SOURCE=<private-file>' \
-	'  make provider/interpreter-key/install DEPLOYMENT=<name> SOURCE=<private-file>' \
+	'  make provider/interpreter-key/install DEPLOYMENT=<name> KEY_NAME=<name.key> SOURCE=<private-file>' \
 	'      Install an owner-only secret once; existing files are never overwritten.' \
 	'  make provider/deployment/up DEPLOYMENT=<name> [USE_MOCK_INDEX=yes|no] DOCKER_CONTEXT=<local-context>' \
 	'      Start the named deployment from its saved config using existing images; no build or download.' \
@@ -144,7 +144,7 @@ help:
 	'  make test/provider/e2e DOCKER_CONTEXT=<local-context>' \
 	'      Prove hello, verified input, real model/FAISS/GA and durable handoff retry offline.' \
 	'      Uses eight fixture candidates, not the full index; see notes/004_provider_execution.txt.' \
-	'  make interpreter/model-behavior CONFIG_DIR=<provider-config-dir> KEY_FILE=<interpreter-key> DOCKER_CONTEXT=<local-context>' \
+	'  make interpreter/model-behavior CONFIG_DIR=<provider-config-dir> KEY_DIR=<interpreter-key-dir> DOCKER_CONTEXT=<local-context>' \
 	'      Opt-in paid live interpreter tests; no Job API or GPU work.' \
 	'' \
 	'5. Build the GPU candidate bundle' \

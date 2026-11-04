@@ -47,9 +47,9 @@ class ScientificJobScenarios(WorkerCase, unittest.IsolatedAsyncioTestCase):
                 chat.complete = AsyncMock()
                 chat.complete.return_value = {'role': 'assistant', 'tool_calls': [{'id': 'selection', 'type': 'function',
                     'function': {'name': 'select_representation', 'arguments': json.dumps(choice)}}]}
-                session = InterpretationSession(chat,
+                session = InterpretationSession((lambda **_: chat,),
                     f'Molecular formula: {quote}.', [], Mock(),
-                    deadline=monotonic() + 10, max_turns=1)
+                    deadline=monotonic() + 10, timeout_seconds=10, context_bytes=1000000)
                 decision = asdict(await session.run(_accept_selection))
                 self.assertEqual(decision, choice)
                 response = self.search(selection=decision)

@@ -43,7 +43,7 @@ def shared_fixture(root, config, *, origin="https://api.example", credential=Non
         credential = root / "synthetic-signing.json"
         credential.write_text("fixture credential is projected, never opened")
         credential.chmod(0o600)
-    (config / "provider.toml").write_text(f'''schema_id = "secs.provider.config.v4"
+    (config / "provider.toml").write_text(f'''schema_id = "secs.provider.config.v5"
 [shared]
 project = "{project}"
 gid = {gid}

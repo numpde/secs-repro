@@ -33,6 +33,10 @@ class SourceAcquisitionFailed(RuntimeError):
         self.cause = cause
 
 
+class SourceDeadlineBeforeDispatch(Exception):
+    """The model window expired before source acquisition began."""
+
+
 class AttemptSources:
     """Own admitted receipts until scientific readers and original I/O settle.
 
@@ -142,7 +146,12 @@ class AttemptSources:
         if selected.byte_length > self.max_upload_bytes:
             raise SourceAcquisitionFailed(f"the selected Upload exceeds the {self.max_upload_bytes}-byte per-Upload limit")
         for attempt in range(3):
-            self._remaining()
+            try:
+                self._remaining()
+            except SourceAcquisitionFailed as cause:
+                if attempt == 0:
+                    raise SourceDeadlineBeforeDispatch() from cause
+                raise
             try:
                 receipt = await self.transfer.acquire_file(
                     lambda: self._grant(selected), directory_fd=self._directory_fd,

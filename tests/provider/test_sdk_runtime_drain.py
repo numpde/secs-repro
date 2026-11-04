@@ -257,15 +257,19 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
             events = []
             worker = Worker(events)
             cleanup = RuntimeError("fixture retirement failure")
+            sources = Sources(events)
             if fail_retirement:
-                worker.stopping_failure = cleanup
+                async def failed_source_retirement(*, readers_stopped):
+                    events.append(("sources-retire", readers_stopped))
+                    raise cleanup
+                sources.retire = failed_source_retirement
             exchange = WorkerClient(root / "ipc/worker.sock", startup_seconds=10, retirement_seconds=10)
             exchange._writer = SimpleNamespace(write=Mock())
             async def request(command, *, deadline, require_execution):
                 return await exchange._exchange(command, monotonic() - 1, require_execution)
             worker.request = request
-            session = SecsSession(worker=worker, sources=Sources(events), chat=Carrier(events, [choice()]),
-                                  work_seconds=3, interpretation_seconds=1, startup_seconds=1, max_turns=3)
+            session = SecsSession(worker=worker, sources=sources, endpoint_factories=(lambda **_: Carrier(events, [choice()]),),
+                                  work_seconds=3, interpretation_seconds=1, startup_seconds=1, context_bytes=1000000)
             claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
             scope = RecoveryScope(ORIGIN, PROVIDER, "secs", "runtime-one")
             pending = StartPending(scope, ANALYSIS_KIND_REF, FACTS, start_body(FACTS.job_ref, "request-deadline"))
@@ -294,8 +298,8 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
                     await controller.run(pending)
                 exchange._writer.write.assert_not_called()
                 self.assertEqual(queue.next_pending(ORIGIN, PROVIDER).operation, TerminalOperation.FAIL)
-                self.assertEqual(worker.stopped, not fail_retirement)
-                self.assertIn(("sources-retire", not fail_retirement), events)
+                self.assertFalse(worker.stopped)
+                self.assertIn(("sources-retire", True), events)
             finally:
                 await delivery.retire()
                 await inbox.close()
@@ -339,8 +343,8 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
                         await release.wait()
                     return await super()._exchange(command, deadline, require_execution)
             worker = PausedWorker(worker_endpoint, startup_seconds=10, retirement_seconds=10)
-            session = SecsSession(worker=worker, sources=Sources(events), chat=Carrier(events, [choice()]),
-                                  work_seconds=3, interpretation_seconds=1, startup_seconds=10, max_turns=3)
+            session = SecsSession(worker=worker, sources=Sources(events), endpoint_factories=(lambda **_: Carrier(events, [choice()]),),
+                                  work_seconds=3, interpretation_seconds=1, startup_seconds=10, context_bytes=1000000)
             claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
             scope = RecoveryScope(ORIGIN, PROVIDER, "secs", "runtime-one")
             pending = StartPending(scope, ANALYSIS_KIND_REF, FACTS, start_body(FACTS.job_ref, "request-stop"))
@@ -416,10 +420,10 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
             worker = WorkerClient(worker_endpoint, startup_seconds=10, retirement_seconds=10)
             turn = ([choice()] if phase == "execute" else [call("inspect_source", {
                 "source": {"upload_ref": "upload:chosen", "member": None}}, "inspect")])
-            session = SecsSession(worker=worker, sources=Sources(events), chat=Carrier(events, turn),
+            session = SecsSession(worker=worker, sources=Sources(events), endpoint_factories=(lambda **_: Carrier(events, turn),),
                                   work_seconds=1 if phase == "execute" else 3,
                                   interpretation_seconds=1 if phase == "execute" else 0.2,
-                                  startup_seconds=10, max_turns=3)
+                                  startup_seconds=10, context_bytes=1000000)
             claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
             scope = RecoveryScope(ORIGIN, PROVIDER, "secs", "runtime-one")
             pending = StartPending(scope, ANALYSIS_KIND_REF, FACTS, start_body(FACTS.job_ref, "request-held"))
@@ -441,10 +445,7 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
                     from provider_core.analysis import AnalysisOutcomeUnresolved
                     reason = failure.cause.cause
                     self.assertIs(type(reason), AnalysisOutcomeUnresolved)
-                    if phase == "execute":
-                        self.assertIs(type(reason.__cause__), TimeoutError)
-                    else:
-                        self.assertIs(type(reason.__cause__), InterpretationFailed)
+                    self.assertIs(type(reason.__cause__), TimeoutError)
                     self.assertIs(controller.require_held_failure(pending, failure), failure)
                 else:
                     marker = "pid.entered" if phase == "execute" else "pid.inspect_entered"
@@ -495,8 +496,8 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
             cleanup = RuntimeError("fixture retirement failed")
             if fail_retirement:
                 worker.stopping_failure = cleanup
-            session = SecsSession(worker=worker, sources=Sources(events), chat=Carrier(events, [choice()]),
-                                  work_seconds=3, interpretation_seconds=1, startup_seconds=1, max_turns=3)
+            session = SecsSession(worker=worker, sources=Sources(events), endpoint_factories=(lambda **_: Carrier(events, [choice()]),),
+                                  work_seconds=3, interpretation_seconds=1, startup_seconds=1, context_bytes=1000000)
             claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
             scope = RecoveryScope(ORIGIN, PROVIDER, "secs", "runtime-one")
             pending = StartPending(scope, ANALYSIS_KIND_REF, FACTS, start_body(FACTS.job_ref, "request-held"))
