@@ -98,3 +98,27 @@ class SharedInterpreterTests(unittest.IsolatedAsyncioTestCase):
                                         deadline=monotonic() + 0.4, timeout_seconds=0.4, context_bytes=1000000)
         self.assertIsInstance(await session.run(prepare), SelectedRepresentation)
         self.assertTrue(first.retired)
+
+    async def test_admitted_preparation_survives_concurrent_model_retirement(self):
+        endpoint = Endpoint(call("select_representation", {
+            "representation_id": "spectrum", "formula": "C2H6O",
+            "formula_evidence": {"kind": "job_specification", "quote": "C2H6O"},
+            "processing": "as_stored", "explanation": "The proton spectrum.",
+        }))
+        entered, release = asyncio.Event(), asyncio.Event()
+        accepted = object()
+        async def prepare(_choice):
+            entered.set()
+            await release.wait()
+            return accepted
+        session = InterpretationSession((lambda **_: endpoint,), "Find C2H6O", (), None,
+                                        deadline=monotonic() + 5, timeout_seconds=5, context_bytes=1000000)
+        task = asyncio.create_task(session.run(prepare))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            await session.retire()
+            release.set()
+            self.assertIs(await task, accepted)
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
