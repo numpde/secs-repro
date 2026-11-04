@@ -12,15 +12,54 @@ from tempfile import TemporaryDirectory
 from time import monotonic
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from provider_core.attempt_record import RecoveryScope
 from provider_core.job_input import FeedInputFacts
 from provider_core.ownership import AttemptClaims, LiveAttemptLimits
 from secs_inference.provider.runtime import run_execution
-from secs_inference.provider.worker import WorkerClient
+from secs_inference.provider.worker import NativeWorkerExited, WorkerClient
 
 
 class PreStartReadinessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_idle_retirement_does_not_consume_replacement_startup_window(self):
+        stop, events = asyncio.Event(), []
+        clock = [100.0]
+        facts = FeedInputFacts("job:chosen", "nmr.job.specification.text.v1",
+                               "sha256:" + sha256(b"C2H6O").hexdigest(), 5)
+
+        class Discovery:
+            async def jobs(self, **_query):
+                return SimpleNamespace(jobs=(SimpleNamespace(input=facts),))
+
+        class Worker:
+            async def check_ready(self, *, deadline):
+                events.append(("ready", deadline))
+                if len(events) == 1:
+                    runner = SimpleNamespace(original_exit=SimpleNamespace(returncode=70))
+                    raise NativeWorkerExited(runner, RuntimeError("idle exit"))
+
+            async def stop(self):
+                events.append(("retired", clock[0]))
+                clock[0] += 10
+
+        class Controller:
+            shutdown_ready = True
+
+            async def run(self, _pending):
+                events.append(("admitted", clock[0]))
+                stop.set()
+
+        claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
+        with patch("secs_inference.provider.runtime.monotonic", side_effect=lambda: clock[0]), \
+             patch("secs_inference.provider.runtime.failure_evidence", return_value={}):
+            await run_execution(
+                api=Discovery(), scope=RecoveryScope("https://api.test", "provider:test", "secs", "idle"),
+                claims=claims, stop=stop, poll_seconds=0.01, assemble=lambda _pending: Controller(),
+                worker=Worker(), startup_seconds=5,
+            )
+        self.assertEqual(events, [("ready", 105), ("retired", 100), ("ready", 115), ("admitted", 110)])
+
     async def test_unsettled_controller_blocks_discovery_of_another_job(self):
         stop, entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
         facts = FeedInputFacts("job:chosen", "nmr.job.specification.text.v1",

@@ -104,7 +104,7 @@ async def run_execution(*, api, scope, claims, stop, poll_seconds, assemble, wor
             await worker.stop()
             if stop.is_set():
                 break
-            await worker.check_ready(deadline=startup_deadline)
+            await worker.check_ready(deadline=monotonic() + startup_seconds)
         if stop.is_set():
             break
         pending = StartPending(scope, ANALYSIS_KIND_REF, selected.input,
