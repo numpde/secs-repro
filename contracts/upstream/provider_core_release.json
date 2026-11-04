@@ -175,12 +175,12 @@
     }
   },
   "files": {
-    "acquisition-owner-0.6.3.tar.gz": "b3bab12dd27e50664a0110e10946239800b9b5f6a5726f198f982175edc2de17",
-    "provider_core-0.6.3-install.lock": "b9274b22c4740df3f4149bdd92496c4b4baf68c7080d05dd0b9a43d2e71d3a5a",
-    "provider_core-0.6.3-native-install.lock": "a16d33056df64b6a7cba601192fd3da88c0bef79d3dd4aec3c0288530511aa17",
-    "provider_core-0.6.3-py3-none-any.whl": "2f6195d464fd91123c58ec32691eb9dfaf98d6321afac33a3899720ba86e7a95",
-    "provider_core-0.6.3.tar.gz": "db3d62051e642cb167de422f2ffa44e4bb24e31a253da97722965b12eb66a607",
-    "wheelhouse-tool-0.6.3.pyz": "9d8cd59c0aeffd61ce462fa81f2951a24fb8a8749a1332d5f87842b4c095d656"
+    "acquisition-owner-0.6.4.tar.gz": "b3bab12dd27e50664a0110e10946239800b9b5f6a5726f198f982175edc2de17",
+    "provider_core-0.6.4-install.lock": "94523beefb592a5af6569b67414b78510a79f48478ab01b31cc4fd9bbb000a8a",
+    "provider_core-0.6.4-native-install.lock": "f9d9c7df240a064f4ee0ff4984ee1d31031cdc733adc011fdbb1c6cbb3f6ca78",
+    "provider_core-0.6.4-py3-none-any.whl": "3d222c4f1dfff184d7c7c7b5906cda3565b6cbed3d42e5dd9775bf314cafa028",
+    "provider_core-0.6.4.tar.gz": "cc299ea8ad67cbec3457bf943c93bf2b2fcf11f49f75fd9f80189591400891ca",
+    "wheelhouse-tool-0.6.4.pyz": "9d8cd59c0aeffd61ce462fa81f2951a24fb8a8749a1332d5f87842b4c095d656"
   },
   "source_files": {
     "MANIFEST.in": {
@@ -190,12 +190,12 @@
     },
     "README.md": {
       "mode": 420,
-      "sha256": "51adf836902afcbb40967972acfa7b6338559fe20d86f40b73acaaced2ec2cc1",
-      "size": 31733
+      "sha256": "15217e9f2c84662cd76b0f22d1bc0621188edfde4abd0130711409d29c6603b7",
+      "size": 33201
     },
     "pyproject.toml": {
       "mode": 420,
-      "sha256": "eb480c2a99feb78a549a560d5e9803a02643a75db21202e65efb37c593bce933",
+      "sha256": "f64d6d4763be0652fdab81646af43eaf7635313b076e54d788a7027ab3382564",
       "size": 588
     },
     "src/provider_core/__init__.py": {
@@ -270,8 +270,8 @@
     },
     "src/provider_core/conversation.py": {
       "mode": 420,
-      "sha256": "ca92cfa6d5167f4bd982057b98f67c287870666c18ca00dd7250ed92813ea209",
-      "size": 23804
+      "sha256": "ac28d1fc7f3919be2ee753482b78c3e958ca03a95c80c74dd21fb3502d57440a",
+      "size": 23962
     },
     "src/provider_core/credential.py": {
       "mode": 420,
@@ -1635,8 +1635,8 @@
     },
     "tests/unit/normative/test_interpreter.py": {
       "mode": 420,
-      "sha256": "5f9800942c55cdd5a66cc70666299a090739985a47cd57fe59d5902f37fdf185",
-      "size": 45685
+      "sha256": "2aaefda7b932fa83fd60e9996722d4ae6659d1ad64b78f3b6fd135bee8f581ba",
+      "size": 46845
     },
     "tests/unit/normative/test_job_feed.py": {
       "mode": 420,
@@ -1799,7 +1799,7 @@
       "size": 5770
     }
   },
-  "source_revision": "ded24f6231f116d9259bf67a13c66bf59c767163",
+  "source_revision": "8218335354fccb42ab3e5069c765fd2fb9c3d9eb",
   "tool_source_files": {
     "__init__.py": {
       "mode": 420,
