@@ -69,10 +69,18 @@ async def _drain_controller(controller, *, poll_seconds):
         raise BaseExceptionGroup("Attempt drain observed independent fatal failures", fatal_failures)
 
 
-async def run_execution(*, api, scope, claims, stop, poll_seconds, assemble, worker, startup_seconds):
+async def run_execution(*, api, scope, claims, stop, poll_seconds, assemble, worker, startup_seconds,
+                        prose_services):
     """Discover fresh unattempted Jobs; the SDK alone admits and drives Attempts."""
     retry_seconds = poll_seconds
     while not stop.is_set():
+        # This captured binding outlives individual interpretation sessions.
+        # When all alternatives are postponed, avoid consuming a new Job's
+        # scientific and model deadlines before a request can be sent.
+        delay = min(service.retry_seconds for service in prose_services) if prose_services else 0.0
+        if delay > 0:
+            await wait_until_stopped(stop, delay)
+            continue
         try:
             page = await api.jobs(analysis_kind_ref=ANALYSIS_KIND_REF,
                                   has_provider_execution_attempt=False, limit=1, cursor=None)
@@ -111,6 +119,12 @@ async def run_execution(*, api, scope, claims, stop, poll_seconds, assemble, wor
             await worker.check_ready(deadline=monotonic() + startup_seconds)
         if stop.is_set():
             break
+        # Readiness and discovery may await I/O. Recheck before START to avoid
+        # spending the new Job's deadline during a just-observed model outage.
+        delay = min(service.retry_seconds for service in prose_services) if prose_services else 0.0
+        if delay > 0:
+            await wait_until_stopped(stop, delay)
+            continue
         pending = StartPending(scope, ANALYSIS_KIND_REF, selected.input,
                                start_body(selected.input.job_ref, token_hex(16)))
         controller = assemble(pending)
@@ -127,7 +141,8 @@ async def run_execution(*, api, scope, claims, stop, poll_seconds, assemble, wor
             _LOG.error("Admission stopped: the shared controller retains unresolved START or Attempt ownership")
 
 
-async def run_services(*, hello_api, discovery_api, provider_ref, config, scope, claims, stop, assemble, worker):
+async def run_services(*, hello_api, discovery_api, provider_ref, config, scope, claims, stop, assemble, worker,
+                       prose_services):
     """Close admission on sibling failure and drain the original SDK driver."""
     async def hello():
         try:
@@ -140,7 +155,8 @@ async def run_services(*, hello_api, discovery_api, provider_ref, config, scope,
         try:
             await run_execution(api=discovery_api, scope=scope, claims=claims, stop=stop,
                                 poll_seconds=config.execution.poll_seconds, assemble=assemble, worker=worker,
-                                startup_seconds=config.execution.worker_startup_seconds)
+                                startup_seconds=config.execution.worker_startup_seconds,
+                                 prose_services=prose_services)
         finally:
             stop.set()
 
