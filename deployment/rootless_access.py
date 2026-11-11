@@ -9,7 +9,6 @@ import re
 import stat
 import subprocess
 import sys
-import uuid
 
 
 _PERMISSIONS = {"--x", "r--", "rw-", "r-x", "rwx"}
@@ -19,140 +18,41 @@ def _mode(permissions: str) -> int:
     return sum(value for value, bit in ((4, "r"), (2, "w"), (1, "x")) if bit in permissions)
 
 
-def parse_id_map(raw: bytes, label: str) -> tuple[tuple[int, int, int], ...]:
-    """Parse Linux's three-column ID map without assuming its coordinate space."""
-    try:
-        rows = tuple(tuple(int(field) for field in line.split()) for line in raw.decode("ascii").splitlines())
-    except (UnicodeDecodeError, ValueError) as error:
-        raise ValueError(f"Cannot grant deployment access: host returned an invalid {label} map.") from error
-    if (not rows or any(len(row) != 3 or any(value < 0 for value in row) or row[2] == 0 for row in rows)):
-        raise ValueError(f"Cannot grant deployment access: host returned an invalid {label} map.")
-    for index, (inside, outside, length) in enumerate(rows):
-        for other_inside, other_outside, other_length in rows[index + 1:]:
-            if (inside < other_inside + other_length and other_inside < inside + length
-                    or outside < other_outside + other_length and other_outside < outside + length):
-                raise ValueError(f"Cannot grant deployment access: host returned overlapping {label} map ranges.")
-    return rows
-
-
-def map_id(rows: tuple[tuple[int, int, int], ...], container_id: int, label: str) -> int:
-    """Translate one container ID through a map observed from the host namespace."""
-    if type(container_id) is not int or container_id < 0:
-        raise ValueError(f"Cannot grant deployment access: requested {label} is invalid.")
-    matches = [outside + container_id - inside for inside, outside, length in rows
-               if inside <= container_id < inside + length]
-    if len(matches) != 1:
-        raise ValueError(f"Cannot grant deployment access: container {label} {container_id} is not mapped exactly once.")
-    return matches[0]
-
-
-def container_id_for_host(rows: tuple[tuple[int, int, int], ...], host_id: int, label: str) -> int:
-    """Translate one host ID into the matching container ID in an observed map."""
-    if type(host_id) is not int or host_id < 0:
-        raise ValueError(f"Cannot select wheelhouse identity: host {label} is invalid.")
-    matches = [inside + host_id - outside for inside, outside, length in rows
-               if outside <= host_id < outside + length]
-    if len(matches) != 1:
-        raise ValueError(f"Cannot select wheelhouse identity: host {label} {host_id} is not mapped exactly once.")
-    return matches[0]
-
-
-def _host_user_namespace() -> None:
-    """Require deployment tooling to run in the host's initial user namespace."""
-    identity = ((0, 0, 4294967295),)
-    try:
-        uid_map = parse_id_map(Path("/proc/self/uid_map").read_bytes(), "host UID")
-        gid_map = parse_id_map(Path("/proc/self/gid_map").read_bytes(), "host GID")
-    except OSError as error:
-        raise ValueError("Cannot grant deployment access: the host ID maps are unavailable.") from error
-    if uid_map != identity or gid_map != identity:
-        raise ValueError("Cannot grant deployment access: run the deployment tool in the host's initial user namespace.")
-
-
-def _host_process_maps(pid: int, probe_program: str) -> tuple[tuple[tuple[int, int, int], ...], tuple[tuple[int, int, int], ...]]:
-    """Tie the reported PID to this probe, then read its maps from the host."""
-    if type(pid) is not int or pid <= 0:
-        raise ValueError("Cannot grant deployment access: selected engine returned an invalid probe PID.")
-    try:
-        command_line = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\x00")
-        if probe_program.encode("ascii") not in command_line:
-            raise ValueError("Cannot grant deployment access: host PID does not identify the selected mapping probe.")
-        uid_rows = parse_id_map(Path(f"/proc/{pid}/uid_map").read_bytes(), "UID")
-        gid_rows = parse_id_map(Path(f"/proc/{pid}/gid_map").read_bytes(), "GID")
-    except ValueError:
-        raise
-    except OSError as error:
-        raise ValueError("Cannot grant deployment access: host could not inspect the selected engine's probe maps.") from error
-    return uid_rows, gid_rows
-
-
 def _mapping_rows(project, image: str, userns_mode: str | None = None):
-    """Read both host-visible ID maps from one disposable selected-engine probe."""
-    _host_user_namespace()
-    token = uuid.uuid4().hex
-    name = f"secs-map-{os.getpid()}-{token[:12]}"
-    probe_program = f"import time; _secs_map_probe = {token!r}; time.sleep(300)"
-    arguments = [
-        "run", "--detach", "--name", name, "--pull", "never", "--network", "none", "--read-only",
-        "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-        "--pids-limit", "16", "--cpus", "1", "--memory", "64m", "--memory-swap", "64m",
-        "--user", "0:0",
-    ]
-    if userns_mode is not None:
-        if type(userns_mode) is not str or not userns_mode or any(char in userns_mode for char in "\x00\r\n"):
-            raise ValueError("Cannot grant deployment access: service userns mode is invalid.")
-        arguments.extend(("--userns", userns_mode))
-    arguments.extend(("--entrypoint", "python", image, "-I", "-B", "-c", probe_program))
-    primary_error = None
-    probe_id = None
+    """Observe one selected engine and return only after probe retirement."""
     try:
-        raw_id = project.command(*arguments).decode("ascii").strip()
-        if re.fullmatch(r"[0-9a-f]{64}", raw_id) is None:
-            raise ValueError("Cannot grant deployment access: selected engine returned an invalid probe identity.")
-        probe_id = raw_id
-        records = json.loads(project.command("inspect", raw_id))
-        if (type(records) is not list or len(records) != 1 or type(records[0]) is not dict
-                or type(records[0].get("State")) is not dict):
-            raise ValueError("Cannot grant deployment access: selected engine returned an invalid probe inspection.")
-        state = records[0]["State"]
-        if state.get("Running") is not True or type(state.get("Pid")) is not int or state["Pid"] <= 0:
-            raise ValueError("Cannot grant deployment access: selected engine's mapping probe is not running.")
-        pid = state["Pid"]
-        uid_rows, gid_rows = _host_process_maps(pid, probe_program)
-        confirmed = json.loads(project.command("inspect", raw_id))
-        if (type(confirmed) is not list or len(confirmed) != 1
-                or confirmed[0].get("State", {}).get("Running") is not True
-                or confirmed[0].get("State", {}).get("Pid") != pid):
-            raise ValueError("Cannot grant deployment access: selected engine's probe changed while its maps were read.")
-        return uid_rows, gid_rows
-    except BaseException as error:
-        primary_error = error
-        if probe_id is None:
-            error.add_note(f"Mapping probe creation returned no validated ID; inspect name {name!r} without removing it by name.")
-        raise
-    finally:
-        if probe_id is not None:
-            try:
-                project.command("rm", "--force", probe_id, timeout=15)
-            except BaseException as cleanup_error:
-                if primary_error is not None:
-                    primary_error.add_note(f"Mapping probe cleanup is unconfirmed; inspect container ID {probe_id!r} before retrying.")
-                else:
-                    raise ValueError(f"Cannot grant deployment access: mapping probe {probe_id!r} could not be retired.") from cleanup_error
+        from linux_idmap.probe import ProbeRequest, ProbeResources, ProbeFailure, probe_identity
+    except ImportError as error:
+        raise ValueError("Install the qualified host linux-idmap wheel before deployment.") from error
+
+    try:
+        result = probe_identity(
+            ProbeRequest(
+                endpoint=project.docker_endpoint, image=image,
+                interpreter="/usr/local/bin/python3", user_uid=0, user_gid=0,
+                userns_mode="default" if userns_mode is None else userns_mode,
+                resources=ProbeResources(memory_bytes=64 * 1024**2, pids_limit=16,
+                                         nano_cpus=1_000_000_000),
+            ),
+            executable="/usr/bin/docker",
+        )
+    except ProbeFailure as error:
+        raise ValueError("Cannot grant deployment access: shared probe failed: "
+                         + json.dumps(error.as_dict(), sort_keys=True)) from error
+    return result.uid_map, result.gid_map
 
 
 def mapped_ids(project, image: str, container_uid: int, container_gid: int,
                userns_mode: str | None = None) -> tuple[int, int]:
-    """Translate one service identity through maps observed on the selected engine."""
-    uid_rows, gid_rows = _mapping_rows(project, image, userns_mode)
-    return map_id(uid_rows, container_uid, "UID"), map_id(gid_rows, container_gid, "GID")
+    """Translate provider IDs only after the shared probe has retired."""
+    uid_map, gid_map = _mapping_rows(project, image, userns_mode)
+    return int(uid_map.translate(container_uid)), int(gid_map.translate(container_gid))
 
 
 def container_ids_for_host(project, image: str, host_uid: int, host_gid: int) -> tuple[int, int]:
-    """Select container IDs whose bind writes are owned by the invoking host user."""
-    uid_rows, gid_rows = _mapping_rows(project, image)
-    return (container_id_for_host(uid_rows, host_uid, "UID"),
-            container_id_for_host(gid_rows, host_gid, "GID"))
+    """Select IDs whose container writes map to the calling host owner."""
+    uid_map, gid_map = _mapping_rows(project, image)
+    return int(uid_map.translate_inverse(host_uid)), int(gid_map.translate_inverse(host_gid))
 
 
 def main(arguments: list[str]) -> int:

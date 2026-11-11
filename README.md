@@ -124,3 +124,21 @@ Docker-managed volumes; the shared API route and delivery queue remain separatel
 [GPU selection and checks after host software upgrades](notes/004_provider_execution.txt).
 
 [Terminal outcome policy](src/secs_inference/provider/outcomes.py).
+
+## Shared deployment identity probe (candidate)
+
+This branch delegates deployment UID/GID observation to the host
+`linux-idmap` package in `numpde/container-tools`. It requires the unreleased
+**0.3.2.dev0** candidate installed for host Python; the pinned acquisition
+bootstrap remains a separate release input. SECS keeps all ACL and secret-copy
+policy. The selected Docker Unix endpoint, image and explicit namespace mode
+are forwarded unchanged, with its existing 64 MiB memory/swap, 16-PID and
+1-CPU probe ceilings.
+
+The shared probe must confirm process/container retirement before any mapped
+identity is returned. The adapter refuses unresolved observations before
+setting host ACLs. A local image must expose `/usr/local/bin/python3`.
+Rootful/rootless Docker and maintained deployment tests remain qualification
+gates. The adapter contract can be checked with
+`PYTHONPATH=. python3 -B -m unittest discover -s tests/host -v` after
+installing the candidate wheel.
