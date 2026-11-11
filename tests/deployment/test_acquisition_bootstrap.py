@@ -49,7 +49,11 @@ class AcquisitionBootstrapTests(TestCase):
             archive_path = root / 'bundle.tar.gz'
             with tarfile.open(archive_path, 'w:gz') as archive:
                 for name in entries:
-                    archive.add(bootstrap.BUNDLE / name, arcname=name, recursive=False)
+                    data = (bootstrap.BUNDLE / name).read_bytes()
+                    member = tarfile.TarInfo(name)
+                    member.size = len(data)
+                    member.mode = entries[name]["mode"]
+                    archive.addfile(member, io.BytesIO(data))
             record = {'files': {archive_path.name: hashlib.sha256(archive_path.read_bytes()).hexdigest()}}
             snapshot = root / 'acquisition'
             shutil.copytree(bootstrap.BUNDLE, snapshot)

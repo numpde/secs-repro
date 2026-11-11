@@ -17,6 +17,14 @@ from tools import docker_context
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def standalone_make_environment():
+    """Independent Make fixtures must own their command-line inputs."""
+    return {
+        name: value for name, value in os.environ.items()
+        if name not in {"MAKELEVEL", "MAKEFLAGS", "MAKEOVERRIDES", "MFLAGS"}
+    }
+
+
 class TerminalInput(io.StringIO):
     def isatty(self):
         return True
@@ -77,7 +85,7 @@ class DockerContextTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "unix:///tmp/default.sock\n")
 
     def test_noninteractive_make_requires_a_context_only_for_docker_goals(self):
-        environment = os.environ.copy()
+        environment = standalone_make_environment()
         environment.update({
             "DOCKER_HOST": "tcp://poison.invalid:2375",
             "DOCKER_CONTEXT": "ambient-context-must-not-be-used",
@@ -133,7 +141,7 @@ class DockerContextTests(unittest.TestCase):
             marker = root / "docker-was-called"
             docker.write_text(f"#!/bin/sh\nprintf called > '{marker}'\n")
             docker.chmod(0o700)
-            environment = os.environ | {
+            environment = standalone_make_environment() | {
                 "PATH": f"{root}:/usr/bin:/bin",
                 "DOCKER_HOST": "tcp://remote.example:2376",
                 "SECS_DOCKER_ENDPOINT": "unix:///tmp/ambient.sock",
@@ -161,7 +169,7 @@ class DockerContextTests(unittest.TestCase):
     def test_make_interactive_menu_lists_only_local_contexts(self):
         pid, terminal = pty.fork()
         if pid == 0:
-            environment = os.environ.copy()
+            environment = standalone_make_environment()
             environment.pop("DOCKER_CONTEXT", None)
             environment.pop("DOCKER_HOST", None)
             os.execvpe("make", ["make", "--no-print-directory", "-n", "packages/base-images/pull",
@@ -210,7 +218,7 @@ class DockerContextTests(unittest.TestCase):
             context = f"missing'; touch {marker}; echo '"
             result = subprocess.run(
                 ["make", "--no-print-directory", "-n", "packages/cpu/image", f"DOCKER_CONTEXT={context}"],
-                cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
+                cwd=ROOT, env=standalone_make_environment(), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("does not exist", result.stderr)
