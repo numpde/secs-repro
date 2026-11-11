@@ -1,5 +1,7 @@
 """Capture package image source identities and checksum metadata."""
 
+from acquisition_bootstrap import capture_installer_inputs
+
 import hashlib
 import json
 from pathlib import Path
@@ -7,8 +9,11 @@ import stat
 import sys
 
 
-def main(stage, repository, variant):
+def main(stage, repository, variant, installer=False):
     stage, repository = Path(stage), Path(repository)
+    if installer:
+        capture_installer_inputs(stage, repository, 'containers/packages/Dockerfile')
+        return
     selections = []
     files = []
     for role in ('packages', 'native'):
@@ -21,7 +26,7 @@ def main(stage, repository, variant):
     (stage / 'manifest.json').write_text(json.dumps(selections, sort_keys=True))
     files.extend([(stage / 'packages.lock', f'requirements/packages-{variant}.lock'),
                   (stage / 'native.lock', 'requirements/native.lock')])
-    for name in ('containers/packages/Dockerfile', 'pyproject.toml', 'secs/pyproject.toml', 'secs/README.md'):
+    for name in ('pyproject.toml', 'secs/pyproject.toml', 'secs/README.md'):
         files.append((repository / name, name))
     for name in ('src', 'secs/src'):
         for path in sorted((repository / name).rglob('*')):
@@ -31,7 +36,7 @@ def main(stage, repository, variant):
                 raise ValueError(f'Package source is a symlink: {path}')
             if path.is_file():
                 files.append((path, path.relative_to(repository).as_posix()))
-    entries = []
+    entries = json.loads((stage / 'installer-sources.json').read_text())
     for path, destination in files:
         metadata = path.lstat()
         if not stat.S_ISREG(metadata.st_mode):
@@ -45,4 +50,6 @@ def main(stage, repository, variant):
 
 
 if __name__ == '__main__':
-    main(*sys.argv[1:])
+    arguments = sys.argv[1:]
+    installer = arguments[-1:] == ['--installer']
+    main(*(arguments[:-1] if installer else arguments), installer=installer)

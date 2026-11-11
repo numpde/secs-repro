@@ -46,9 +46,15 @@ class SharedWheelhouseTests(unittest.TestCase):
                 path = repo / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('content')
+            subprocess.run(['python3', str(ROOT / 'tools/packages_stream_inputs.py'), str(stage), str(ROOT), 'cpu', '--installer'],
+                           capture_output=True, check=True)
             subprocess.run(['python3', str(ROOT / 'tools/packages_stream_inputs.py'), str(stage), str(repo), 'cpu'],
                            capture_output=True, check=True)
             destinations = {item['destination'] for item in json.loads((stage / 'sources.json').read_text())}
+            self.assertIn('tools/bootstrap/acquisition/acquisition_tool/installer/wheels/pip-26.2.2-py3-none-any.whl', destinations)
+            self.assertNotIn('pip-', (stage / 'packages.complete').read_text())
+            self.assertNotIn('pip-', (stage / 'native.complete').read_text())
+            self.assertEqual(json.loads((stage / 'manifest.json').read_text()), [])
             self.assertIn('src/module.py', destinations)
             self.assertIn('secs/src/module.py', destinations)
             self.assertNotIn('src/__pycache__/module.pyc', destinations)

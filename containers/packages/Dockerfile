@@ -1,11 +1,19 @@
 ARG PYTHON_BASE
+FROM ${PYTHON_BASE} AS installer
+ENV NMR_PROVIDER_TOOLS_IN_CONTAINER=1
+COPY tools/bootstrap/acquisition/acquisition_tool/installer/tools/ /opt/provider-tools/installer/tools/
+COPY tools/bootstrap/acquisition/acquisition_tool/installer/requirements/installer-release.json /opt/provider-tools/installer/release.json
+COPY tools/bootstrap/acquisition/acquisition_tool/installer/wheels/ /opt/provider-tools/installer/wheels/
+RUN cd /opt/provider-tools/installer \
+    && python -B -m tools.installer --record release.json --pool wheels
+
 FROM scratch AS package_wheels
 COPY packages_wheels/ /
 
 FROM scratch AS native_wheels
 COPY native_wheels/ /
 
-FROM ${PYTHON_BASE}
+FROM installer
 
 ARG PACKAGES_VARIANT
 

@@ -107,7 +107,9 @@ class ProseServiceOutageTests(unittest.IsolatedAsyncioTestCase):
 
                     async def run(self, pending):
                         starts.append((pending.input.job_ref, monotonic()))
-                        owner = Interpreter(services, timeout_seconds=0.5, context_bytes=16384, secrets=secrets)
+                        # Reach the real HTTPS child while keeping the model window
+                        # below Retry-After 2, which must defer the next Job.
+                        owner = Interpreter(services, timeout_seconds=1.5, context_bytes=16384, secrets=secrets)
                         dispatch = AsyncMock(return_value=ToolFinished('prepared'))
                         try:
                             result = await owner.run(

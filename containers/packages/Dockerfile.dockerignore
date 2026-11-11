@@ -16,3 +16,13 @@ secs/**
 !pyproject.toml
 !src/
 !src/**
+!tools/
+tools/**
+!tools/bootstrap/
+tools/bootstrap/**
+!tools/bootstrap/acquisition/
+tools/bootstrap/acquisition/**
+!tools/bootstrap/acquisition/acquisition_tool/
+tools/bootstrap/acquisition/acquisition_tool/**
+!tools/bootstrap/acquisition/acquisition_tool/installer/
+!tools/bootstrap/acquisition/acquisition_tool/installer/**
