@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, patch
 
 from provider_core.attempt_record import RecoveryScope
 from provider_core.conversation import ToolFinished
+from provider_core.diagnostics import failure_evidence
 from provider_core.interpreter import InterpretationFailed, Interpreter
 from provider_core.job_input import FeedInputFacts
 from provider_core.ownership import AttemptClaims, LiveAttemptLimits
@@ -32,6 +33,7 @@ class ProseServiceOutageTests(unittest.IsolatedAsyncioTestCase):
     async def test_configured_http_service_preserves_retry_after_between_jobs(self):
         stop, first_finished = asyncio.Event(), asyncio.Event()
         requests, starts, discoveries = [], [], []
+        failures, postponements = [], []
         healthy = False
 
         class Handler(BaseHTTPRequestHandler):
@@ -76,6 +78,19 @@ class ProseServiceOutageTests(unittest.IsolatedAsyncioTestCase):
                         patch('secs_inference.provider.main.read_startup_file', side_effect=lambda path, **_: (
                             b'local-test-key' if Path(path).suffix == '.key' else (root / 'ca.pem').read_bytes())):
                     services, secrets = _read_chat_settings(1, 1)
+                postpone = services[0]._postpone
+
+                def observe_postponement(failure, delay):
+                    postpone(failure, delay)
+                    response = failure.response
+                    postponements.append({
+                        'job_ref': starts[-1][0], 'at': monotonic(), 'delay': delay,
+                        'status': response.status if response is not None else None,
+                        'retry_after': [value.decode('ascii', errors='replace') for name, value in response.headers
+                                        if name.lower() == b'retry-after'] if response is not None else [],
+                    })
+
+                self.enterContext(patch.object(services[0], '_postpone', side_effect=observe_postponement))
                 payload = b'Interpret this Job'
                 facts = tuple(FeedInputFacts(
                     f'job:configured-outage-{index}', 'nmr.job.specification.text.v1',
@@ -101,7 +116,9 @@ class ProseServiceOutageTests(unittest.IsolatedAsyncioTestCase):
                                     'name': 'prepare', 'parameters': {'type': 'object', 'properties': {}},
                                 }}], dispatch,
                             )
-                        except InterpretationFailed:
+                        except InterpretationFailed as failure:
+                            failures.append({'job_ref': pending.input.job_ref,
+                                             'failure': failure_evidence(failure, secrets=secrets)})
                             if len(starts) != 1:
                                 raise
                             dispatch.assert_not_awaited()
@@ -121,7 +138,15 @@ class ProseServiceOutageTests(unittest.IsolatedAsyncioTestCase):
                     worker=SimpleNamespace(check_ready=AsyncMock()), startup_seconds=1, prose_services=services,
                 ))
                 await asyncio.wait_for(first_finished.wait(), 2)
-                self.assertGreater(services[0].retry_seconds, 0)
+                evidence = json.dumps({'failures': failures, 'postponements': postponements,
+                                       'requests': requests, 'starts': starts, 'discoveries': discoveries})
+                self.assertEqual(1, len(postponements), msg=evidence)
+                observed = postponements[0]
+                self.assertEqual(facts[0].job_ref, observed['job_ref'], msg=evidence)
+                self.assertEqual(503, observed['status'], msg=evidence)
+                self.assertEqual(['2'], observed['retry_after'], msg=evidence)
+                self.assertGreaterEqual(observed['delay'], 2, msg=evidence)
+                self.assertGreater(services[0].retry_seconds, 0, msg=evidence)
                 self.assertEqual(1, len(starts))
                 self.assertEqual(1, len(discoveries))
                 healthy = True
