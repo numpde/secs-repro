@@ -1,8 +1,25 @@
 override PROVIDER_IMAGE_TAG := secs-repro/provider:local
 override PROVIDER_PYTHON_BASE := docker.io/library/python:3.12.16-slim-bookworm@sha256:623674a14ef93d052bb9b0de4dbf5f28eb578a35263838941cc8aa43213c1487
-override WHEELHOUSE_TOOL_NAME := wheelhouse-tool-0.6.14.pyz
+override WHEELHOUSE_TOOL_NAME := wheelhouse-tool-0.6.15.pyz
 override WHEELHOUSE_TOOL_SHA256 := 8c8ad0ca2c1ee6147e6da525bc302254935b606726bfe4b0ec1ee9021371d58c
-override WHEELHOUSE_TOOL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.6.14/$(WHEELHOUSE_TOOL_NAME)
+override WHEELHOUSE_TOOL_URL := https://github.com/numpde/nmr-provider-tools/releases/download/v0.6.15/$(WHEELHOUSE_TOOL_NAME)
+
+# The source capture and immutable image remain owned by the caller's stage and lock.
+define build_installer
+	python3 tools/$(1)_stream_inputs.py "$$stage" "$(REPOSITORY_ROOT)" $(2) --installer > /dev/null
+	secs_engine_active=1
+	if tar -C "$$stage/installer-inputs" -cf - . | \
+	$(DOCKER) build --quiet --network none --pull=false --target installer \
+		--build-arg PYTHON_BASE="$(PROVIDER_PYTHON_BASE)" \
+		--iidfile "$$stage/installer-image-id" --file containers/$(1)/Dockerfile - > /dev/null; then
+		secs_engine_active=0
+	else
+		printf '%s\n' 'Installer build failed; preserve its captured inputs until daemon completion is established.' >&2
+		exit 1
+	fi
+	installer_id=$$(cat "$$stage/installer-image-id")
+	[[ $$installer_id =~ ^sha256:[0-9a-f]{64}$$ ]] || { printf '%s\n' 'Docker returned an invalid installer image ID.' >&2; exit 1; }
+endef
 
 # Initialization is a host filesystem operation, not a build or API operation.
 # Pass the literal name through the environment to keep shell syntax out of it.
@@ -120,7 +137,9 @@ provider/wheelhouse/tool:
 
 # Both install profiles are exact issuer locks from the selected SDK release.
 provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requirements/native.lock
-	@if test "$(HOST_UID)" -eq 0; then
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
+	if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot materialize SDK wheelhouses as host UID 0.' >&2
 		exit 2
 	fi
@@ -132,10 +151,11 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	$(call build_installer,provider)
 	mkdir "$$stage/check"
 	cp "requirements/$$profile.lock" "$$stage/requirements.lock"
 	lock_wheelhouse -s
-	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/check" "$(PROVIDER_PYTHON_BASE)" check; then
+	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/check" "$$installer_id" check; then
 		unlock_wheelhouse
 		exit 0
 	else
@@ -189,7 +209,7 @@ provider/wheelhouse provider/native-wheelhouse: requirements/provider.lock requi
 	unset SECS_RETIREMENT_RECEIPT
 	mkdir "$$stage/recheck"
 	lock_wheelhouse -s
-	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/recheck" "$(PROVIDER_PYTHON_BASE)" check; then
+	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/recheck" "$$installer_id" check; then
 		unlock_wheelhouse
 	else
 		status=$$?
@@ -204,15 +224,16 @@ provider/image:
 	hold_image_operation_lock "$(REPOSITORY_ROOT)"
 	source tools/wheelhouse_selection.sh
 	select_wheelhouse
-	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory"
-	lock_wheelhouse -s
 	stage=$$(mktemp -d /tmp/secs-provider-inputs.XXXXXXXX)
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	$(call build_installer,provider)
+	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory"
+	lock_wheelhouse -s
 	cp requirements/provider.lock "$$stage/provider.lock"
-	stage_selected_wheels "$$wheelhouse_directory" "$$stage/provider.lock" "$$stage" "$(PROVIDER_PYTHON_BASE)" report
+	stage_selected_wheels "$$wheelhouse_directory" "$$stage/provider.lock" "$$stage" "$$installer_id" report
 	tool="$$wheelhouse_directory/$(WHEELHOUSE_TOOL_NAME)"
 	python3 -I -S "$$tool" report --report "$$stage/.pip-report" --pool /pool --directory provider_wheels > "$$stage/manifest.json"
 	unlock_wheelhouse

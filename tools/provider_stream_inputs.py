@@ -1,5 +1,7 @@
 """Capture the provider build's source identities and checksum metadata."""
 
+from acquisition_bootstrap import capture_installer_inputs
+
 import hashlib
 import json
 from pathlib import Path
@@ -7,14 +9,16 @@ import stat
 import sys
 
 
-def main(stage, repository):
+def main(stage, repository, installer=False):
     stage, repository = Path(stage), Path(repository)
+    if installer:
+        capture_installer_inputs(stage, repository, 'containers/provider/Dockerfile')
+        return
     selections = json.loads((stage / 'manifest.json').read_text())
     checksums = ''.join(f"{item['sha256']}  {item['filename']}\n" for item in sorted(selections, key=lambda x: x['filename']))
     (stage / 'complete').write_text(checksums)
     files = [(stage / 'provider.lock', 'requirements/provider.lock'),
-             (stage / 'complete', 'provider_wheels/.complete'),
-             (repository / 'containers/provider/Dockerfile', 'containers/provider/Dockerfile')]
+             (stage / 'complete', 'provider_wheels/.complete')]
     for name in ('__init__.py', 'model_failure.py'):
         files.append((repository / 'src/secs_inference' / name, f'src/secs_inference/{name}'))
     directory = repository / 'src/secs_inference/provider'
@@ -25,7 +29,7 @@ def main(stage, repository):
             raise ValueError(f'Provider source is a symlink: {path}')
         if path.is_file():
             files.append((path, path.relative_to(repository).as_posix()))
-    entries = []
+    entries = json.loads((stage / 'installer-sources.json').read_text())
     for path, destination in files:
         metadata = path.lstat()
         if not stat.S_ISREG(metadata.st_mode):
@@ -39,4 +43,6 @@ def main(stage, repository):
 
 
 if __name__ == '__main__':
-    main(*sys.argv[1:])
+    arguments = sys.argv[1:]
+    installer = arguments[-1:] == ['--installer']
+    main(*(arguments[:-1] if installer else arguments), installer=installer)

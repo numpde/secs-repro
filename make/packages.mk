@@ -150,7 +150,9 @@ packages/gpu/wheelhouse: requirements/packages-gpu.lock
 
 packages/wheelhouse: private export SECS_PACKAGES_VARIANT := $(value VARIANT)
 packages/wheelhouse:
-	@if test "$(HOST_UID)" -eq 0; then
+	@source "$(REPOSITORY_ROOT)/tools/image_operation_lock.sh"
+	hold_image_operation_lock "$(REPOSITORY_ROOT)"
+	if test "$(HOST_UID)" -eq 0; then
 		printf '%s\n' 'Cannot materialize a wheelhouse as host UID 0.' >&2
 		exit 2
 	fi
@@ -165,10 +167,11 @@ packages/wheelhouse:
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	$(call build_installer,packages,$$SECS_PACKAGES_VARIANT)
 	mkdir "$$stage/check"
 	cp "requirements/packages-$$SECS_PACKAGES_VARIANT.lock" "$$stage/requirements.lock"
 	lock_wheelhouse -s
-	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/check" "$(PYTHON_BASE)" check; then
+	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/check" "$$installer_id" check; then
 		unlock_wheelhouse
 		exit 0
 	else
@@ -220,7 +223,7 @@ packages/wheelhouse:
 	unset SECS_RETIREMENT_RECEIPT
 	mkdir "$$stage/recheck"
 	lock_wheelhouse -s
-	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/recheck" "$(PYTHON_BASE)" check; then
+	if stage_selected_wheels "$$wheelhouse_directory" "$$stage/requirements.lock" "$$stage/recheck" "$$installer_id" check; then
 		unlock_wheelhouse
 	else
 		status=$$?
@@ -245,18 +248,19 @@ packages/image:
 	esac
 	source tools/wheelhouse_selection.sh
 	select_wheelhouse
-	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory"
-	lock_wheelhouse -s
 	stage=$$(mktemp -d /tmp/secs-package-inputs.XXXXXXXX)
 	source tools/retain_uncertain_stage.sh
 	secs_engine_active=0
 	trap 'retain_uncertain_stage "$$stage"' EXIT
 	trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+	$(call build_installer,packages,$(VARIANT))
+	$(DOCKER_MAKE) --no-print-directory provider/wheelhouse/tool WHEELHOUSE="$$wheelhouse_directory"
+	lock_wheelhouse -s
 	mkdir "$$stage/packages" "$$stage/native"
 	cp "requirements/packages-$(VARIANT).lock" "$$stage/packages.lock"
 	cp requirements/native.lock "$$stage/native.lock"
-	stage_selected_wheels "$$wheelhouse_directory" "$$stage/packages.lock" "$$stage/packages" "$(PYTHON_BASE)" report
-	stage_selected_wheels "$$wheelhouse_directory" "$$stage/native.lock" "$$stage/native" "$(PYTHON_BASE)" report
+	stage_selected_wheels "$$wheelhouse_directory" "$$stage/packages.lock" "$$stage/packages" "$$installer_id" report
+	stage_selected_wheels "$$wheelhouse_directory" "$$stage/native.lock" "$$stage/native" "$$installer_id" report
 	tool="$$wheelhouse_directory/$(WHEELHOUSE_TOOL_NAME)"
 	python3 -I -S "$$tool" report --report "$$stage/packages/.pip-report" --pool /pool --directory packages_wheels --allow-source antlr4-python3-runtime-4.9.3.tar.gz > "$$stage/packages.json"
 	python3 -I -S "$$tool" report --report "$$stage/native/.pip-report" --pool /pool --directory native_wheels > "$$stage/native.json"
