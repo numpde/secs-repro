@@ -38,7 +38,7 @@ class BackgroundRecoveryTests(unittest.IsolatedAsyncioTestCase):
         else:
             target = 'secs_inference.provider.runtime.wait_until_stopped'
             run = lambda: run_execution(api=api, scope=None, claims=None, stop=stop, poll_seconds=1,
-                                        assemble=None, worker=None, startup_seconds=1)
+                                        assemble=None, worker=None, startup_seconds=1, prose_services=())
         with patch(target, side_effect=observe_wait):
             if admitted:
                 await run()

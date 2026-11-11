@@ -169,6 +169,8 @@ test/provider test/provider/diagnostics:
 		--cap-drop ALL --security-opt no-new-privileges:true \
 		--pids-limit 32 --cpus 1 --memory 512m --memory-swap 512m \
 		--tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777 \
+		--env PYTHONPATH=/opt:/test-support \
+		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/e2e/tls_fixture.py",dst=/test-support/tls_fixture.py,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/config/provider.toml.example",dst=/workspace/config/provider.toml.example,readonly \
 		--mount type=bind,src="$$tests_dir",dst=/workspace/tests/provider,readonly \
 		--mount type=bind,src="$(REPOSITORY_ROOT)/tests/integration/native_worker_fixture.py",dst=/workspace/tests/integration/native_worker_fixture.py,readonly \

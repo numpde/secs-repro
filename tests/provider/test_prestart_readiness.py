@@ -63,7 +63,7 @@ class PreStartReadinessTests(unittest.IsolatedAsyncioTestCase):
             await run_execution(
                 api=Discovery(), scope=RecoveryScope("https://api.test", "provider:test", "secs", "idle"),
                 claims=claims, stop=stop, poll_seconds=0.01, assemble=lambda _pending: Controller(),
-                worker=worker, startup_seconds=5,
+                worker=worker, startup_seconds=5, prose_services=(),
             )
         self.assertEqual(events, [("ready", 105), ("retired", 100), ("ready", 115), ("admitted", 110)])
         exit_failure, sink_failure = worker.idle_exit_diagnostic_failure
@@ -105,7 +105,7 @@ class PreStartReadinessTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(run_execution(
             api=Discovery(), scope=RecoveryScope("https://api.test", "provider:test", "secs", "serial"),
             claims=claims, stop=stop, poll_seconds=0.01, assemble=lambda _pending: Controller(),
-            worker=Worker(), startup_seconds=5,
+            worker=Worker(), startup_seconds=5, prose_services=(),
         ))
         try:
             await asyncio.wait_for(entered.wait(), 2)
@@ -160,7 +160,7 @@ class PreStartReadinessTests(unittest.IsolatedAsyncioTestCase):
                 claims = AttemptClaims.live(limits=LiveAttemptLimits(1, 131072, 2097152))
                 await run_execution(api=Discovery(), scope=RecoveryScope("https://api.test", "provider:test", "secs", "idle"),
                                     claims=claims, stop=stop, poll_seconds=0.01, assemble=lambda _pending: Controller(),
-                                    worker=worker, startup_seconds=5)
+                                    worker=worker, startup_seconds=5, prose_services=())
                 self.assertEqual(len(admitted), 1)
                 self.assertNotEqual(admitted[0][0], idle_pid, "Controller admission borrowed an already-dead idle child")
                 self.assertNotEqual(admitted[0][1], original_operation)

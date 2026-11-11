@@ -42,9 +42,10 @@ class InterpreterConfigTests(TestCase):
         keys = {'fast.key': b'fast-key', 'strong.key': b'strong-key'}
         with patch('secs_inference.provider.main.read_endpoints', return_value=endpoints), \
                 patch('secs_inference.provider.main.read_startup_file', side_effect=lambda path, **_: keys[path.name]):
-            factories, secrets = _read_chat_settings(30, 2)
+            services, secrets = _read_chat_settings(30, 2)
         self.assertEqual(secrets, ('fast-key', 'strong-key'))
-        self.assertEqual([factory.spec.model for factory in factories], ['fast', 'strong'])
-        self.assertIsNot(factories[0](exchange_seconds=5, connect_seconds=2),
-                         factories[0](exchange_seconds=5, connect_seconds=2))
+        carriers = [service(exchange_seconds=5, connect_seconds=2) for service in services]
+        self.assertEqual([carrier.spec.model for carrier in carriers], ['fast', 'strong'])
+        self.assertEqual([carrier.spec.api_key for carrier in carriers], list(secrets))
+        self.assertIsNot(carriers[0], services[0](exchange_seconds=5, connect_seconds=2))
 

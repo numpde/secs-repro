@@ -238,7 +238,7 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
                 await inbox.start()
                 await asyncio.wait_for(run_execution(api=TwoJobs(), scope=scope, claims=claims, stop=stop,
                     poll_seconds=0.01, assemble=assemble, worker=SimpleNamespace(check_ready=AsyncMock()),
-                    startup_seconds=1), 5)
+                    startup_seconds=1, prose_services=()), 5)
                 self.assertEqual([(s.preparations, s.executions, s.retirements) for s in sciences], [(1, 0, 1), (1, 1, 1)])
                 self.assertTrue(all(controller.shutdown_ready for controller in controllers))
                 self.assertEqual(claims.live_owners(), ())
@@ -718,7 +718,8 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
             worker = SimpleNamespace(check_ready=AsyncMock())
             async def provider():
                 await run_services(hello_api=Hello(), discovery_api=Discovery(), provider_ref=PROVIDER,
-                                   config=config, scope=scope, claims=claims, stop=admission_stop, assemble=assemble, worker=worker)
+                                   config=config, scope=scope, claims=claims, stop=admission_stop, assemble=assemble,
+                                   worker=worker, prose_services=())
             async def outer():
                 async def sibling():
                     await delivery.selected.wait()

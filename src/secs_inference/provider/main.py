@@ -13,6 +13,7 @@ from provider_core.api import ProviderAPI
 from provider_core.api_config import api_settings_with_material, https_settings
 from provider_core.attempt_record import RecoveryScope
 from provider_core.chat import ChatEndpointFactory, ChatEndpointSpec
+from provider_core.interpreter import ProseService
 from provider_core.controller import AttemptController, LiveStartPolicy
 from provider_core.shared_delivery_client import SharedDeliveryClient
 from provider_core.shared_grants import SharedGrants
@@ -118,7 +119,7 @@ def _read_chat_settings(interpretation_seconds, retirement_seconds):
             retirement_seconds=http.retirement_seconds, proxy_socket=http.proxy_socket,
             request_bytes=2097152, response_bytes=262144))
         secrets.append(key)
-    return tuple(factories), tuple(secrets)
+    return tuple(ProseService(factory) for factory in factories), tuple(secrets)
 
 
 async def run_provider(config_path=CONFIG_PATH):
@@ -169,6 +170,8 @@ async def run_provider(config_path=CONFIG_PATH):
                 if execution.upload_store_use_private_ca:
                     store_table["ca_file"] = "/run/config/provider/upload-store-ca.crt"
                 store_http = https_settings(store_table, "Upload store", read_startup_file)
+            # The mock runner never asks a prose service to interpret Job text.
+            prose_services = () if mock_runner else endpoint_factories
             worker = WorkerClient(WORKER_SOCKET, startup_seconds=execution.worker_startup_seconds,
                                    retirement_seconds=10, observation_seconds=2)
             claims = AttemptClaims.live(limits=LiveAttemptLimits(
@@ -211,7 +214,8 @@ async def run_provider(config_path=CONFIG_PATH):
                     task_settle_seconds=10,
                 )
             await run_services(hello_api=hello_api, discovery_api=discovery_api, provider_ref=provider_ref,
-                               config=config, scope=scope, claims=claims, stop=stop, assemble=assemble, worker=worker)
+                               config=config, scope=scope, claims=claims, stop=stop, assemble=assemble, worker=worker,
+                                prose_services=prose_services)
     except BaseException as cause:
         failures.append(cause)
     finally:

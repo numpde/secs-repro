@@ -2,6 +2,7 @@
 
 import json
 import hashlib
+import io
 import os
 from pathlib import Path
 import shutil
@@ -70,6 +71,12 @@ class AcquisitionBootstrapTests(TestCase):
                     bootstrap.install(archive_path, record, entries, archive_path.name)
                 self.assertEqual((snapshot / 'unexpected').read_text(), 'preserve me')
                 (snapshot / 'unexpected').unlink()
+                local_directory = snapshot / 'local-directory'
+                local_directory.mkdir()
+                with self.assertRaisesRegex(ValueError, 'directories differ'):
+                    bootstrap.install(archive_path, record, entries, archive_path.name)
+                self.assertTrue(local_directory.is_dir())
+                local_directory.rmdir()
                 with mock.patch.object(bootstrap, 'exchange_directories', side_effect=OSError('failed')):
                     with self.assertRaises(OSError):
                         bootstrap.install(archive_path, record, entries, archive_path.name)
@@ -82,3 +89,35 @@ class AcquisitionBootstrapTests(TestCase):
                 bootstrap.verify(snapshot, entries)
                 for directory in (snapshot, *(path for path in snapshot.rglob('*') if path.is_dir())):
                     self.assertEqual(directory.stat().st_mode & 0o777, 0o755)
+
+    def test_backup_cleanup_failure_reports_the_installed_replacement(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            snapshot = root / 'acquisition'
+            snapshot.mkdir()
+            (snapshot / 'owner.sh').write_bytes(b'old owner\n')
+            old_entries = {'owner.sh': {
+                'size': 10, 'sha256': hashlib.sha256(b'old owner\n').hexdigest(), 'mode': 0o644,
+            }}
+            content = b'new owner\n'
+            entries = {'owner.sh': {
+                'size': len(content), 'sha256': hashlib.sha256(content).hexdigest(), 'mode': 0o644,
+            }}
+            archive_path = root / 'bundle.tar.gz'
+            with tarfile.open(archive_path, 'w:gz') as archive:
+                member = tarfile.TarInfo('owner.sh')
+                member.mode, member.size = 0o644, len(content)
+                archive.addfile(member, io.BytesIO(content))
+            record = {'files': {archive_path.name: hashlib.sha256(archive_path.read_bytes()).hexdigest()}}
+            with (
+                mock.patch.object(bootstrap, 'BUNDLE', snapshot),
+                mock.patch.object(bootstrap, 'previous_inventory', return_value=old_entries),
+                mock.patch.object(bootstrap.shutil, 'rmtree', side_effect=OSError('backup cleanup failed')),
+                self.assertRaisesRegex(OSError, 'replacement installed; cannot remove previous snapshot') as raised,
+            ):
+                bootstrap.install(archive_path, record, entries, archive_path.name)
+            self.assertEqual('backup cleanup failed', str(raised.exception.__cause__))
+            bootstrap.verify(snapshot, entries)
+            backups = list(root.glob('.acquisition.*'))
+            self.assertEqual(1, len(backups))
+            bootstrap.verify(backups[0], old_entries)

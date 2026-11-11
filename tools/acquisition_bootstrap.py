@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify or install the pinned SDK acquisition source bundle offline."""
+"""Verify or install the pinned SDK bundle during quiescent source maintenance."""
 
 import argparse
 import ctypes
@@ -56,10 +56,14 @@ def verify(bundle, entries):
     if any(path.is_symlink() for path in (bundle.parent.parent, bundle.parent, bundle)) or not bundle.is_dir():
         raise ValueError('Acquisition bootstrap must be a directory without a symlink.')
     actual = set()
+    expected_directories = {parent.as_posix() for name in entries
+                            for parent in PurePosixPath(name).parents if parent != PurePosixPath('.')}
     for current, directories, files in os.walk(bundle, followlinks=False):
         for directory in directories:
             if (Path(current) / directory).is_symlink():
                 raise ValueError('Acquisition bootstrap contains a symlink directory.')
+            if (Path(current) / directory).relative_to(bundle).as_posix() not in expected_directories:
+                raise ValueError('Acquisition bootstrap directories differ from the release inventory.')
         for filename in files:
             path = Path(current) / filename
             name = path.relative_to(bundle).as_posix()
@@ -119,6 +123,7 @@ def install(archive_path, record, entries, name):
                 contents[member.name] = source.read()
             check_bytes(member.name, contents[member.name], entries[member.name])
     stage = Path(tempfile.mkdtemp(prefix='.acquisition.', dir=BUNDLE.parent))
+    published = False
     try:
         stage.chmod(0o755)
         for name, data in contents.items():
@@ -135,9 +140,15 @@ def install(archive_path, record, entries, name):
             exchange_directories(stage, BUNDLE)
         else:
             stage.rename(BUNDLE)
+        published = True
     finally:
         if stage.exists():
-            shutil.rmtree(stage)
+            try:
+                shutil.rmtree(stage)
+            except OSError as error:
+                if published:
+                    raise OSError(f'Acquisition bootstrap replacement installed; cannot remove previous snapshot at {stage}.') from error
+                raise
 
 
 def main():
