@@ -5,7 +5,6 @@ import json
 from time import monotonic
 
 from provider_core.analysis import AnalysisFailure, AnalysisOutcomeUnresolved, AnalysisSuccess, ObservedWorkerCrash, PreparedAnalysis
-from provider_core.chat import ChatFailed
 from provider_core.diagnostics import describe_core_failure, failure_evidence
 from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpired
 from provider_core.interpreter import ModelWindowExpired
@@ -17,7 +16,7 @@ from secs_inference.provider.outcomes import AnalysisOutcome, NO_STARTING_CANDID
 from secs_inference.provider.source_access import InputReadError
 from secs_inference.provider.worker import NativeWorkerExited, WorkerDeadlineBeforeDispatch
 from secs_inference.provider.worker_protocol import ScientificWorkerFailed, WorkerError, scientific_worker_failure
-from secs_inference.provider.sources import SourceAcquisitionFailed, SourceDeadlineBeforeDispatch
+from secs_inference.provider.sources import SourceDeadlineBeforeDispatch
 
 
 RESULT_SCHEMA_ID = "secs.elucidation.result.v1"
@@ -96,14 +95,6 @@ class SecsSession:
             return await self._prepare(instructions, report_condition.require_execution)
         except NativeWorkerExited as cause:
             raise self._worker_crash(cause, "preparing") from cause
-        except InterpretationFailed as cause:
-            if not self._quiescent:
-                raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific inspection outcome") from cause
-            return self._failure("interpretation_failed", str(cause), cause)
-        except ChatFailed as cause:
-            return self._failure("interpretation_failed", str(cause), cause)
-        except SourceAcquisitionFailed as cause:
-            return self._failure("input_access_failed", str(cause), cause)
         except WorkerError as cause:
             if isinstance(cause, ScientificWorkerFailed):
                 raise
@@ -112,8 +103,6 @@ class SecsSession:
             return self._failure("work_deadline_exceeded", "The scientific request deadline elapsed before the worker request was sent.", cause)
         except (ConditionRecoveryExpired, ObservationGapExpired):
             raise
-        except TimeoutError as cause:
-            return self._failure("work_deadline_exceeded", "Input preparation exceeded its operation deadline; no verified prepared input was returned.", cause)
 
     async def _prepare(self, instructions, require_execution):
         self._quiescent = False

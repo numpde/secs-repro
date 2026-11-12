@@ -17,13 +17,15 @@ from provider_core.analysis import AnalysisFailure, AnalysisOutcomeUnresolved, A
 from provider_core.attempt_record import RecoveryScope, StartPending, acknowledge_start
 from provider_core.attempt_request import fail_body, start_body
 from provider_core.execution import ConditionRecoveryExpired, ObservationGapExpired
-from provider_core.interpreter import ModelWindowExpired
+from provider_core.interpreter import InterpretationFailed as ModelsExhausted, ModelReportedInterpretationProblem, ModelWindowExpired
 from provider_core.attempt_response import AttemptAdmission
 from provider_core.job_input import FeedInputFacts, VerifiedJobInput
 
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.input_operations import SourceRef
 from secs_inference.provider.session import SecsSession
+from secs_inference.provider.interpreter import InterpretationFailed
+from secs_inference.provider.sources import SourceAcquisitionFailed
 from secs_inference.provider.worker import WorkerClient, WorkerDeadlineBeforeDispatch
 from secs_inference.provider.worker_protocol import InvalidFailureEnvelope, ScientificWorkerFailed, WorkerError
 from secs_inference.provider.diagnostics import exception_evidence, scientific_failure_evidence
@@ -192,17 +194,29 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await session.retire()
 
-    async def test_source_preparation_timeout_remains_public_deadline(self):
-        session, _, _, _ = self.make_session([])
-        async def timed_out(*, deadline, readers_quiescent):
-            raise TimeoutError("source fixture timeout")
-        session.sources.open = timed_out
-        try:
-            outcome = await self.prepare(session)
-            self.assertIs(type(outcome), AnalysisFailure)
-            self.assertEqual(outcome.code, "work_deadline_exceeded")
-        finally:
-            await session.retire()
+    async def test_source_preparation_faults_propagate_original_errors_and_context(self):
+        for failure in (TimeoutError("source fixture timeout"),
+                        SourceAcquisitionFailed("the private source workspace could not be opened")):
+            with self.subTest(failure=type(failure).__name__):
+                session, worker, _, events = self.make_session([])
+                original = PermissionError(errno.EACCES, "private source fixture")
+
+                async def refused(*, deadline, readers_quiescent):
+                    try:
+                        raise original
+                    except PermissionError:
+                        raise failure from None
+
+                session.sources.open = refused
+                try:
+                    with self.assertRaises(type(failure)) as caught:
+                        await self.prepare(session)
+                    self.assertIs(failure, caught.exception)
+                    self.assertIs(original, caught.exception.__context__)
+                    self.assertEqual([], worker.commands)
+                finally:
+                    await session.retire()
+                self.assertIn(("sources-retire", True), events)
 
     async def test_real_worker_malformed_failure_frame_has_no_public_outcome(self):
         await self._assert_real_worker_unresolved("malformed_execute")
@@ -532,9 +546,8 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
             return await request(command, **kwargs)
 
         worker.request = slow_prepare
-        result = await self.prepare(session)
-        self.assertIsInstance(result, AnalysisFailure)
-        self.assertEqual(result.code, "interpretation_failed")
+        with self.assertRaises(InterpretationFailed):
+            await self.prepare(session)
         self.assertEqual(len(chat.requests), 1)
         await session.retire()
 
@@ -547,9 +560,8 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
             return ValueError("The selected source changed.")
 
         session.sources.reconcile = slow_reconcile
-        result = await self.prepare(session)
-        self.assertIsInstance(result, AnalysisFailure)
-        self.assertEqual(result.code, "interpretation_failed")
+        with self.assertRaises(InterpretationFailed):
+            await self.prepare(session)
         self.assertEqual(len(chat.requests), 1)
         self.assertEqual(worker.commands, [])
         await session.retire()
@@ -605,12 +617,17 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("sources-retire", False), events)
         self.assertNotIn(("sources-retire", True), events)
 
-    async def test_explicit_inability_is_a_failure_without_search_or_forced_worker_restart(self):
+    async def test_model_report_propagates_without_search_or_forced_worker_restart(self):
         session, worker, _, events = self.make_session([], [[call(
             "report_interpretation_problem", {"explanation": "No supported spectrum."}, "refusal")]])
-        outcome = await self.prepare(session)
-        self.assertIsInstance(outcome, AnalysisFailure)
-        self.assertEqual(outcome.code, "interpretation_failed")
+        with self.assertRaises(InterpretationFailed) as caught:
+            await self.prepare(session)
+        aggregate = caught.exception.__cause__
+        self.assertIs(ModelsExhausted, type(aggregate))
+        self.assertEqual(1, len(aggregate.failures))
+        report = aggregate.failures[0][1]
+        self.assertIs(ModelReportedInterpretationProblem, type(report))
+        self.assertIs(report, session._conversation.conversation.failures[0][1])
         await session.retire()
         self.assertEqual(worker.commands, [])
         self.assertNotIn("worker-stop", events)
