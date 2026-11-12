@@ -1,6 +1,6 @@
 """Capture package image source identities and checksum metadata."""
 
-from acquisition_bootstrap import capture_installer_inputs
+from installer_inputs import capture_installer_inputs
 
 import hashlib
 import json

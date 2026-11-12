@@ -1,13 +1,15 @@
-# SDK acquisition bootstrap
+# Acquisition source
 
-The acquisition directory contains the source bundle from the SDK release
-identified by `contracts/upstream/provider_core_release.json`. It is available
-before the shared wheelhouse is populated and serves both acquisition and the
-existing BuildKit proxy path. Run `python3 -B tools/acquisition_bootstrap.py`
-to verify its release inventory and provider-core lock pins offline. The
-checked-in issuer record is not an independent signature.
+`tools/bootstrap/acquisition` is the source archive selected by
+`requirements/provider-tools-source.json`. Its embedded manifest records the
+payload inventory and release provenance. Runtime SDK locks and their issuer
+record remain independent inputs.
 
-When no acquisition or BuildKit proxy is using the bundle, install or refresh
-from the exact release archive by running
-`python3 -B tools/acquisition_bootstrap.py --archive PATH`. These files are
-generated release material; do not edit their implementation locally.
+Run `make provider-tools/verify-checked-in-source-hashes` to check the snapshot
+offline. With acquisitions and builds quiescent, use
+`make provider-tools/update-checked-in-source-from-pinned-release` to download
+one archive from the pinned GitHub release, or
+`make provider-tools/import-checked-in-source INPUT_RELEASE_ARCHIVE=/absolute/path/acquisition-owner-VERSION.tar.gz`
+to import the same archive offline. The checked-in updater verifies the existing
+snapshot before replacement and the reviewed archive digest before parsing it.
+These files are generated release material; do not edit them locally.

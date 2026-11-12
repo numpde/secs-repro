@@ -168,6 +168,10 @@ help:
 	'' \
 	'Dependency maintenance' \
 		'' \
+		'  make provider-tools/verify-checked-in-source-hashes' \
+		'  make provider-tools/update-checked-in-source-from-pinned-release' \
+		'  make provider-tools/import-checked-in-source INPUT_RELEASE_ARCHIVE=<archive>' \
+		'      Verify offline or replace acquisition source from its reviewed pin; quiesce acquisitions and builds first.' \
 		'  make provider/wheelhouse provider/native-wheelhouse provider/image DOCKER_CONTEXT=<local-context>' \
 		'      Install the issued API and native SDK profiles; build the API provider separately.' \
 		'  make checkpoint/manifest DOCKER_CONTEXT=<local-context>' \

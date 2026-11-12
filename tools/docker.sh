@@ -185,7 +185,7 @@ proxy_interface=$wlan_interface
 if [[ -n "$wlan_interface" ]]; then
 mkdir -m 700 "$scratch/gateway" "$scratch/gateway-ready"
 bootstrap_dir="$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/bootstrap/acquisition")"
-python3 -B "$(dirname -- "${BASH_SOURCE[0]}")/acquisition_bootstrap.py"
+python3 -I -S -B "$bootstrap_dir/acquisition_tool/source_update.py" verify --source-dir "$bootstrap_dir"
 repository_dir="$(realpath -e -- "$(dirname -- "${BASH_SOURCE[0]}")/..")"
 proxy_user=$(cd "$repository_dir" && python3 -m deployment.rootless_access "${SECS_BOOTSTRAP_IMAGE:?Pinned bootstrap image is required}")
 resolver_mount=()

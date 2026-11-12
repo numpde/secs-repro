@@ -5,7 +5,7 @@ secs_acquire() {
     local _secs_image=$1 _secs_grants=$2 _secs_application=$3
     local _secs_root _secs_endpoint
     _secs_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P) || return 2
-    python3 -B "$_secs_root/tools/acquisition_bootstrap.py" || return $?
+    python3 -I -S -B "$_secs_root/tools/bootstrap/acquisition/acquisition_tool/source_update.py" verify --source-dir "$_secs_root/tools/bootstrap/acquisition" || return $?
     source "$_secs_root/tools/network_interface.sh"
     select_network_interface || return $?
     _secs_endpoint=$(python3 -B "$_secs_root/tools/docker_context.py" --inherited-endpoint) || return $?

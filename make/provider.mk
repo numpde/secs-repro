@@ -258,3 +258,16 @@ provider/image:
 	$(DOCKER) tag "$$image" "secs-repro/provider:inputs-$$id"
 	$(DOCKER) tag "$$image" "$(PROVIDER_IMAGE_TAG)"
 	printf '%s\n' "$$image"
+
+# Source maintenance uses the trusted checked-in updater, without Docker or a wheelhouse.
+.PHONY: provider-tools/verify-checked-in-source-hashes provider-tools/update-checked-in-source-from-pinned-release provider-tools/import-checked-in-source
+provider-tools/verify-checked-in-source-hashes:
+	@python3 -I -S -B tools/bootstrap/acquisition/acquisition_tool/source_update.py verify --source-dir tools/bootstrap/acquisition
+
+provider-tools/update-checked-in-source-from-pinned-release:
+	@python3 -I -S -B tools/bootstrap/acquisition/acquisition_tool/source_update.py update --source-dir tools/bootstrap/acquisition --pin-file requirements/provider-tools-source.json
+
+provider-tools/import-checked-in-source: private export SOURCE_ARCHIVE_INPUT := $(if $(filter command line,$(origin INPUT_RELEASE_ARCHIVE)),$(value INPUT_RELEASE_ARCHIVE))
+provider-tools/import-checked-in-source:
+	@test -n "$${SOURCE_ARCHIVE_INPUT}" || { printf '%s\n' 'Set INPUT_RELEASE_ARCHIVE=<archive path> on the Make command line.' >&2; exit 2; }
+	@python3 -I -S -B tools/bootstrap/acquisition/acquisition_tool/source_update.py import --source-dir tools/bootstrap/acquisition --pin-file requirements/provider-tools-source.json --archive "$${SOURCE_ARCHIVE_INPUT}"

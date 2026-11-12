@@ -85,7 +85,7 @@ for tunnel in (False, True):
                         self.fail(f'Acquisition launcher {process.pid} did not confirm cleanup after TERM; inspect its owned resources.')
                     self.fail(f'Acquisition timed out; launcher exited {process.returncode} after TERM: {stderr}')
                 self.assertEqual(process.returncode, 0, stderr)
-                subprocess.run([sys.executable, '-B', str(ROOT / 'tools/acquisition_bootstrap.py')],
+                subprocess.run([sys.executable, '-B', str(ROOT / 'tools/bootstrap/acquisition/acquisition_tool/source_update.py'), 'verify', '--source-dir', str(ROOT / 'tools/bootstrap/acquisition')],
                                cwd=ROOT, check=True)
             finally:
                 origin.shutdown()
