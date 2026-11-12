@@ -998,11 +998,6 @@ def _grant_runtime_inputs(project: ComposeProject, plan: dict, repository: Path,
     except FileExistsError:
         pass
     _private_directory(runtime_directory)
-    script = repository / "tools/copy_deployment_secrets.py"
-    script_metadata = script.lstat()
-    if not stat.S_ISREG(script_metadata.st_mode) or script.resolve() != script:
-        raise ValueError("Cannot grant deployment access: the secret-copy helper must be a regular repository file.")
-    script_source = script.read_text(encoding="utf-8")
     if any(character in str(runtime_directory) for character in (",", "\n", "\r")):
         raise ValueError("Cannot grant deployment access: runtime paths must be safe Docker bind sources.")
     copied = {}
@@ -1021,7 +1016,7 @@ def _grant_runtime_inputs(project: ComposeProject, plan: dict, repository: Path,
                 arguments.extend(("--userns", provider["userns_mode"]))
             try:
                 raw = project.command(
-                    *arguments, "--entrypoint", "python", image, "-I", "-B", "-c", script_source,
+                    *arguments, "--entrypoint", "python", image, "-I", "-B", "/opt/provider/copy_deployment_secrets.py",
                     "/run/output", source.name, input=_private_file(source),
                 )
                 result = json.loads(raw)

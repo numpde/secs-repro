@@ -1,6 +1,7 @@
 """A shared wheel pool is selected explicitly and never replaced wholesale."""
 
 import fcntl
+import hashlib
 import json
 import os
 import subprocess
@@ -59,6 +60,38 @@ class SharedWheelhouseTests(unittest.TestCase):
             self.assertIn('secs/src/module.py', destinations)
             self.assertNotIn('src/__pycache__/module.pyc', destinations)
             self.assertNotIn('secs/src/module.pyo', destinations)
+
+    def test_provider_stream_binds_secret_copier_bytes_to_source_identity(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stage, repo = root / 'stage', root / 'repo'
+            stage.mkdir()
+            (stage / 'manifest.json').write_text('[]')
+            (stage / 'provider.lock').write_text('lock')
+            for name in ('src/secs_inference/__init__.py', 'src/secs_inference/model_failure.py',
+                         'src/secs_inference/provider/main.py'):
+                path = repo / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('content')
+            helper = repo / 'tools/copy_deployment_secrets.py'
+            helper.parent.mkdir()
+            original = (ROOT / 'tools/copy_deployment_secrets.py').read_bytes()
+            installer = subprocess.run(['python3', str(ROOT / 'tools/provider_stream_inputs.py'), str(stage), str(ROOT), '--installer'],
+                                       capture_output=True, text=True, check=False)
+            self.assertEqual(0, installer.returncode, msg=installer.stderr)
+            identities = []
+            for content in (original, original + b'\n# Changed image-owned copier.\n'):
+                helper.write_bytes(content)
+                result = subprocess.run(['python3', str(ROOT / 'tools/provider_stream_inputs.py'), str(stage), str(repo)],
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(0, result.returncode, msg=result.stderr)
+                identities.append(result.stdout.strip())
+                entries = json.loads((stage / 'sources.json').read_text())
+                selected = [entry for entry in entries if entry['destination'] == 'tools/copy_deployment_secrets.py']
+                self.assertEqual(1, len(selected))
+                self.assertEqual(hashlib.sha256(content).hexdigest(), selected[0]['sha256'])
+                self.assertEqual(content, Path(selected[0]['path']).read_bytes())
+            self.assertNotEqual(identities[0], identities[1])
 
     def test_writer_waits_for_readers_and_readers_can_coexist(self):
         with TemporaryDirectory() as temporary:

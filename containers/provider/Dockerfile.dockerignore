@@ -18,6 +18,7 @@ src/**
 **/*.py[co]
 !tools/
 tools/**
+!tools/copy_deployment_secrets.py
 !tools/bootstrap/
 tools/bootstrap/**
 !tools/bootstrap/acquisition/
