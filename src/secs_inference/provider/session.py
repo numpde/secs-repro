@@ -73,10 +73,6 @@ class SecsSession:
     def _failure(self, code, message, cause=None):
         if cause is not None:
             self._diagnostic = failure_evidence(cause, secrets=self._secrets, describe_owner=_diagnostic_details)
-            if isinstance(cause, ScientificWorkerFailed):
-                # The child supplies only its structural exception projection;
-                # it has no API/interpreter credentials or raw exception text.
-                self._diagnostic["scientific_worker"] = cause.diagnostic
         if self._mock_index:
             prefix = "MOCK INDEX: the starting index contains eight demonstration molecules, not the full candidate set. "
             available = 1024 - len(prefix)
@@ -108,9 +104,9 @@ class SecsSession:
             return self._failure("interpretation_failed", str(cause), cause)
         except SourceAcquisitionFailed as cause:
             return self._failure("input_access_failed", str(cause), cause)
-        except ScientificWorkerFailed as cause:
-            return self._failure("scientific_execution_failed", str(cause), cause)
         except WorkerError as cause:
+            if isinstance(cause, ScientificWorkerFailed):
+                raise
             raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific preparation outcome") from cause
         except WorkerDeadlineBeforeDispatch as cause:
             return self._failure("work_deadline_exceeded", "The scientific request deadline elapsed before the worker request was sent.", cause)
@@ -195,9 +191,9 @@ class SecsSession:
                                            require_execution=report_condition.require_execution)
         except NativeWorkerExited as cause:
             raise self._worker_crash(cause, "running") from cause
-        except ScientificWorkerFailed as cause:
-            return self._failure("scientific_execution_failed", str(cause), cause)
         except WorkerError as cause:
+            if isinstance(cause, ScientificWorkerFailed):
+                raise
             raise AnalysisOutcomeUnresolved("Cannot confirm SECS scientific execution outcome") from cause
         except WorkerDeadlineBeforeDispatch as cause:
             return self._failure("work_deadline_exceeded", "The scientific request deadline elapsed before the worker request was sent.", cause)

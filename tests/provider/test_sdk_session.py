@@ -26,7 +26,7 @@ from secs_inference.provider.input_operations import SourceRef
 from secs_inference.provider.session import SecsSession
 from secs_inference.provider.worker import WorkerClient, WorkerDeadlineBeforeDispatch
 from secs_inference.provider.worker_protocol import InvalidFailureEnvelope, ScientificWorkerFailed, WorkerError
-from secs_inference.provider.diagnostics import exception_evidence
+from secs_inference.provider.diagnostics import exception_evidence, scientific_failure_evidence
 from test_async_interpretation import ScriptedCarrier, choice, call
 
 
@@ -83,6 +83,8 @@ class Worker:
             require_execution()
         self.commands.append(command)
         response = next(self.responses)
+        if isinstance(response, BaseException):
+            raise response
         if response == "blocked":
             self.entered.set()
             await self.release.wait()
@@ -344,15 +346,19 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
                     await session.retire()
                 self.assertLess(events.index("worker-stop"), events.index(("sources-retire", True)))
 
-    async def test_received_scientific_failure_remains_a_safe_public_failure(self):
+    async def test_scientific_execution_failure_propagates_its_original_exception_and_frame(self):
         frame = {"outcome": "failed", **exception_evidence(RuntimeError("private scientific detail"))}
-        session, _, _, events = self.make_session([{"outcome": "prepared", "prepared_handle": 7}, frame])
+        original = ScientificWorkerFailed(frame)
+        session, worker, _, events = self.make_session([{"outcome": "prepared", "prepared_handle": 7}, original])
         prepared = await self.prepare(session)
-        outcome = await session.execute(prepared, report_condition=condition)
-        self.assertIsInstance(outcome, AnalysisFailure)
-        self.assertEqual(outcome.code, "scientific_execution_failed")
-        self.assertNotIn(b"private scientific detail", outcome.evidence.content)
-        await session.retire()
+        try:
+            with self.assertRaises(ScientificWorkerFailed) as caught:
+                await session.execute(prepared, report_condition=condition)
+            self.assertIs(original, caught.exception)
+            self.assertIs(frame, caught.exception.diagnostic)
+            self.assertEqual(["prepare", "execute"], [command["operation"] for command in worker.commands])
+        finally:
+            await session.retire()
         self.assertLess(events.index("worker-stop"), events.index(("sources-retire", True)))
 
     async def test_failure_envelope_requires_owned_root_fields(self):
@@ -429,14 +435,18 @@ class SdkSessionTests(unittest.IsolatedAsyncioTestCase):
         failure = RuntimeError("private fixture source content")
         failure.__cause__ = OSError(errno.EIO, "private fixture path")
         diagnostic = {"outcome": "failed", **exception_evidence(failure)}
-        session, _, _, _ = self.make_session([diagnostic])
-        outcome = await self.prepare(session)
-        self.assertIsInstance(outcome, AnalysisFailure)
-        evidence = json.loads(outcome.evidence.content)
-        self.assertEqual(evidence["failure"]["scientific_worker"]["exception_type"], "RuntimeError")
-        self.assertEqual(evidence["failure"]["scientific_worker"]["cause"]["errno"], errno.EIO)
-        self.assertNotIn(b"private fixture", outcome.evidence.content)
-        await session.retire()
+        session, worker, _, _ = self.make_session([diagnostic])
+        try:
+            with self.assertRaises(ScientificWorkerFailed) as caught:
+                await self.prepare(session)
+            self.assertIs(diagnostic, caught.exception.diagnostic)
+            evidence = scientific_failure_evidence(caught.exception.diagnostic)
+            self.assertEqual("RuntimeError", evidence["exception_type"])
+            self.assertEqual(errno.EIO, evidence["cause"]["errno"])
+            self.assertNotIn("private fixture", json.dumps(evidence))
+            self.assertEqual(["prepare"], [command["operation"] for command in worker.commands])
+        finally:
+            await session.retire()
 
     async def test_scientific_stop_observation_keeps_positive_retirement_and_independent_source_cleanup(self):
         for failure in (BaseExceptionGroup("contained SCI exit", [SystemExit(0)]),
