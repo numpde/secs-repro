@@ -18,7 +18,8 @@ def main(stage, repository, installer=False):
     checksums = ''.join(f"{item['sha256']}  {item['filename']}\n" for item in sorted(selections, key=lambda x: x['filename']))
     (stage / 'complete').write_text(checksums)
     files = [(stage / 'provider.lock', 'requirements/provider.lock'),
-             (stage / 'complete', 'provider_wheels/.complete')]
+             (stage / 'complete', 'provider_wheels/.complete'),
+             (repository / 'tools/copy_deployment_secrets.py', 'tools/copy_deployment_secrets.py')]
     for name in ('__init__.py', 'model_failure.py'):
         files.append((repository / 'src/secs_inference' / name, f'src/secs_inference/{name}'))
     directory = repository / 'src/secs_inference/provider'

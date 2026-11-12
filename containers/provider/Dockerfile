@@ -27,6 +27,7 @@ RUN --mount=type=bind,from=provider_wheels,target=/opt/provider/wheelhouse \
     && python -m pip check \
     && rm /opt/provider/requirements.lock
 
+COPY tools/copy_deployment_secrets.py /opt/provider/copy_deployment_secrets.py
 COPY src/secs_inference/__init__.py /opt/secs_inference/__init__.py
 COPY src/secs_inference/model_failure.py /opt/secs_inference/model_failure.py
 COPY src/secs_inference/provider/ /opt/secs_inference/provider/

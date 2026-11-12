@@ -5,7 +5,6 @@ import io
 import os
 from pathlib import Path
 import stat
-import shutil
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
@@ -243,10 +242,6 @@ class RootlessAccessTests(unittest.TestCase):
                 path = state / name
                 path.write_bytes(content)
                 path.chmod(0o600)
-            helper_directory = root / "tools"
-            helper_directory.mkdir()
-            repository_helper = Path(__file__).resolve().parents[2] / "tools/copy_deployment_secrets.py"
-            shutil.copyfile(repository_helper, helper_directory / repository_helper.name)
             plan = {"services": {
                 "provider": {"user": f"{os.getuid()}:{os.getgid()}", "image": "sha256:" + "a" * 64,
                              "volumes": []},
@@ -276,7 +271,11 @@ class RootlessAccessTests(unittest.TestCase):
             for call, (name, content) in zip(project.command.call_args_list, sources.items()):
                 self.assertIn("--interactive", call.args)
                 self.assertEqual(call.kwargs["input"], content)
-                self.assertEqual(call.args[-1], name)
+                self.assertEqual(("--entrypoint", "python", plan["services"]["provider"]["image"],
+                                  "-I", "-B", "/opt/provider/copy_deployment_secrets.py", "/run/output", name), call.args[-8:])
+                self.assertNotIn(content.decode(), " ".join(call.args))
+                mounts = [call.args[index + 1] for index, value in enumerate(call.args) if value == "--mount"]
+                self.assertEqual([f"type=bind,src={state / 'runtime'},dst=/run/output"], mounts)
                 self.assertTrue(rootless_access.private_owner_acl(state / name, owner_permissions="rw-"))
 
 
