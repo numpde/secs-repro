@@ -39,6 +39,7 @@ from secs_inference.provider.interpreter import InterpretationFailed
 from secs_inference.provider.runtime import _drain_controller, run_execution, run_services
 from secs_inference.provider.session import SecsSession
 from secs_inference.provider.worker import WorkerClient
+from secs_inference.provider.worker_protocol import ScientificWorkerFailed
 from test_async_interpretation import call, choice
 from test_sdk_session import Carrier, Sources, Worker
 
@@ -556,15 +557,26 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.wait_for(owner.wait(), 20)
 
     async def test_unknown_science_keeps_claim_without_terminal_handoff(self):
-        await self._assert_unknown_reply_keeps_claim("execute")
+        await self._assert_worker_failure_keeps_claim("execute")
 
     async def test_unknown_preparation_keeps_claim_without_terminal_handoff(self):
-        await self._assert_unknown_reply_keeps_claim("prepare")
+        await self._assert_worker_failure_keeps_claim("prepare")
 
     async def test_unknown_preparation_with_failed_retirement_stays_held(self):
-        await self._assert_unknown_reply_keeps_claim("prepare", fail_retirement=True)
+        await self._assert_worker_failure_keeps_claim("prepare", fail_retirement=True)
 
-    async def _assert_unknown_reply_keeps_claim(self, phase, *, fail_retirement=False):
+    async def test_scientific_operator_failures_keep_original_cause_without_terminal_handoff(self):
+        for phase in ("prepare", "execute"):
+            for fail_retirement in (False, True):
+                with self.subTest(phase=phase, fail_retirement=fail_retirement):
+                    frame = {"outcome": "failed", "exception_id": 0, "exception_type": "RuntimeError",
+                             "frames": [], "private_detail": "PRIVATE scientific frame"}
+                    original = ScientificWorkerFailed(frame)
+                    await self._assert_worker_failure_keeps_claim(
+                        phase, fail_retirement=fail_retirement, scientific_failure=original,
+                    )
+
+    async def _assert_worker_failure_keeps_claim(self, phase, *, fail_retirement=False, scientific_failure=None):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "ipc").mkdir(mode=0o700)
@@ -577,8 +589,11 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
             await inbox.start()
             delivery = DeliveryClient(endpoint, exchange_seconds=1, retirement_seconds=1)
             events = []
-            replies = ([{"outcome": "prepared", "prepared_handle": 7}, {"outcome": "unexpected"}]
-                       if phase == "execute" else [{"outcome": "unexpected"}])
+            response = scientific_failure if scientific_failure is not None else {"outcome": "unexpected"}
+            if scientific_failure is not None:
+                original_frame = scientific_failure.diagnostic
+            replies = ([{"outcome": "prepared", "prepared_handle": 7}, response]
+                       if phase == "execute" else [response])
             worker = Worker(events, *replies)
             cleanup = RuntimeError("fixture retirement failed")
             if fail_retirement:
@@ -603,10 +618,15 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
                     await controller.run(pending)
                 except ControllerFailed as failure:
                     from provider_core.analysis import AnalysisOutcomeUnresolved
-                    self.assertIs(type(failure.cause.cause), AnalysisOutcomeUnresolved)
-                    if not fail_retirement:
-                        self.assertIs(controller.require_held_failure(pending, failure), failure)
+                    if scientific_failure is None:
+                        self.assertIs(AnalysisOutcomeUnresolved, type(failure.cause.cause))
+                        if not fail_retirement:
+                            self.assertIs(failure, controller.require_held_failure(pending, failure))
                     else:
+                        self.assertIs(scientific_failure, failure.cause.cause)
+                        self.assertIs(original_frame, failure.cause.cause.diagnostic)
+                        self.assertNotIn("PRIVATE", str(failure))
+                    if fail_retirement:
                         def contains(error):
                             return error is cleanup or (isinstance(error, BaseExceptionGroup)
                                                         and any(contains(child) for child in error.exceptions))
@@ -616,7 +636,9 @@ class SdkRuntimeDrainTests(unittest.IsolatedAsyncioTestCase):
                     self.fail("Unknown result did not retain a controller failure")
                 self.assertIsNone(queue.next_pending(ORIGIN, PROVIDER))
                 self.assertIn(controller, claims.live_owners())
-                self.assertEqual(worker.stopped, not fail_retirement)
+                expected_commands = ["prepare", "execute"] if phase == "execute" else ["prepare"]
+                self.assertEqual(expected_commands, [command["operation"] for command in worker.commands])
+                self.assertEqual(not fail_retirement, worker.stopped)
                 self.assertIn(("sources-retire", not fail_retirement), events)
             finally:
                 await delivery.retire()
