@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock
 
 from secs.elucidation import StaticCandidateSource
 from support_evidence import qualification_evidence
-from secs_inference.provider.interpreter import InterpretationSession
+from secs_inference.provider.interpreter import InterpretationFailed, InterpretationSession, PreparationRejected
 
 from input.helpers import FIXTURES, WorkerCase
 
@@ -25,6 +25,60 @@ class ScientificJobScenarios(WorkerCase, unittest.IsolatedAsyncioTestCase):
         self.inference.embed_spectrum.return_value = np.array([1., 0.], dtype=np.float32)
         self.candidates = Mock(wraps=StaticCandidateSource([]))
         self.worker.candidates = self.candidates
+
+    async def test_formula_correction_crosses_interpreter_and_scientific_worker(self):
+        self.upload('proton.jdx')
+        spectrum = self.one(self.discover())
+        base = {'representation_id': spectrum['id'], 'formula': 'C21H36O7',
+                'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7'},
+                'processing': 'as_stored', 'explanation': 'Use the proton spectrum.'}
+        corrected = base | {'formula': 'O7C22H36'}
+        def turn(choice, call_id):
+            return {'role': 'assistant', 'tool_calls': [{'id': call_id, 'type': 'function',
+                'function': {'name': 'select_representation', 'arguments': json.dumps(choice)}}]}
+        chat = Mock(identity='{}', retirement_confirmed=True)
+        chat.retire = AsyncMock()
+        chat.complete = AsyncMock(side_effect=[turn(base, 'select-1'), turn(corrected, 'select-2')])
+        session = InterpretationSession((lambda **_: chat,), 'Formula C22H36O7.', [], Mock(),
+                                        deadline=monotonic() + 30, timeout_seconds=30, context_bytes=1000000)
+        async def prepare(choice):
+            response = self.request('prepare', selection=asdict(choice))
+            if response['outcome'] == 'input_rejected':
+                raise PreparationRejected(response['reason'])
+            return response
+        result = await session.run(prepare)
+        self.assertEqual(result['outcome'], 'prepared')
+        self.assertEqual(len(chat.complete.await_args_list), 2)
+        self.assertIn('different elemental compositions', str(chat.complete.await_args_list[1]))
+        await session.retire()
+
+    async def test_punctuated_quote_exhaustion_retains_safe_worker_reason(self):
+        self.upload('proton.jdx')
+        spectrum = self.one(self.discover())
+        choice = {'representation_id': spectrum['id'], 'formula': 'C22H36O7',
+                  'formula_evidence': {'kind': 'job_specification', 'quote': 'C22H36O7.'},
+                  'processing': 'as_stored', 'explanation': 'PRIVATE_TEST_PAYLOAD'}
+        turns = [{'role': 'assistant', 'tool_calls': [{'id': f'select-{index}', 'type': 'function',
+                  'function': {'name': 'select_representation', 'arguments': json.dumps(choice)}}]}
+                 for index in range(3)]
+        chat = Mock(identity='{}', retirement_confirmed=True)
+        chat.retire = AsyncMock()
+        chat.complete = AsyncMock(side_effect=turns)
+        session = InterpretationSession((lambda **_: chat,), 'Formula C22H36O7.', [], Mock(),
+                                        deadline=monotonic() + 30, timeout_seconds=30, context_bytes=1000000)
+        async def prepare(action):
+            response = self.request('prepare', selection=asdict(action))
+            if response['outcome'] == 'input_rejected':
+                raise PreparationRejected(response['reason'])
+            return response
+        with self.assertRaises(InterpretationFailed) as caught:
+            await session.run(prepare)
+        corrections = session.conversation.correction_failures
+        self.assertTrue(all('quoted formula cannot be parsed' in str(error) for _, _, error in corrections))
+        self.assertTrue(all('PRIVATE_TEST_PAYLOAD' not in str(error) for _, _, error in corrections))
+        self.assertEqual(len(corrections), 3)
+        self.assertEqual(chat.complete.await_count, 3)
+        await session.retire()
 
     async def test_formatted_job_formula_reaches_retrieval_with_its_original_evidence(self):
         self.upload('proton.jdx')

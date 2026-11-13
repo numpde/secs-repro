@@ -69,6 +69,8 @@ Formula evidence either quotes the complete formula verbatim from the admitted
 Job specification or names one or more discovered structure representations.
 Formula comparisons and execution accept Unicode subscript digits and Unicode
 space separators between elements and their counts, including outer spaces.
+Evidence and selected formulas may order elements differently when their parsed
+elemental compositions match.
 The original quote and selection spelling remain in the decision. Split element symbols or
 counts, superscripts and charges are not repaired into supported formulas.
 The controller verifies a Job quote against the exact specification text. This
