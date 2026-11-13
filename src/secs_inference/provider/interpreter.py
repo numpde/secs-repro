@@ -158,21 +158,33 @@ def _decode_action(name: str, arguments: dict):
         return _decode_source(arguments["source"])
     if name == "select_representation":
         evidence = arguments["formula_evidence"]
-        if (type(evidence) is dict and set(evidence) == {"kind", "quote"}
-                and evidence.get("kind") == "job_specification"
-                and type(evidence.get("quote")) is str
-                and 0 < len(evidence["quote"]) <= 512
-                and normalize_formula_notation(evidence["quote"]).isprintable()):
-            pass
-        elif (type(evidence) is not dict or set(evidence) != {"kind", "representation_ids"}
-              or evidence.get("kind") != "representations"
-              or type(evidence.get("representation_ids")) is not list
-              or not evidence["representation_ids"]
-              or len(evidence["representation_ids"]) > 16
-              or any(type(identity) is not str or not identity.strip()
-                     for identity in evidence["representation_ids"])
-              or len(set(evidence["representation_ids"])) != len(evidence["representation_ids"])):
-            raise _InvalidArguments("The formula_evidence field must cite the Job specification or unique representation identities")
+        if type(evidence) is not dict:
+            raise _InvalidArguments("The formula_evidence field must be an object")
+        kind = evidence.get("kind")
+        if kind == "job_specification":
+            if set(evidence) != {"kind", "quote"}:
+                raise _InvalidArguments("Job formula evidence requires exactly kind and quote")
+            quote = evidence["quote"]
+            if type(quote) is not str:
+                raise _InvalidArguments("The formula_evidence quote must be text")
+            if not 0 < len(quote) <= 512:
+                raise _InvalidArguments("The formula_evidence quote must contain 1 to 512 characters")
+            if not normalize_formula_notation(quote).isprintable():
+                raise _InvalidArguments("The formula_evidence quote contains control characters or is empty after normalization")
+        elif kind == "representations":
+            if set(evidence) != {"kind", "representation_ids"}:
+                raise _InvalidArguments("Representation formula evidence requires exactly kind and representation_ids")
+            identities = evidence["representation_ids"]
+            if type(identities) is not list:
+                raise _InvalidArguments("The formula_evidence representation_ids must be a list")
+            if not 1 <= len(identities) <= 16:
+                raise _InvalidArguments("The formula_evidence representation_ids must contain 1 to 16 entries")
+            if any(type(identity) is not str or not identity.strip() for identity in identities):
+                raise _InvalidArguments("Each formula_evidence representation identity must be nonempty text")
+            if len(set(identities)) != len(identities):
+                raise _InvalidArguments("The formula_evidence representation identities must be unique")
+        else:
+            raise _InvalidArguments("The formula_evidence kind must be job_specification or representations")
         if arguments["processing"] not in {"as_stored", "auto"}:
             raise _InvalidArguments("The processing field must be as_stored or auto")
         return SelectedRepresentation(**arguments)

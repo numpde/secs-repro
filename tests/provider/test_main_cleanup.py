@@ -38,6 +38,48 @@ class MainCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(FORMULA_QUOTE_NOT_IN_JOB, diagnostic)
         self.assertNotIn("private model payload", diagnostic)
 
+    def test_invalid_argument_diagnostics_expose_only_code_owned_constraints(self):
+        from provider_core.diagnostics import failure_evidence
+        from secs_inference.provider.interpreter import _decode_action
+        base = {"representation_id": "PRIVATE_MARKER", "formula": "C2H6O",
+                "formula_evidence": {"kind": "job_specification", "quote": "C2H6O"},
+                "processing": "as_stored", "explanation": "PRIVATE_MARKER"}
+        cases = [
+            (None, "must be an object"),
+            ({"kind": "PRIVATE_MARKER"}, "kind must be"),
+            ({"kind": "job_specification", "PRIVATE_MARKER": "secret"}, "exactly kind and quote"),
+            ({"kind": "job_specification", "quote": 1}, "quote must be text"),
+            ({"kind": "job_specification", "quote": ""}, "1 to 512"),
+            ({"kind": "job_specification", "quote": "\n"}, "control characters"),
+            ({"kind": "representations", "PRIVATE_MARKER": "secret"}, "exactly kind and representation_ids"),
+            ({"kind": "representations", "representation_ids": "PRIVATE_MARKER"}, "must be a list"),
+            ({"kind": "representations", "representation_ids": []}, "1 to 16"),
+            ({"kind": "representations", "representation_ids": [None]}, "nonempty text"),
+            ({"kind": "representations", "representation_ids": ["PRIVATE_MARKER", "PRIVATE_MARKER"]}, "must be unique"),
+        ]
+        for evidence, expected in cases:
+            with self.subTest(expected=expected):
+                with self.assertRaises(main._InvalidArguments) as caught:
+                    _decode_action("select_representation", base | {"formula_evidence": evidence})
+                rendered = json.dumps(failure_evidence(caught.exception, secrets=(), describe_owner=main._diagnostic_details))
+                self.assertIn(expected, rendered)
+                self.assertNotIn("PRIVATE_MARKER", rendered)
+        with self.assertRaises(main._InvalidArguments) as caught:
+            _decode_action("PRIVATE_MARKER", base)
+        rendered = json.dumps(failure_evidence(caught.exception, secrets=(), describe_owner=main._diagnostic_details))
+        self.assertNotIn("PRIVATE_MARKER", rendered)
+        for name, arguments in (
+            ("select_representation", base | {"PRIVATE_MARKER": "secret"}),
+            ("select_representation", base | {"formula": "PRIVATE_MARKER" * 5000}),
+            ("inspect_source", {"source": {"PRIVATE_MARKER": "secret"}}),
+            ("inspect_source", {"source": {"upload_ref": "PRIVATE_MARKER\ud800", "member": None}}),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaises(main._InvalidArguments) as caught:
+                    _decode_action(name, arguments)
+                rendered = json.dumps(failure_evidence(caught.exception, secrets=(), describe_owner=main._diagnostic_details))
+                self.assertNotIn("PRIVATE_MARKER", rendered)
+
     def test_upload_store_uses_api_proxy_only_for_the_same_origin(self):
         settings = ApiSettings(SigningIdentity("https://api.test", "credential:fixture", Ed25519PrivateKey.generate()),
                                HttpsSettings(ssl.create_default_context(), 30, 10, "/route/proxy.sock"), "dev-local")
