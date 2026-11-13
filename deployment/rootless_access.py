@@ -3,46 +3,123 @@
 from __future__ import annotations
 
 import os
+from contextlib import redirect_stderr, redirect_stdout
+import importlib
+import io
 from pathlib import Path
 import re
+import runpy
 import stat
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 
 
 _PERMISSIONS = {"--x", "r--", "rw-", "r-x", "rwx"}
+_IDENTITY_MANIFEST = None
 
 
 def _mode(permissions: str) -> int:
     return sum(value for value, bit in ((4, "r"), (2, "w"), (1, "x")) if bit in permissions)
 
 
+def _identity_owner(bundle: Path):
+    """Load the verified shared owner without accepting another installed package."""
+    global _IDENTITY_MANIFEST
+    verifier = runpy.run_path(str(bundle / "acquisition_tool/source_update.py"))["verify"]
+    manifest = verifier(bundle)
+    if _IDENTITY_MANIFEST is not None and manifest != _IDENTITY_MANIFEST:
+        raise RuntimeError("Cannot map deployment identity: verified acquisition source changed during this process.")
+    for name, module in tuple(sys.modules.items()):
+        if name.split(".", 1)[0] in ("acquisition_tool", "linux_idmap"):
+            origin = getattr(module, "__file__", None)
+            if (_IDENTITY_MANIFEST is None or origin is None
+                    or not Path(origin).resolve().is_relative_to(bundle)):
+                raise RuntimeError(f"Cannot map deployment identity: {name} was loaded before admission or outside the verified source.")
+    sys.path.insert(0, str(bundle))
+    previous_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        owner = importlib.import_module("acquisition_tool.identity_main").main
+        _IDENTITY_MANIFEST = manifest
+        return owner
+    finally:
+        sys.dont_write_bytecode = previous_bytecode
+        sys.path.pop(0)
+
+
 def _mapped_ids(project, image: str, uid: int, gid: int, *, inverse: bool,
                 userns_mode: str | None = None) -> tuple[int, int]:
     """Use the verified shared probe on the selected engine and translate both IDs."""
     bundle = project.repository / "tools/bootstrap/acquisition"
-    verifier = bundle / "acquisition_tool/source_update.py"
-    verified = subprocess.run((sys.executable, "-I", "-S", "-B", str(verifier), "verify",
-                               "--source-dir", str(bundle)), env={"PATH": "/usr/bin:/bin"})
-    if verified.returncode:
-        raise RuntimeError("Cannot map deployment identity: acquisition source verification failed.")
-    arguments = [sys.executable, "-I", "-S", "-B", "-c",
-                 "import runpy,sys; sys.path.insert(0,sys.argv.pop(1)); runpy.run_module('linux_idmap._cli',run_name='__main__')",
-                 str(bundle), "--endpoint", project.docker_endpoint, "--image", image,
+    owner = _identity_owner(bundle)
+    direction = "inverse" if inverse else "forward"
+    arguments = ["--endpoint", project.docker_endpoint, "--image", image,
                  "--interpreter", "/usr/local/bin/python3", "--user-uid", "0", "--user-gid", "0",
                  "--memory-bytes", "67108864", "--pids-limit", "16", "--nano-cpus", "1000000000",
-                 "--uid", str(uid), "--gid", str(gid), "--values"]
+                 "--map", "uid", direction, str(uid), "--map", "gid", direction, str(gid)]
     if userns_mode is not None:
         arguments.extend(("--userns", userns_mode))
-    if inverse:
-        arguments.append("--inverse")
-    result = subprocess.run(arguments, stdout=subprocess.PIPE, env={"PATH": "/usr/bin:/bin"})
-    if result.returncode:
-        raise RuntimeError(f"Cannot map deployment identity: shared probe failed (exit {result.returncode}); inspect its diagnostic above.")
-    values = result.stdout.decode("ascii").split()
-    if len(values) != 2 or any(re.fullmatch(r"[0-9]+", value) is None for value in values):
+    output, diagnostic = io.StringIO(), io.StringIO()
+    diagnostic_failure = owner_failure = cleanup_failure = receipt_failure = None
+    status = None
+    temporary = TemporaryDirectory(prefix="secs-identity-")
+    receipt = Path(temporary.name) / "retired"
+    try:
+        try:
+            with redirect_stdout(output), redirect_stderr(diagnostic):
+                status = owner([*arguments, "--retired-receipt", str(receipt)])
+        except BaseException as error:
+            owner_failure = error
+        try:
+            sys.stderr.write(diagnostic.getvalue())
+        except OSError as error:
+            diagnostic_failure = error
+        try:
+            retired = receipt.read_bytes() == b"retired\n"
+        except OSError as error:
+            receipt_failure = error
+            retired = False
+    finally:
+        try:
+            temporary.cleanup()
+        except OSError as error:
+            cleanup_failure = error
+    if not retired:
+        detail = f" (owner exit {status})" if status is not None else ""
+        error = RuntimeError(f"Cannot map deployment identity: shared probe retirement is unconfirmed{detail}.")
+        if cleanup_failure is not None:
+            error.add_note(f"Cannot remove identity receipt directory {temporary.name}: {cleanup_failure}")
+        if diagnostic_failure is not None:
+            error.add_note(f"Cannot write identity probe diagnostics: {diagnostic_failure}")
+        raise error from (owner_failure or receipt_failure)
+    if owner_failure is not None:
+        if cleanup_failure is not None:
+            owner_failure.add_note(f"Cannot remove identity receipt directory {temporary.name}: {cleanup_failure}")
+        raise owner_failure
+    if status in (129, 130, 143):
+        error = SystemExit(status)
+        if cleanup_failure is not None:
+            message = f"Cannot remove identity receipt directory {temporary.name}: {cleanup_failure}"
+            error.add_note(message)
+            try:
+                print(message, file=sys.stderr)
+            except OSError:
+                pass
+        raise error
+    if cleanup_failure is not None:
+        raise RuntimeError(f"Cannot remove identity receipt directory {temporary.name} (probe exit {status}).") from cleanup_failure
+    if diagnostic_failure is not None:
+        raise RuntimeError(f"Cannot write identity probe diagnostics (probe exit {status}).") from diagnostic_failure
+    if status:
+        raise RuntimeError(f"Cannot map deployment identity: shared probe failed (exit {status}); inspect its diagnostic above.")
+    result = output.getvalue()
+    if re.fullmatch(r"(?:0|[1-9][0-9]*) (?:0|[1-9][0-9]*)\n", result) is None:
         raise ValueError("Cannot map deployment identity: shared probe returned invalid values.")
-    return int(values[0]), int(values[1])
+    uid_result, gid_result = (int(value) for value in result.split())
+    if uid_result >= 2**32 - 1 or gid_result >= 2**32 - 1:
+        raise ValueError("Cannot map deployment identity: shared probe returned invalid values.")
+    return uid_result, gid_result
 
 
 def mapped_ids(project, image: str, container_uid: int, container_gid: int,

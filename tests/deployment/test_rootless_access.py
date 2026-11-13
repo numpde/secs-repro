@@ -5,7 +5,9 @@ import io
 import os
 from pathlib import Path
 import stat
+import sys
 from tempfile import TemporaryDirectory
+from types import ModuleType
 import unittest
 from unittest.mock import Mock, patch
 
@@ -15,38 +17,164 @@ from tools.copy_deployment_secrets import main as copy_deployment_secrets
 
 
 class RootlessAccessTests(unittest.TestCase):
+    @staticmethod
+    def _owner(status=0, output="100999 101999\n", receipt=b"retired\n"):
+        def run(arguments):
+            if receipt is not None:
+                Path(arguments[arguments.index("--retired-receipt") + 1]).write_bytes(receipt)
+            print(output, end="")
+            return status
+        return Mock(side_effect=run)
+
     def test_shared_probe_receives_selected_engine_and_service_namespace(self):
         project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
-        with patch.object(rootless_access.subprocess, "run", side_effect=(
-                Mock(returncode=0), Mock(returncode=0, stdout=b"100999 101999\n"))) as run:
+        owner = self._owner()
+        with patch.object(rootless_access, "_identity_owner", return_value=owner):
             self.assertEqual(rootless_access.mapped_ids(project, "sha256:" + "a" * 64, 1000, 2000, "host"),
                              (100999, 101999))
-        self.assertIn("verify", run.call_args_list[0].args[0])
-        args = run.call_args_list[1].args[0]
+        args = owner.call_args.args[0]
         self.assertIn("unix:///run/engine.sock", args)
         self.assertEqual(args[args.index("--userns") + 1], "host")
-        self.assertNotIn("--inverse", args)
+        self.assertEqual(args[args.index("--map"):args.index("--map") + 4], ["--map", "uid", "forward", "1000"])
+        self.assertEqual(args[args.index("--map") + 4:args.index("--map") + 8], ["--map", "gid", "forward", "2000"])
+        self.assertIn("67108864", args)
+        self.assertIn("16", args)
+        self.assertIn("1000000000", args)
 
     def test_wheelhouse_selection_uses_inverse_shared_probe(self):
         project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
-        with patch.object(rootless_access.subprocess, "run", side_effect=(
-                Mock(returncode=0), Mock(returncode=0, stdout=b"0 0\n"))) as run:
+        owner = self._owner(output="0 0\n")
+        with patch.object(rootless_access, "_identity_owner", return_value=owner):
             self.assertEqual(rootless_access.container_ids_for_host(project, "image", 1000, 1000), (0, 0))
-        self.assertIn("--inverse", run.call_args_list[1].args[0])
+        args = owner.call_args.args[0]
+        self.assertEqual(args[args.index("--map"):args.index("--map") + 4], ["--map", "uid", "inverse", "1000"])
 
     def test_probe_failure_cannot_grant_access(self):
         project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
-        with patch.object(rootless_access.subprocess, "run", side_effect=(
-                Mock(returncode=0), Mock(returncode=3, stdout=b""))):
-            with self.assertRaisesRegex(RuntimeError, "shared probe failed"):
-                rootless_access.mapped_ids(project, "image", 1000, 1000)
+        for status, output, receipt, message in ((3, "", b"retired\n", "shared probe failed"),
+                                                  (0, "bad", b"retired\n", "invalid values"),
+                                                  (0, "1 2", b"retired\n", "invalid values"),
+                                                  (0, "01 2\n", b"retired\n", "invalid values"),
+                                                  (0, "1 2 3\n", b"retired\n", "invalid values"),
+                                                  (0, "4294967295 2\n", b"retired\n", "invalid values"),
+                                                  (143, "", None, "retirement is unconfirmed"),
+                                                  (0, "1 2", b"wrong", "retirement is unconfirmed")):
+            with self.subTest(status=status, output=output, receipt=receipt), patch.object(
+                    rootless_access, "_identity_owner", return_value=self._owner(status, output, receipt)):
+                with self.assertRaisesRegex((RuntimeError, ValueError), message):
+                    rootless_access.mapped_ids(project, "image", 1000, 1000)
+
+    def test_retired_cancelled_probe_propagates_signal_status(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+        for status in (129, 130, 143):
+            with self.subTest(status=status), patch.object(
+                    rootless_access, "_identity_owner", return_value=self._owner(status, "")):
+                with self.assertRaises(SystemExit) as result:
+                    rootless_access.mapped_ids(project, "image", 1000, 1000)
+            self.assertEqual(result.exception.code, status)
+
+    def test_unconfirmed_retirement_reports_original_cancellation_status(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+        for status in (129, 130, 143):
+            with self.subTest(status=status), patch.object(
+                    rootless_access, "_identity_owner", return_value=self._owner(status, "", None)):
+                with self.assertRaisesRegex(RuntimeError, f"retirement is unconfirmed.*owner exit {status}"):
+                    rootless_access.mapped_ids(project, "image", 1000, 1000)
+
+    def test_cleanup_failure_does_not_replace_confirmed_cancellation(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+        with TemporaryDirectory() as directory:
+            temporary = Mock(name=directory)
+            temporary.name = directory
+            temporary.cleanup.side_effect = OSError("fixture cleanup failed")
+            with patch.object(rootless_access, "TemporaryDirectory", return_value=temporary), patch.object(
+                    rootless_access, "_identity_owner", return_value=self._owner(143, "")), patch(
+                    "sys.stderr", new_callable=io.StringIO) as diagnostic:
+                with self.assertRaises(SystemExit) as result:
+                    rootless_access.mapped_ids(project, "image", 1000, 1000)
+            self.assertEqual(result.exception.code, 143)
+            self.assertIn("fixture cleanup failed", diagnostic.getvalue())
+
+    def test_unconfirmed_retirement_retains_status_and_cleanup_failure(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+        with TemporaryDirectory() as directory:
+            temporary = Mock()
+            temporary.name = directory
+            temporary.cleanup.side_effect = OSError("fixture cleanup failed")
+            with patch.object(rootless_access, "TemporaryDirectory", return_value=temporary), patch.object(
+                    rootless_access, "_identity_owner", return_value=self._owner(130, "", None)):
+                with self.assertRaisesRegex(RuntimeError, "retirement is unconfirmed.*owner exit 130") as result:
+                    rootless_access.mapped_ids(project, "image", 1000, 1000)
+            self.assertTrue(any("fixture cleanup failed" in note for note in result.exception.__notes__))
 
     def test_unverified_snapshot_cannot_run_probe(self):
         project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
-        with patch.object(rootless_access.subprocess, "run", return_value=Mock(returncode=1)) as run:
-            with self.assertRaisesRegex(RuntimeError, "source verification failed"):
+        verifier = Mock(side_effect=ValueError("source verification failed"))
+        with patch.object(rootless_access.runpy, "run_path", return_value={"verify": verifier}), patch.object(
+                rootless_access.importlib, "import_module") as importer:
+            with self.assertRaisesRegex(ValueError, "source verification failed"):
                 rootless_access.mapped_ids(project, "image", 1000, 1000)
-        run.assert_called_once()
+        importer.assert_not_called()
+
+    def test_owner_rejects_a_previously_loaded_foreign_identity_package(self):
+        bundle = Path(__file__).resolve().parents[2] / "tools/bootstrap/acquisition"
+        foreign = ModuleType("linux_idmap")
+        foreign.__file__ = "/tmp/foreign/linux_idmap/__init__.py"
+        with patch.dict(sys.modules, {"linux_idmap": foreign}):
+            with self.assertRaisesRegex(RuntimeError, "loaded before admission or outside"):
+                rootless_access._identity_owner(bundle)
+
+    def test_owner_rejects_a_preloaded_module_even_from_the_bundle(self):
+        bundle = Path(__file__).resolve().parents[2] / "tools/bootstrap/acquisition"
+        preload = ModuleType("linux_idmap")
+        preload.__file__ = str(bundle / "linux_idmap/__init__.py")
+        with patch.object(rootless_access, "_IDENTITY_MANIFEST", None), patch.dict(sys.modules, {"linux_idmap": preload}):
+            with self.assertRaisesRegex(RuntimeError, "loaded before admission"):
+                rootless_access._identity_owner(bundle)
+
+    def test_owner_rejects_a_changed_verified_snapshot(self):
+        bundle = Path(__file__).resolve().parents[2] / "tools/bootstrap/acquisition"
+        with patch.object(rootless_access, "_IDENTITY_MANIFEST", {"previous": "snapshot"}):
+            with self.assertRaisesRegex(RuntimeError, "changed during this process"):
+                rootless_access._identity_owner(bundle)
+
+    def test_owner_exception_without_retirement_is_unsettled(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+        with patch.object(rootless_access, "_identity_owner", return_value=Mock(side_effect=KeyboardInterrupt)):
+            with self.assertRaisesRegex(RuntimeError, "retirement is unconfirmed"):
+                rootless_access.mapped_ids(project, "image", 1000, 1000)
+
+    def test_unconfirmed_retirement_preserves_owner_diagnostic(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+
+        def unsettled(_arguments):
+            print("Probe operation fixture; retirement unresolved.", file=sys.stderr)
+            return 143
+
+        with patch.object(rootless_access, "_identity_owner", return_value=unsettled), patch(
+                "sys.stderr", new_callable=io.StringIO) as diagnostic:
+            with self.assertRaisesRegex(RuntimeError, "retirement is unconfirmed"):
+                rootless_access.mapped_ids(project, "image", 1000, 1000)
+        self.assertIn("Probe operation fixture; retirement unresolved.", diagnostic.getvalue())
+
+    def test_unconfirmed_retirement_survives_a_failed_diagnostic_sink(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+        sink = Mock()
+        sink.write.side_effect = OSError("diagnostic sink failed")
+        with patch.object(rootless_access, "_identity_owner", return_value=self._owner(143, "", None)), \
+                patch("sys.stderr", sink):
+            with self.assertRaisesRegex(RuntimeError, "retirement is unconfirmed"):
+                rootless_access.mapped_ids(project, "image", 1000, 1000)
+
+    def test_confirmed_cancellation_survives_a_failed_diagnostic_sink(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+        sink = Mock()
+        sink.write.side_effect = OSError("diagnostic sink failed")
+        with patch.object(rootless_access, "_identity_owner", return_value=self._owner(143, "")), \
+                patch("sys.stderr", sink):
+            with self.assertRaises(SystemExit) as result:
+                rootless_access.mapped_ids(project, "image", 1000, 1000)
+        self.assertEqual(result.exception.code, 143)
 
     def test_private_acl_accepts_owner_only_base_mode(self):
         with TemporaryDirectory() as temporary:
