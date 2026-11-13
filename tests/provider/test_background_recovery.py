@@ -65,6 +65,29 @@ class BackgroundRecoveryTests(unittest.IsolatedAsyncioTestCase):
         stop.set()
         await asyncio.wait_for(task, 1)
 
+    async def test_failed_hello_refresh_rebuilds_the_current_offering(self):
+        stop = asyncio.Event()
+        failure = ApiFailure('contact the provider API', 'fixture failure')
+        api = type('API', (), {})()
+        api.publish_hello = AsyncMock(side_effect=(failure, None))
+        api.retire = AsyncMock()
+        api.can_refresh_hello = lambda actual: actual is failure
+        waits = []
+
+        async def observe_wait(event, seconds):
+            waits.append(seconds)
+            if len(waits) == 2:
+                event.set()
+
+        with patch('secs_inference.provider.process.analysis_offering_description', side_effect=('first', 'current')), \
+             patch('secs_inference.provider.process.wait_until_stopped', side_effect=observe_wait):
+            await publish_hello_until_stopped(api=api, provider_ref='provider:test',
+                policy=HelloPolicy('SECS', 'Test', 60, 1), stop=stop)
+        sent = [call.kwargs['analysis_offerings'][0].description for call in api.publish_hello.await_args_list]
+        self.assertEqual(sent, ['first', 'current'])
+        self.assertEqual(waits, [1, 60])
+        api.retire.assert_awaited_once()
+
     def test_retry_and_recovery_have_distinct_safe_messages(self):
         with self.assertLogs('secs_inference.provider.main', level='INFO') as captured:
             _retry_notice('private sentinel')
