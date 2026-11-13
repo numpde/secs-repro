@@ -15,88 +15,38 @@ from tools.copy_deployment_secrets import main as copy_deployment_secrets
 
 
 class RootlessAccessTests(unittest.TestCase):
-    def test_map_id_applies_the_host_observed_range_offset(self):
-        rows = rootless_access.parse_id_map(b"0 1000 1\n1 100000 65536\n", "UID")
-        self.assertEqual(rootless_access.map_id(rows, 1000, "UID"), 100999)
+    def test_shared_probe_receives_selected_engine_and_service_namespace(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+        with patch.object(rootless_access.subprocess, "run", side_effect=(
+                Mock(returncode=0), Mock(returncode=0, stdout=b"100999 101999\n"))) as run:
+            self.assertEqual(rootless_access.mapped_ids(project, "sha256:" + "a" * 64, 1000, 2000, "host"),
+                             (100999, 101999))
+        self.assertIn("verify", run.call_args_list[0].args[0])
+        args = run.call_args_list[1].args[0]
+        self.assertIn("unix:///run/engine.sock", args)
+        self.assertEqual(args[args.index("--userns") + 1], "host")
+        self.assertNotIn("--inverse", args)
 
-    def test_map_id_rejects_gaps_and_overlaps(self):
-        rows = rootless_access.parse_id_map(b"0 1000 1\n1 100000 10\n", "UID")
-        with self.assertRaisesRegex(ValueError, "not mapped exactly once"):
-            rootless_access.map_id(rows, 11, "UID")
-        with self.assertRaisesRegex(ValueError, "overlapping"):
-            rootless_access.parse_id_map(b"0 1000 10\n5 2000 10\n", "UID")
+    def test_wheelhouse_selection_uses_inverse_shared_probe(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+        with patch.object(rootless_access.subprocess, "run", side_effect=(
+                Mock(returncode=0), Mock(returncode=0, stdout=b"0 0\n"))) as run:
+            self.assertEqual(rootless_access.container_ids_for_host(project, "image", 1000, 1000), (0, 0))
+        self.assertIn("--inverse", run.call_args_list[1].args[0])
 
-    def test_container_id_for_host_inverts_the_observed_range(self):
-        rows = rootless_access.parse_id_map(b"0 1000 1\n1 100000 65536\n", "UID")
-        self.assertEqual(rootless_access.container_id_for_host(rows, 1000, "UID"), 0)
-        self.assertEqual(rootless_access.container_id_for_host(rows, 100999, "UID"), 1000)
-        with self.assertRaisesRegex(ValueError, "not mapped exactly once"):
-            rootless_access.container_id_for_host(rows, 50000, "UID")
+    def test_probe_failure_cannot_grant_access(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+        with patch.object(rootless_access.subprocess, "run", side_effect=(
+                Mock(returncode=0), Mock(returncode=3, stdout=b""))):
+            with self.assertRaisesRegex(RuntimeError, "shared probe failed"):
+                rootless_access.mapped_ids(project, "image", 1000, 1000)
 
-    def test_selected_engine_host_pid_maps_are_read_and_probe_is_retired(self):
-        project = Mock()
-        identifier = "a" * 64
-        inspection = json.dumps([{"State": {"Running": True, "Pid": 42}}]).encode()
-        project.command.side_effect = (identifier.encode(), inspection, inspection, (identifier + "\n").encode(), b"")
-        maps = ((0, 1000, 1), (1, 100000, 65536))
-        with patch.object(rootless_access, "_host_user_namespace"), patch.object(
-                rootless_access, "_host_process_maps", return_value=(maps, maps)) as read_maps:
-            self.assertEqual(rootless_access.mapped_ids(
-                project, "sha256:" + "a" * 64, 1000, 1000, "host"), (100999, 100999))
-        read_maps.assert_called_once()
-        self.assertEqual(read_maps.call_args.args[0], 42)
-        self.assertIn("_secs_map_probe", read_maps.call_args.args[1])
-        run_args = project.command.call_args_list[0].args
-        self.assertIn("--network", run_args)
-        self.assertEqual(run_args[run_args.index("--network") + 1], "none")
-        self.assertIn(("--userns", "host"), [
-            tuple(run_args[index:index + 2]) for index in range(len(run_args) - 1)
-        ])
-        self.assertEqual(project.command.call_args_list[-1].args[:2], ("rm", "--force"))
-
-    def test_host_owned_wheel_capture_uses_the_inverse_of_the_selected_engine_map(self):
-        project = Mock()
-        identifier = "c" * 64
-        inspection = json.dumps([{"State": {"Running": True, "Pid": 42}}]).encode()
-        project.command.side_effect = (identifier.encode(), inspection, inspection,
-                                       (identifier + "\n").encode(), b"")
-        maps = ((0, 1000, 1), (1, 100000, 65536))
-        with patch.object(rootless_access, "_host_user_namespace"), patch.object(
-                rootless_access, "_host_process_maps", return_value=(maps, maps)):
-            self.assertEqual(rootless_access.container_ids_for_host(project, "sha256:" + "c" * 64, 1000, 1000), (0, 0))
-        self.assertEqual(project.command.call_args_list[-1].args[:2], ("rm", "--force"))
-
-    def test_host_proc_pid_must_identify_the_unique_mapping_probe(self):
-        with patch.object(Path, "read_bytes", return_value=b"python\0-c\0different process\0") as read:
-            with self.assertRaisesRegex(ValueError, "does not identify"):
-                rootless_access._host_process_maps(42, "import time; _secs_map_probe = 'token'")
-        read.assert_called_once()
-
-    def test_failed_probe_creation_does_not_remove_a_container_by_name(self):
-        project = Mock()
-        project.command.side_effect = RuntimeError("container name is already in use")
-        with patch.object(rootless_access, "_host_user_namespace"):
-            with self.assertRaisesRegex(RuntimeError, "already in use") as raised:
-                rootless_access.mapped_ids(project, "sha256:" + "a" * 64, 1000, 1000)
-        project.command.assert_called_once()
-        self.assertTrue(any("without removing it by name" in note for note in raised.exception.__notes__))
-
-    def test_host_mapping_reader_rejects_a_nested_user_namespace(self):
-        nested = b"0 1000 1\n1 100000 65536\n"
-        with patch.object(Path, "read_bytes", side_effect=(nested, nested)):
-            with self.assertRaisesRegex(ValueError, "initial user namespace"):
-                rootless_access._host_user_namespace()
-
-    def test_unmapped_container_uid_is_rejected(self):
-        project = Mock()
-        identifier = "b" * 64
-        inspection = json.dumps([{"State": {"Running": True, "Pid": 42}}]).encode()
-        project.command.side_effect = (identifier.encode(), inspection, inspection, (identifier + "\n").encode(), b"")
-        with patch.object(rootless_access, "_host_user_namespace"), patch.object(
-                rootless_access, "_host_process_maps", return_value=(((0, 1000, 1),), ((0, 1000, 1),))):
-            with self.assertRaisesRegex(ValueError, "not mapped exactly once"):
-                rootless_access.mapped_ids(project, "sha256:" + "a" * 64, 1000, 1000)
-        self.assertEqual(project.command.call_args_list[-1].args[:2], ("rm", "--force"))
+    def test_unverified_snapshot_cannot_run_probe(self):
+        project = Mock(repository=Path("/checkout"), docker_endpoint="unix:///run/engine.sock")
+        with patch.object(rootless_access.subprocess, "run", return_value=Mock(returncode=1)) as run:
+            with self.assertRaisesRegex(RuntimeError, "source verification failed"):
+                rootless_access.mapped_ids(project, "image", 1000, 1000)
+        run.assert_called_once()
 
     def test_private_acl_accepts_owner_only_base_mode(self):
         with TemporaryDirectory() as temporary:
