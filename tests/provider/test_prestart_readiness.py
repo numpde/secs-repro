@@ -24,6 +24,40 @@ from secs_inference.provider.worker import NativeWorkerExited, WorkerClient
 
 
 class PreStartReadinessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_during_discovery_does_not_start_the_returned_job(self):
+        stop, entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        facts = FeedInputFacts("job:chosen", "nmr.job.specification.text.v1",
+                               "sha256:" + sha256(b"C2H6O").hexdigest(), 5)
+        events = []
+
+        class Discovery:
+            async def jobs(self, **_query):
+                entered.set()
+                await release.wait()
+                return SimpleNamespace(jobs=(SimpleNamespace(input=facts),))
+
+        class Worker:
+            async def check_ready(self, *, deadline):
+                events.append("worker readiness")
+
+        def assemble(_pending):
+            events.append("controller admission")
+            raise AssertionError("A stopped service must not start a returned Job")
+
+        task = asyncio.create_task(run_execution(
+            api=Discovery(), scope=None, claims=None, stop=stop, poll_seconds=0.01,
+            assemble=assemble, worker=Worker(), startup_seconds=5, prose_services=(),
+        ))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            stop.set()
+            release.set()
+            await asyncio.wait_for(task, 2)
+            self.assertEqual(events, [])
+        finally:
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+
     async def test_idle_retirement_does_not_consume_replacement_startup_window(self):
         stop, events = asyncio.Event(), []
         clock = [100.0]
