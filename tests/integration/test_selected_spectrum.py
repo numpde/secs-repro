@@ -117,7 +117,9 @@ class SelectedSpectrumTests(unittest.TestCase):
             self.assertEqual(len(inference.spectra), 1)
 
     def test_wrong_attempt_cannot_consume_prepared_input(self):
-        handler = self.handler()
+        from secs.elucidation import StaticCandidateSource
+
+        handler = self.handler(StaticCandidateSource([]))
         with TemporaryDirectory() as directory:
             files = {"upload:chosen": str(JCAMP)}
             choice = _selection(handler, files, directory)
@@ -127,6 +129,10 @@ class SelectedSpectrumTests(unittest.TestCase):
                 _request(handler, {"operation": "execute", "attempt_ref": "another-attempt",
                          "prepared_handle": prepared["prepared_handle"]})
             handler.inference.embed_spectrum.assert_not_called()
+            response = _request(handler, {"operation": "execute", "attempt_ref": ATTEMPT,
+                                          "prepared_handle": prepared["prepared_handle"]})
+            self.assertEqual(response["outcome"], "no_starting_candidates")
+            handler.inference.embed_spectrum.assert_called_once()
 
     def test_failed_dispatch_cannot_reuse_its_consumed_preparation(self):
         failure = ValueError("retrieval fault")
