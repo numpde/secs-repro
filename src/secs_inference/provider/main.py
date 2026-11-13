@@ -23,6 +23,7 @@ from provider_core.failure_projection import owned_details
 from provider_core.lifetime import ProviderLifetime
 from provider_core.ownership import AttemptClaims, LiveAttemptLimits
 from provider_core.startup_file import read_startup_file
+from provider_core.uploads import require_store_origin
 
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
 from secs_inference.provider.config import CONFIG_PATH, decode_provider_config
@@ -122,6 +123,18 @@ def _read_chat_settings(interpretation_seconds, retirement_seconds):
     return tuple(ProseService(factory) for factory in factories), tuple(secrets)
 
 
+def _upload_store_settings(execution, api_settings):
+    store_origin = require_store_origin(execution.upload_store_origin)
+    table = {"exchange_seconds": execution.work_seconds,
+             "retirement_seconds": api_settings.http.retirement_seconds}
+    if execution.upload_store_use_private_ca:
+        table["ca_file"] = "/run/config/provider/upload-store-ca.crt"
+    store_http = https_settings(table, "Upload store", read_startup_file)
+    if store_origin == api_settings.identity.origin:
+        store_http = replace(store_http, proxy_socket=api_settings.http.proxy_socket)
+    return store_http
+
+
 async def run_provider(config_path=CONFIG_PATH):
     config = decode_provider_config(read_startup_file(config_path, maximum_bytes=65536, label="SECS provider configuration"))
     mock_marker = os.environ.get("SECS_MOCK_INDEX", "0")
@@ -165,11 +178,7 @@ async def run_provider(config_path=CONFIG_PATH):
             execution = config.execution
             if not mock_runner:
                 endpoint_factories, interpreter_secrets = _read_chat_settings(config.interpretation_seconds, settings.http.retirement_seconds)
-                store_table = {"exchange_seconds": execution.work_seconds,
-                               "retirement_seconds": settings.http.retirement_seconds}
-                if execution.upload_store_use_private_ca:
-                    store_table["ca_file"] = "/run/config/provider/upload-store-ca.crt"
-                store_http = https_settings(store_table, "Upload store", read_startup_file)
+                store_http = _upload_store_settings(execution, settings)
             # The mock runner never asks a prose service to interpret Job text.
             prose_services = () if mock_runner else endpoint_factories
             worker = WorkerClient(WORKER_SOCKET, startup_seconds=execution.worker_startup_seconds,

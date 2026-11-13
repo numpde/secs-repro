@@ -20,12 +20,22 @@ from provider_core.api_config import ApiSettings, HttpsSettings
 from provider_core.signing import SigningIdentity
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from secs_inference.provider import main
-from secs_inference.provider.config import HelloPolicy, ProviderConfig
+from secs_inference.provider.config import ExecutionConfig, HelloPolicy, ProviderConfig
 from secs_inference.provider.diagnostics import exception_evidence
 from secs_inference.provider.worker_protocol import ScientificWorkerFailed, _document, encode
 
 
 class MainCleanupTests(unittest.IsolatedAsyncioTestCase):
+    def test_upload_store_uses_api_proxy_only_for_the_same_origin(self):
+        settings = ApiSettings(SigningIdentity("https://api.test", "credential:fixture", Ed25519PrivateKey.generate()),
+                               HttpsSettings(ssl.create_default_context(), 30, 10, "/route/proxy.sock"), "dev-local")
+        same = main._upload_store_settings(ExecutionConfig("https://api.test"), settings)
+        external = main._upload_store_settings(ExecutionConfig("https://store.test"), settings)
+        self.assertEqual(same.proxy_socket, "/route/proxy.sock")
+        self.assertIsNone(external.proxy_socket)
+        self.assertEqual(same.exchange_seconds, 1800)
+        self.assertEqual(same.retirement_seconds, 10)
+
     def test_framed_scientific_failure_cannot_copy_nested_private_text_to_operator_output(self):
         marker = "PRIVATE_SYNTHETIC_SCIENTIFIC_INPUT"
         frame = {"outcome": "failed", "exception_type": marker, "frames": [
