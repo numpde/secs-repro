@@ -19,6 +19,7 @@ from secs_inference.provider.input_formats import (
     safe_text,
 )
 from secs_inference.provider.input_operations import (
+    FORMULA_COMPOSITION_MISMATCH, QUOTED_FORMULA_UNPARSEABLE, SELECTED_FORMULA_UNPARSEABLE,
     SourceRef,
     source_document,
 )
@@ -204,11 +205,21 @@ class InputAdapter:
         return current
 
     def _verify_formula_evidence(self, access, attempt_ref, formula, evidence):
-        formula = normalize_formula_notation(formula)
+        from secs_inference.elucidation import FormulaError, canonical_formula
+
+        try:
+            formula = canonical_formula(normalize_formula_notation(formula))
+        except FormulaError as error:
+            raise InputReadError(SELECTED_FORMULA_UNPARSEABLE) from error
         if (type(evidence) is dict and set(evidence) == {"kind", "quote"}
                 and evidence.get("kind") == "job_specification"
-                and type(evidence.get("quote")) is str
-                and normalize_formula_notation(evidence["quote"]) == formula):
+                and type(evidence.get("quote")) is str):
+            try:
+                quoted = canonical_formula(normalize_formula_notation(evidence["quote"]))
+            except FormulaError as error:
+                raise InputReadError(QUOTED_FORMULA_UNPARSEABLE) from error
+            if quoted != formula:
+                raise InputReadError(FORMULA_COMPOSITION_MISMATCH)
             return
         if (type(evidence) is not dict or set(evidence) != {"kind", "representation_ids"}
                 or evidence.get("kind") != "representations"

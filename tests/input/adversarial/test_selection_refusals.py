@@ -123,7 +123,21 @@ class SelectionRefusalTests(WorkerCase):
         item = self.one(self.discover())
         selection = self.selection(item['id'])
         selection['formula_evidence']['quote'] = 'C₂₂ H₃₆ O₈'
-        self.rejected(selection, 'formula', 'evidence')
+        self.rejected(selection, 'formula', 'composition')
+
+    def test_quoted_formula_must_be_complete_formula_without_punctuation(self):
+        self.upload('proton.jdx')
+        item = self.one(self.discover())
+        selection = self.selection(item['id'])
+        selection['formula_evidence']['quote'] = 'C22H36O7.'
+        self.rejected(selection, 'quoted formula', 'parsed')
+
+    def test_reordered_formula_preserves_same_composition(self):
+        self.upload('proton.jdx')
+        item = self.one(self.discover())
+        selection = self.selection(item['id'])
+        selection['formula_evidence']['quote'] = 'O7C22H36'
+        self.assertEqual(self.request('prepare', selection=selection)['outcome'], 'prepared')
 
     def test_unknown_formula_evidence_representation_is_rejected(self):
         self.upload('proton.jdx')

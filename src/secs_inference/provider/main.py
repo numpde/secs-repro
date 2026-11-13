@@ -34,6 +34,10 @@ from secs_inference.provider.process import publish_hello_until_stopped
 from secs_inference.provider.runtime import _drain_controller, run_services
 from secs_inference.provider.mock_runner_session import MockRunnerSession
 from secs_inference.provider.session import SecsSession
+from secs_inference.provider.interpreter import PreparationRejected, _InvalidArguments
+from secs_inference.provider.input_operations import (
+    FORMULA_COMPOSITION_MISMATCH, FORMULA_QUOTE_NOT_IN_JOB, QUOTED_FORMULA_UNPARSEABLE, SELECTED_FORMULA_UNPARSEABLE,
+)
 from secs_inference.provider.sources import AttemptSources
 from secs_inference.provider.worker import WorkerClient
 from secs_inference.provider.worker_protocol import ScientificWorkerFailed
@@ -63,6 +67,12 @@ def _diagnostic_details(error, text, diagnostic_window):
         return {"message": str(error)}
     if type(error) is ScientificWorkerFailed:
         return {"scientific_worker": scientific_failure_evidence(error.diagnostic)}
+    if type(error) is _InvalidArguments and str(error) == FORMULA_QUOTE_NOT_IN_JOB:
+        return {"message": FORMULA_QUOTE_NOT_IN_JOB}
+    if type(error) is PreparationRejected and str(error) in (
+        FORMULA_COMPOSITION_MISMATCH, QUOTED_FORMULA_UNPARSEABLE, SELECTED_FORMULA_UNPARSEABLE,
+    ):
+        return {"message": str(error)}
     return owned_details(error)
 
 

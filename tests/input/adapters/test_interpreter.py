@@ -124,9 +124,8 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
         self.inspect.assert_not_called()
 
     @qualification_evidence("input.job-formula.exact-quote.v1")
-    async def test_job_formula_quote_must_match_both_selection_and_specification(self):
+    async def test_job_formula_quote_must_occur_in_specification(self):
         cases = (
-            ({'formula': 'C22H36O7', 'quote': 'C2H6O'}, 'same formula'),
             ({'formula': 'C2H6O', 'quote': 'C2H6O'}, 'does not occur in the Job specification'),
         )
         for values, evidence in cases:
@@ -145,6 +144,7 @@ class InterpreterContextTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_formula_typography_can_differ_while_the_original_quote_survives(self):
         for formula, quote in (
+            ('C7H8ClN', 'NClC7H8'),
             ('C22H36O7', 'C₂₂H₃₆O₇'),
             ('C₂₂H₃₆O₇', 'C22H36O7'),
             ('C 22 H 36 O 7', ' C₂₂ H₃₆ O₇ '),

@@ -26,6 +26,18 @@ from secs_inference.provider.worker_protocol import ScientificWorkerFailed, _doc
 
 
 class MainCleanupTests(unittest.IsolatedAsyncioTestCase):
+    def test_formula_correction_diagnostics_allow_only_owned_fixed_reasons(self):
+        from provider_core.diagnostics import failure_evidence
+        from secs_inference.provider.input_operations import FORMULA_COMPOSITION_MISMATCH, FORMULA_QUOTE_NOT_IN_JOB
+        safe = main.PreparationRejected(FORMULA_COMPOSITION_MISMATCH)
+        private = main.PreparationRejected("private model payload")
+        safe.__cause__ = main._InvalidArguments(FORMULA_QUOTE_NOT_IN_JOB)
+        diagnostic = json.dumps(failure_evidence(ExceptionGroup("fixture", [safe, private]), secrets=(),
+                                                 describe_owner=main._diagnostic_details))
+        self.assertIn(FORMULA_COMPOSITION_MISMATCH, diagnostic)
+        self.assertIn(FORMULA_QUOTE_NOT_IN_JOB, diagnostic)
+        self.assertNotIn("private model payload", diagnostic)
+
     def test_upload_store_uses_api_proxy_only_for_the_same_origin(self):
         settings = ApiSettings(SigningIdentity("https://api.test", "credential:fixture", Ed25519PrivateKey.generate()),
                                HttpsSettings(ssl.create_default_context(), 30, 10, "/route/proxy.sock"), "dev-local")

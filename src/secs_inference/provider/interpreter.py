@@ -9,7 +9,7 @@ import json
 from time import monotonic
 
 from secs_inference.provider.input_operations import (
-    INPUT_OPERATIONS, InterpretationProblem, SelectedRepresentation, SourceRef,
+    FORMULA_QUOTE_NOT_IN_JOB, INPUT_OPERATIONS, InterpretationProblem, SelectedRepresentation, SourceRef,
     interpreter_tools,
 )
 from secs_inference.provider.analysis import ANALYSIS_KIND_REF
@@ -88,10 +88,8 @@ class InterpretationSession:
                     evidence = action.formula_evidence
                     if evidence.get("kind") == "job_specification":
                         quote = evidence["quote"]
-                        if normalize_formula_notation(quote) != normalize_formula_notation(action.formula):
-                            raise _InvalidArguments("The Job-specification quote and selected formula must express the same formula")
                         if not _contains_formula_quote(self.specification_text, quote):
-                            raise _InvalidArguments("The quoted formula does not occur in the Job specification")
+                            raise _InvalidArguments(FORMULA_QUOTE_NOT_IN_JOB)
             except _InvalidArguments as error:
                 raise _ScientificRejection("tool_call", str(error), f"{error}. Correct this call.") from error
             if isinstance(action, SourceRef):

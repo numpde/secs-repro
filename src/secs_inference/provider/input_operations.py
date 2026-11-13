@@ -2,6 +2,11 @@
 
 from dataclasses import dataclass
 
+SELECTED_FORMULA_UNPARSEABLE = "Cannot execute this selection: the selected formula cannot be parsed."
+QUOTED_FORMULA_UNPARSEABLE = "Cannot execute this selection: the quoted formula cannot be parsed; quote only the complete formula."
+FORMULA_COMPOSITION_MISMATCH = "Cannot execute this selection: the quoted and selected formulas have different elemental compositions."
+FORMULA_QUOTE_NOT_IN_JOB = "The quoted formula does not occur in the Job specification"
+
 
 @dataclass(frozen=True, slots=True)
 class SourceRef:
@@ -82,8 +87,8 @@ INPUT_OPERATIONS = (
         "select_representation",
         "Select one discovered representation for this analysis. Use its opaque identity exactly, "
         "state the evidenced molecular formula, cite it either by quoting the complete formula verbatim from the Job specification "
-        "or by naming discovered structure representations. Subscript digits and spaces between elements and counts "
-        "may differ between formula and quote; preserve the original quote. "
+        "or by naming discovered structure representations. Element order, subscript digits and spaces between elements and counts "
+        "may differ between formula and quote; preserve the original quote, without surrounding prose or punctuation. "
         "Choose stored data or automatic FID processing, and explain the choice.",
         _arguments({
             "representation_id": _TEXT,
